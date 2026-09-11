@@ -1,0 +1,53 @@
+using UnityEngine;
+
+public sealed partial class SC2GameViewEditorUI
+{
+    private SC2DecalsShell _decalsShell;
+
+    private void EnsureDecalsShell()
+    {
+        if (_decalsShell != null || _mapSession == null)
+            return;
+
+        // Decal symmetry needs a live reference to the terrain shell that
+        // owns Data.Symmetry/SymmetryCenter/RadialCount.
+        EnsureTerrainShell();
+        _decalsShell = new SC2DecalsShell(_mapSession, _terrainShell)
+        {
+            RepaintHost = RepaintGameView
+        };
+    }
+
+    private void DrawDecalsInspector()
+    {
+        EnsureDecalsShell();
+        _decalsShell?.DrawEmbeddedGUI(PanelContentWidth);
+    }
+
+    private void HandleDecalsGameViewInput()
+    {
+        // Bailing out entirely whenever _mainTab != 4 would mean placed
+        // decals never render after loading a saved map until the Decals
+        // tab is opened, since the mesh-rebuild step (EnsurePreview, inside
+        // OnGameViewGUI) would never run either. Keep
+        // the placed-decal mesh synced every frame regardless of active
+        // tab (cheap — see EnsurePreview's own doc comment); only the
+        // selection outlines/transform-drag input handling stay gated to
+        // the Decals tab actually being active.
+        EnsureDecalsShell();
+        var camera = ResolveCamera();
+        if (_decalsShell == null || camera == null)
+            return;
+        if (_mainTab != 4)
+        {
+            _decalsShell.EnsurePreview();
+            return;
+        }
+        if (Event.current == null)
+            return;
+
+        var mouse = Event.current.mousePosition;
+        var allowInput = _viewportRect.Contains(mouse) && !IsMouseOverUi(mouse);
+        _decalsShell.OnGameViewGUI(camera, _viewportRect, mouse, allowInput);
+    }
+}

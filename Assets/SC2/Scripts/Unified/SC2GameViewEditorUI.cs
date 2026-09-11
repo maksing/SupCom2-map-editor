@@ -1,0 +1,5699 @@
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+using UnityEditor;
+using SC2.MapEditor.Document;
+
+[ExecuteAlways]
+[DisallowMultipleComponent]
+public sealed partial class SC2GameViewEditorUI : MonoBehaviour
+{
+    private static readonly Vector3 DefaultMapCenter = new Vector3(512f, 0f, 512f);
+    private const float DefaultTopDownHeight = 512f;
+    // Scaled through SC2UiScale, not fixed constants — these three rows'
+    // own BeginArea rects (DrawHeader/DrawSubtabs) stayed this literal
+    // pixel size regardless of Scale while every style/button INSIDE them
+    // (EnsureStyles) grew, so at higher Scale the taller real content no
+    // longer fit its own row and either got clipped (BeginArea clips, it
+    // doesn't wrap) or bled into the neighbouring row, with overlapping menu-bar/status text.
+    // HeaderHeight (used to position _panelRect/_viewportRect below the
+    // header) must track the same real total or the left panel/viewport
+    // start too high, under where the taller header actually ends.
+    private static float TitleBarHeight => SC2UiScale.Pxf(30f);
+    private static float TabsRowHeight => SC2UiScale.Pxf(34f);
+    private static float SubtabsRowHeight => SC2UiScale.Pxf(28f);
+    private static float HeaderHeight => TitleBarHeight + TabsRowHeight + SubtabsRowHeight;
+    private static SC2GameViewEditorUI _activeInstance;
+#if !UNITY_EDITOR
+    // See OnEnable's own comment on the wantsToQuit subscription for why
+    // this is a static, subscribe-once-ever guard rather than per-instance.
+    private static bool _wantsToQuitSubscribed;
+#endif
+
+    public bool ShowUI = true;
+    public bool ShowPanel = true;
+    public bool EnableGameViewNavigation = true;
+    public bool EnableHotkeys = true;
+    public bool LogActions;
+    private const string ZoomSpeedPrefKey = "SC2.GameView.ZoomSpeed";
+    private float _zoomSpeed = -1f; // -1 = not loaded from PlayerPrefs yet
+
+    /// <summary>Multiplier on ZoomCamera's per-scroll-tick zoom amount.
+    /// 1.0 =
+    /// the original hardcoded rate; range picked so 0.2 gives fine control
+    /// for precise placement work and 3.0 covers a fast map-wide zoom
+    /// without the slider needing an awkwardly large range for a value most
+    /// users will only nudge slightly from default.
+    /// This used to be a plain,
+    /// non-persisted field, so it silently reset to 1f every time this
+    /// component was recreated (editor re-entry, domain reload, Build
+    /// relaunch) — unlike its sibling UI Scale slider drawn right below it
+    /// in the same menu, which was already PlayerPrefs-backed (see
+    /// SC2UiScale.Scale's own doc comment/pattern, mirrored here
+    /// exactly).</summary>
+    public float ZoomSpeed
+    {
+        get
+        {
+            if (_zoomSpeed < 0f) _zoomSpeed = Mathf.Clamp(PlayerPrefs.GetFloat(ZoomSpeedPrefKey, 1f), 0.2f, 3f);
+            return _zoomSpeed;
+        }
+        set
+        {
+            var clamped = Mathf.Clamp(value, 0.2f, 3f);
+            if (_zoomSpeed >= 0f && Mathf.Approximately(clamped, _zoomSpeed)) return;
+            _zoomSpeed = clamped;
+            PlayerPrefs.SetFloat(ZoomSpeedPrefKey, _zoomSpeed);
+            PlayerPrefs.Save();
+        }
+    }
+
+    public string MapName = "No map loaded";
+    public string Status = "Ready";
+    // Bump on every code change that must be verified in a Build & Run player.
+    // Shown in the top status pill so a screenshot proves which build is running.
+    public const string BuildTag = "camera-overlay-pixelspace-17";
+    public SC2TerrainData RuntimeTerrainData;
+
+    // The terrain data the Editor Game view and a standalone Build & Run player
+    // both load, so they start from identical data instead of the build silently
+    // spinning up a blank instance. Resources.Load works identically in the
+    // Editor and in a build (no AssetDatabase needed), so the asset just has to
+    // live under any Resources/ folder at this name — "Create new SC2TerrainData"
+    // and Save target Assets/SC2/Resources/<name>.asset for exactly that reason.
+    public const string SharedTerrainDataResourceName = "SC2TerrainData";
+
+    /// <summary>
+    /// Loads the shared SC2TerrainData asset from Resources — the same asset in
+    /// the Editor and in a build. Returns null if it hasn't been created yet
+    /// (first run before "Create new SC2TerrainData").
+    /// </summary>
+    public static SC2TerrainData LoadSharedTerrainData()
+        => Resources.Load<SC2TerrainData>(SharedTerrainDataResourceName);
+
+    private static string BuildTerrainLabel(string source, SC2TerrainData data)
+    {
+        if (data == null)
+            return "";
+
+        return
+            $"Source: {source}.\n" +
+            $"Loaded object: '{data.name}', MapName='{data.MapName}'.";
+    }
+
+    private static string SharedTerrainSourceLabel(SC2TerrainData data)
+        => BuildTerrainLabel($"shared Resources asset '{SharedTerrainDataResourceName}' baked into the player", data);
+
+    private static string RuntimeFieldTerrainSourceLabel(SC2TerrainData data)
+        => BuildTerrainLabel("scene/inspector RuntimeTerrainData reference, not LocalLow JSON", data);
+
+    /// <summary>
+    /// Optional reference to the shared editor context. When set, overlay toggles
+    /// in this GameView are synced bidirectionally with the context.
+    /// </summary>
+    public SC2EditorContext SharedContext;
+
+    public bool OverlayTerrain = true;
+    public bool OverlayHfield;
+    public bool OverlayCosts;
+    public bool OverlayCollision2;
+    // The old design split "is this object
+    // type visible" across TWO independent flags per type — a combined
+    // "Objects" toggle gating only the flat 2D pick-dot for Props+Units
+    // together, and a separate "Props" toggle gating only the REAL 3D
+    // model — so unchecking Props hid the mesh but left its dot on screen,
+    // and Units had no model-hide flag at all. Objects/Graphs are gone;
+    // Props/Markers/Units below each now gate BOTH their dot and their real
+    // model through one flag (see LateUpdate's HideProps/HideUnits lines
+    // and SC2ObjectsShell.OnGameViewGUI's showProps/showUnits/showMarkers
+    // params), and Graphs is split into one toggle per real path-graph kind
+    // plus a separate Chains toggle covering props, markers (incl.
+    // armies), units, and each path-graph kind separately.
+    public bool OverlayProps = true;
+    public bool OverlayMarkers = true;
+    public bool OverlayUnits = true;
+    public bool OverlayGraphLand = true;
+    public bool OverlayGraphAir = true;
+    public bool OverlayGraphNaval = true;
+    public bool OverlayGraphAmphibious = true;
+    public bool OverlayChains = true;
+    public bool OverlayAreas = true;
+    // Still not wired to any real rendering (task #136's one open gap):
+    // showing real water requires SC2WaterMaterialFactory.Create(model, env),
+    // which needs a live SC2Environment MonoBehaviour — that component only
+    // exists in the separate, disconnected legacy Editor/ScdImportWindow.cs
+    // scene-based workflow, not this unified session. Wiring this needs
+    // either refactoring the factory to take plain data instead of the
+    // MonoBehaviour, or spawning/finding an SC2Environment for the live
+    // session — real new plumbing, not a flag-OR like the other 5.
+    public bool OverlayWater = true;
+    public bool OverlayRNM;
+    // Shows the 1-cell heightmap grid across the map —
+    // thin lines at every real terrain cell boundary (Data.CellSize),
+    // procedural in the terrain shaders (see SetHeightGridOverlay). Off by
+    // default, same reasoning as OverlayCosts — a fine grid across a large
+    // map is a diagnostic/alignment aid the user opts into, not something
+    // that should always be on screen.
+    public bool OverlayGrid;
+    // Blender-style edit-mode wireframe over the live terrain's real
+    // triangulation (SC2TerrainRuntime.SetWireframeOverlay) — off by
+    // default, same reasoning as OverlayGrid.
+    public bool OverlayWireframe;
+
+    private int _mainTab;
+    private int _subTab;
+    // Tracks HandleObjectsGameViewInput's own objectsTabActive across
+    // frames, purely to detect the true->false transition (leaving the
+    // Objects tab entirely) so any armed placement/paint/pick tool gets
+    // cancelled — otherwise it stays armed (harmless while the tab is
+    // blocked, since allowInput is already false there) and silently
+    // re-arms itself the moment the user comes back to the same sub-tab.
+    private bool _wasObjectsTabActive;
+    private string _tool = "Select";
+    private bool _showFileMenu;
+    private bool _showEditMenu;
+    private bool _showViewMenu;
+    private bool _showVisibilityMenu;
+    private bool _showSymmetryMenu;
+    private bool _showToolsMenu;
+    private bool _stylesReady;
+    private float _stylesLastScale = -1f;
+    private bool _menuOverlayBlocksInput;
+    private sealed class SC2ImportedTerrainEntry
+    {
+        // Stable identity for SC2ImportedTerrainEntryDocument round-tripping —
+        // not used for anything else.
+        public string Id = System.Guid.NewGuid().ToString("N");
+        public GameObject Root;
+        public string DisplayName;
+        public List<SC2TerrainMaterialFactory.TextureLoadAttempt> TextureAttempts;
+        public BdfIO.Formats.Terrain.TerrainModel Model; // raw parsed model, for merging into "Export terrain.bdf" — see SC2TerrainExporter.MergeImportedTerrain
+        // The exact bytes Model was parsed from (SC2TerrainBdfImporter.
+        // ImportResult.RawBytes) — persisted into SC2MapDocument.Terrain.
+        // ImportedEntries[].OriginalBdf so this entry can survive Save/Load
+        // (previously this entry's whole existence was scene/session-only —
+        // see SyncImportedTerrainsToDocument/RestoreImportedTerrainsFromDocument).
+        public byte[] OriginalBdfBytes;
+
+        // Captured right after import (the real, shaded SC2/Terrain
+        // materials TerrainMeshBuilder built) so the preview-mode toggle
+        // (Textured/RNM/Mats/Pairs/Slope/Height) can swap the renderer's
+        // materials for a debug view and later restore the originals
+        // exactly.
+        public Material[] OriginalMaterials;
+        // Real, current source of truth for each material's "RNM Lighting"
+        // authored/edited state — captured from the live
+        // materials' _EnableRNM right after import (before the Textured/RNM
+        // preview toolbar ever touches it), and kept in sync with the user's
+        // own Shader Setup checkbox edits (never with the toolbar's forced
+        // override). Threaded through GetImportedTerrainsForExport as
+        // SC2ImportedTerrainExportData.AuthoredEnableRnm so export reads
+        // this instead of the toolbar-contaminated live property — see that
+        // field's own doc comment for the bug this fixes.
+        public float[] OriginalEnableRnm;
+        // The actual relative path written
+        // into terrain.bdf for each imported material's texture slot should
+        // be visible AND directly editable, not just derived silently from
+        // whichever Texture happens to be bound to the shader property. Live
+        // Material objects have no room for a new string field, so this is a
+        // side-table keyed by "materialIndex:shaderProp" — empty/absent means
+        // no override, fall back to the existing Texture-based resolution
+        // (SC2TerrainMaterialExporter.TextureToBdfPath) exactly as before.
+        public Dictionary<string, string> TexturePathOverrides = new();
+        public Material[] FlatColorMaterials;   // lazily built, cached for Mats view — flat HSV-by-index color
+        public Material[] PairColorMaterials;   // lazily built, cached for Pairs view — blended avg(Diffuse1,Diffuse2) color
+        public Material VertexColorMaterial;    // shared SC2/VertexColorUnlit material for Slope/Height
+        public Material[] VertexColorSharedMaterials; // VertexColorMaterial repeated once per submesh
+        public Color[] SlopeColors;             // lazily baked, cached per-vertex
+        public Color[] HeightColors;            // lazily baked, cached per-vertex
+
+        // Left-panel UI state for the Imported subtab — per-entry so
+        // switching between multiple imported terrains keeps each one's
+        // fold/scroll state independent.
+        /// <summary>Mirrors SC2ImportedTerrainExportData.RecomputeNormals
+        /// (see its doc comment for the measured reason this defaults on).
+        /// Per-entry so a map can mix a Blender export needing recomputed
+        /// normals with a genuine vanilla terrain.bdf keeping its own.</summary>
+        public bool RecomputeNormals = true;
+
+        /// <summary>Substitutes this imported terrain.bdf for the
+        /// procedural decorative background terrain (see
+        /// SC2BackgroundTerrain) — see the "Use as Background Terrain"
+        /// toggle in the Imported panel. Only one entry may have this set
+        /// at a time (checking it clears every other entry's flag).</summary>
+        public bool IsBackgroundTerrain;
+
+        public bool TexturesExpanded = true;
+        public bool MaterialsExpanded = true;
+        public Vector2 TextureListScroll;
+    }
+    private readonly List<SC2ImportedTerrainEntry> _importedTerrains = new List<SC2ImportedTerrainEntry>();
+    private int _selectedImportedTerrain = -1;
+    /// <summary>Imported decals.bdf mesh roots (OpenDecalsBdfImport /
+    /// OnMapImportComplete) — unlike imported terrain, decals have no real
+    /// per-object management panel, so this list exists ONLY to let
+    /// HandleViewportClick/PickRendererByBounds exclude them from generic
+    /// Selection-based picking (same "camera flies off" bug imported
+    /// terrain already had fixed — see IsGenericSelectionExcluded's own
+    /// comment).</summary>
+    private readonly List<GameObject> _importedDecalsRoots = new List<GameObject>();
+
+    // ── Imported terrain.bdf undo ────────────────────────────────────────────
+    // Whole-list snapshot, same philosophy as SC2CostsShell's own undo stack —
+    // this data (Transform, per-material texture slots/shader flags, list
+    // membership) lives entirely outside SC2TerrainData, so it can't share
+    // SC2TerrainShell's undo at all. "Remove From Scene" no longer actually
+    // destroys the GameObject: it deactivates it and keeps the entry (with all
+    // its cached materials/texture-attempt data) alive in _importedTerrainsRemoved
+    // so Undo can bring it back exactly, not just re-import it. The tradeoff
+    // (deliberate, not an oversight): removed objects linger deactivated in the
+    // scene for the rest of the session instead of being freed immediately —
+    // bounded by how many times this button gets clicked in one sitting, and
+    // cleaned up whenever the whole terrain resets (NewTerrain/LoadFromDisk).
+
+    private const int ImportedUndoMaxSteps = 30;
+
+    private static readonly string[] ImportedMaterialTextureProps =
+        { "_Diffuse1", "_Diffuse2", "_Normal1", "_Normal2", "_Mask1", "_Mask2", "_Ramp", "_RNMMask0", "_RNMMask1", "_RNMMask2" };
+    private static readonly string[] ImportedMaterialFlagProps =
+        { "_EnableRNM", "_EnableAmbient", "_EnableBlending", "_EnableFog" };
+
+    private sealed class ImportedMaterialSnapshot
+    {
+        public Dictionary<string, Texture> Textures = new();
+        public Dictionary<string, float> Flags = new();
+    }
+
+    private sealed class ImportedEntrySnapshot
+    {
+        public GameObject Root;
+        public bool Active;
+        public Vector3 Position, EulerAngles, Scale;
+        public List<ImportedMaterialSnapshot> Materials = new();
+    }
+
+    private sealed class ImportedTerrainsSnapshot
+    {
+        public List<ImportedEntrySnapshot> Entries = new();
+        public int SelectedIndex;
+        // Stamped at push time (fresh each time a snapshot crosses from one
+        // stack to the other) — see ImportedTerrainsLastActionTimestamp's
+        // own doc comment for why a per-snapshot timestamp, not one shared
+        // scalar, is required for correct cross-domain dispatch ordering.
+        public long Timestamp;
+    }
+
+    private readonly List<SC2ImportedTerrainEntry> _importedTerrainsRemoved = new();
+    private readonly Stack<ImportedTerrainsSnapshot> _importedUndoStack = new();
+    private readonly Stack<ImportedTerrainsSnapshot> _importedRedoStack = new();
+    // Coalesces continuous drag gestures on a Transform field into one undo
+    // step — same reasoning as SC2TerrainShell.DrawCompactSlider's
+    // DraggingSliderKeys (EditorGUILayout.Vector3Field's sub-fields support
+    // click-drag-to-scrub, so without this a single drag would push one
+    // checkpoint per frame).
+    private readonly HashSet<string> _importedTransformDragging = new();
+
+    public int ImportedTerrainsUndoCount => _importedUndoStack.Count;
+    public int ImportedTerrainsRedoCount => _importedRedoStack.Count;
+    // RecordImportedTerrainsUndo used to never create a
+    // timestamp candidate for the global Ctrl+Z dispatcher, so an imported-
+    // terrain transform/material edit was invisible to it - the global
+    // shortcut could undo a different subsystem's older action instead, or
+    // report "Nothing to undo" while a real imported-terrain edit sat
+    // unreachable except via this panel's own local Undo/Redo buttons.
+    // Fixed (mirroring SC2ShellUndoCoordinator's own fix,
+    // since this stack predates that shared class): derived from the
+    // stack's own top-of-stack Timestamp (stamped by CaptureImportedTerrains
+    // Snapshot at push time) rather than one shared scalar bumped only on
+    // commit — self-corrects after Undo/Redo instead of staying stale and
+    // incorrectly out-ranking a genuinely more recent action from another
+    // domain. LastRedoTimestamp is separate from LastActionTimestamp because
+    // Redo must replay in exact reverse of whatever was just undone, not in
+    // original-recording order — see SC2ShellUndoCoordinator.
+    // LastRedoTimestamp's own doc comment for the full reasoning.
+    public bool ImportedTerrainsHasUndo => _importedUndoStack.Count > 0;
+    public bool ImportedTerrainsHasRedo => _importedRedoStack.Count > 0;
+    public long ImportedTerrainsLastActionTimestamp => _importedUndoStack.Count > 0 ? _importedUndoStack.Peek().Timestamp : 0;
+    public long ImportedTerrainsLastRedoTimestamp => _importedRedoStack.Count > 0 ? _importedRedoStack.Peek().Timestamp : 0;
+
+    private void RecordImportedTerrainsUndo()
+    {
+        _importedUndoStack.Push(CaptureImportedTerrainsSnapshot());
+        if (_importedUndoStack.Count > ImportedUndoMaxSteps)
+        {
+            var tmp = _importedUndoStack.ToArray();
+            _importedUndoStack.Clear();
+            foreach (var s in tmp.Take(ImportedUndoMaxSteps)) _importedUndoStack.Push(s);
+        }
+        _importedRedoStack.Clear();
+    }
+
+    private ImportedTerrainsSnapshot CaptureImportedTerrainsSnapshot()
+    {
+        var snap = new ImportedTerrainsSnapshot { SelectedIndex = _selectedImportedTerrain, Timestamp = System.Diagnostics.Stopwatch.GetTimestamp() };
+        foreach (var entry in _importedTerrains)
+            snap.Entries.Add(CaptureImportedEntrySnapshot(entry));
+        foreach (var entry in _importedTerrainsRemoved)
+            snap.Entries.Add(CaptureImportedEntrySnapshot(entry));
+        return snap;
+    }
+
+    private static ImportedEntrySnapshot CaptureImportedEntrySnapshot(SC2ImportedTerrainEntry entry)
+    {
+        var t = entry.Root != null ? entry.Root.transform : null;
+        var snap = new ImportedEntrySnapshot
+        {
+            Root = entry.Root,
+            Active = entry.Root != null && entry.Root.activeSelf,
+            Position = t != null ? t.position : Vector3.zero,
+            EulerAngles = t != null ? t.eulerAngles : Vector3.zero,
+            Scale = t != null ? t.localScale : Vector3.one,
+        };
+        if (entry.OriginalMaterials != null)
+            foreach (var mat in entry.OriginalMaterials)
+            {
+                var matSnap = new ImportedMaterialSnapshot();
+                if (mat != null)
+                {
+                    foreach (var prop in ImportedMaterialTextureProps)
+                        if (mat.HasProperty(prop))
+                            matSnap.Textures[prop] = mat.GetTexture(prop);
+                    foreach (var prop in ImportedMaterialFlagProps)
+                        if (mat.HasProperty(prop))
+                            matSnap.Flags[prop] = mat.GetFloat(prop);
+                }
+                snap.Materials.Add(matSnap);
+            }
+        return snap;
+    }
+
+    /// <summary>Converts the live _importedTerrains list into
+    /// SC2MapDocument.Terrain.ImportedEntries so it survives Save/Load —
+    /// this list previously lived only in this MonoBehaviour's
+    /// own field and live scene GameObjects, with no document
+    /// representation at all. Called right before Save (SaveActiveTerrain),
+    /// a push model matching how SC2EnvironmentShell/SC2DecalsShell already
+    /// keep their own document sub-trees live-current rather than requiring
+    /// BuildDocumentSnapshot to reach back into this class. Only entries
+    /// still in _importedTerrains are persisted — _importedTerrainsRemoved
+    /// exists purely to let THIS session's local Undo bring a removed entry
+    /// back exactly; losing that specific recovery across a save/load cycle
+    /// is an acceptable, minor scope cut (a removed object is gone from the
+    /// map either way from the next session's perspective).</summary>
+    private void SyncImportedTerrainsToDocument()
+    {
+        if (_mapSession?.Document?.Terrain == null || _mapSession.BlobStore == null) return;
+
+        var list = new List<SC2ImportedTerrainEntryDocument>(_importedTerrains.Count);
+        foreach (var entry in _importedTerrains)
+        {
+            if (entry?.Root == null || entry.OriginalBdfBytes == null || entry.OriginalBdfBytes.Length == 0) continue;
+
+            var t = entry.Root.transform;
+            var doc = new SC2ImportedTerrainEntryDocument
+            {
+                Id = entry.Id,
+                DisplayName = entry.DisplayName ?? entry.Root.name,
+                OriginalBdf = _mapSession.BlobStore.Put(new System.IO.MemoryStream(entry.OriginalBdfBytes)),
+                Position = new[] { t.position.x, t.position.y, t.position.z },
+                EulerAngles = new[] { t.eulerAngles.x, t.eulerAngles.y, t.eulerAngles.z },
+                Scale = new[] { t.localScale.x, t.localScale.y, t.localScale.z },
+                RecomputeNormals = entry.RecomputeNormals,
+            };
+
+            if (entry.OriginalMaterials != null)
+                foreach (var mat in entry.OriginalMaterials)
+                {
+                    var ov = new SC2ImportedTerrainMaterialOverrideDocument();
+                    if (mat != null)
+                    {
+                        foreach (var prop in ImportedMaterialTextureProps)
+                            if (mat.HasProperty(prop))
+                            {
+                                var tex = mat.GetTexture(prop);
+                                var path = tex != null ? SC2TerrainMaterialFactory.TryGetResourcePath(tex) : null;
+                                if (!string.IsNullOrEmpty(path))
+                                    ov.TextureResourcePaths[prop] = path;
+                            }
+                        foreach (var prop in ImportedMaterialFlagProps)
+                            if (mat.HasProperty(prop))
+                                ov.Flags[prop] = mat.GetFloat(prop);
+                    }
+                    doc.MaterialOverrides.Add(ov);
+                }
+
+            list.Add(doc);
+        }
+
+        _mapSession.Document.Terrain.ImportedEntries = list;
+    }
+
+    /// <summary>Reverse of SyncImportedTerrainsToDocument, called after a
+    /// successful Load (SC2TerrainShell.LoadFromDisk) — destroys whatever
+    /// imported-terrain GameObjects currently exist in the scene (a
+    /// previously-loaded/from-scratch map's leftovers, since loading a
+    /// terrain never cleared this list before this fix) and rebuilds
+    /// _importedTerrains from the freshly-loaded document: re-parses each
+    /// entry's original bytes (SC2TerrainBdfImporter.ImportFromBytes) to
+    /// reconstruct the as-imported baseline mesh/materials, then re-applies
+    /// its persisted transform/material overrides on top.</summary>
+    private void RestoreImportedTerrainsFromDocument(List<SC2ImportedTerrainEntryDocument> entries)
+    {
+        foreach (var entry in _importedTerrains)
+            if (entry?.Root != null) UnityEngine.Object.DestroyImmediate(entry.Root);
+        foreach (var entry in _importedTerrainsRemoved)
+            if (entry?.Root != null) UnityEngine.Object.DestroyImmediate(entry.Root);
+        _importedTerrains.Clear();
+        _importedTerrainsRemoved.Clear();
+        _selectedImportedTerrain = -1;
+        _importedUndoStack.Clear();
+        _importedRedoStack.Clear();
+
+        if (entries == null || entries.Count == 0 || _mapSession?.BlobStore == null)
+            return;
+
+        foreach (var doc in entries)
+        {
+            if (doc.OriginalBdf.IsEmpty) continue;
+            byte[] bytes;
+            try
+            {
+                using var stream = _mapSession.BlobStore.OpenRead(doc.OriginalBdf.ContentHash);
+                using var memory = new System.IO.MemoryStream();
+                stream.CopyTo(memory);
+                bytes = memory.ToArray();
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[SC2GameViewEditorUI] Failed to restore imported terrain '{doc.DisplayName}': {ex.Message}");
+                continue;
+            }
+
+            SC2TerrainBdfImporter.ImportResult result;
+            try
+            {
+                result = SC2TerrainBdfImporter.ImportFromBytes(bytes, doc.DisplayName);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[SC2GameViewEditorUI] Failed to re-parse imported terrain '{doc.DisplayName}': {ex.Message}");
+                continue;
+            }
+
+            var t = result.Root.transform;
+            t.position = new Vector3(doc.Position[0], doc.Position[1], doc.Position[2]);
+            t.eulerAngles = new Vector3(doc.EulerAngles[0], doc.EulerAngles[1], doc.EulerAngles[2]);
+            t.localScale = new Vector3(doc.Scale[0], doc.Scale[1], doc.Scale[2]);
+
+            var meshRenderer = result.Root.GetComponent<MeshRenderer>();
+            var originalMaterials = meshRenderer != null ? meshRenderer.sharedMaterials : System.Array.Empty<Material>();
+            for (var i = 0; i < originalMaterials.Length && i < doc.MaterialOverrides.Count; i++)
+            {
+                var mat = originalMaterials[i];
+                if (mat == null) continue;
+                var ov = doc.MaterialOverrides[i];
+                foreach (var kv in ov.TextureResourcePaths)
+                {
+                    if (!mat.HasProperty(kv.Key)) continue;
+                    // ResolveFromResourcePath, not LoadTexturePublicAny — kv.Value
+                    // is a saved RESOURCE path (SC2TerrainMaterialFactory.
+                    // TryGetResourcePath's own output, e.g. "archive:textures/...")
+                    // captured by SyncImportedTerrainsToDocument, not a plain
+                    // BDF-relative path. Passing it to LoadTexturePublicAny
+                    // silently failed for every archive-sourced texture (see
+                    // ResolveFromResourcePath's own doc comment).
+                    //
+                    // isLinear/disableMipmaps MUST match SC2TerrainMaterialFactory.
+                    // Create's own per-property convention (_Normal*/_RNMMask*
+                    // are raw vector/blend data, gamma-decoding them corrupts
+                    // every value) — omitting this the first
+                    // time reintroduced the old terrain-banding bug, since this
+                    // restore now actually succeeds (before this fix it silently
+                    // failed and left the correctly-tuned freshly-parsed texture
+                    // in place, masking the missing tuning here).
+                    var isLinearSlot = kv.Key.StartsWith("_Normal", System.StringComparison.Ordinal) ||
+                                        kv.Key.StartsWith("_RNMMask", System.StringComparison.Ordinal);
+                    var disableMipsSlot = kv.Key.StartsWith("_RNMMask", System.StringComparison.Ordinal);
+                    var tex = SC2TerrainMaterialFactory.ResolveFromResourcePath(kv.Value, isLinearSlot, disableMipsSlot);
+                    if (tex != null) mat.SetTexture(kv.Key, tex);
+                }
+                foreach (var kv in ov.Flags)
+                    if (mat.HasProperty(kv.Key)) mat.SetFloat(kv.Key, kv.Value);
+            }
+
+            var entry = new SC2ImportedTerrainEntry
+            {
+                Id = string.IsNullOrEmpty(doc.Id) ? System.Guid.NewGuid().ToString("N") : doc.Id,
+                Root = result.Root,
+                DisplayName = doc.DisplayName,
+                TextureAttempts = result.TextureAttempts,
+                Model = result.Model,
+                OriginalBdfBytes = bytes,
+                OriginalMaterials = originalMaterials,
+                OriginalEnableRnm = originalMaterials
+                    .Select(m => m != null && m.HasProperty("_EnableRNM") ? m.GetFloat("_EnableRNM") : 0f)
+                    .ToArray(),
+                RecomputeNormals = doc.RecomputeNormals,
+            };
+            _importedTerrains.Add(entry);
+        }
+
+        if (_importedTerrains.Count > 0)
+            _selectedImportedTerrain = 0;
+        _terrainShell?.InvalidateLiveHeightGrid();
+    }
+
+    private void ApplyImportedTerrainsSnapshot(ImportedTerrainsSnapshot snap)
+    {
+        SC2ImportedTerrainEntry FindEntry(GameObject root) =>
+            _importedTerrains.FirstOrDefault(e => e.Root == root)
+            ?? _importedTerrainsRemoved.FirstOrDefault(e => e.Root == root);
+
+        var rebuilt = new List<SC2ImportedTerrainEntry>();
+        var removed = new List<SC2ImportedTerrainEntry>();
+        foreach (var s in snap.Entries)
+        {
+            if (s.Root == null) continue;
+            var entry = FindEntry(s.Root);
+            if (entry == null) continue; // shouldn't happen — Root identity is always tracked in one of the two lists
+
+            entry.Root.transform.position = s.Position;
+            entry.Root.transform.eulerAngles = s.EulerAngles;
+            entry.Root.transform.localScale = s.Scale;
+            if (entry.OriginalMaterials != null)
+                for (var i = 0; i < entry.OriginalMaterials.Length && i < s.Materials.Count; i++)
+                {
+                    var mat = entry.OriginalMaterials[i];
+                    if (mat == null) continue;
+                    foreach (var kv in s.Materials[i].Textures) mat.SetTexture(kv.Key, kv.Value);
+                    foreach (var kv in s.Materials[i].Flags) mat.SetFloat(kv.Key, kv.Value);
+                }
+
+            entry.Root.SetActive(s.Active);
+            (s.Active ? rebuilt : removed).Add(entry);
+        }
+
+        _importedTerrains.Clear();
+        _importedTerrains.AddRange(rebuilt);
+        _importedTerrainsRemoved.Clear();
+        _importedTerrainsRemoved.AddRange(removed);
+        _selectedImportedTerrain = _importedTerrains.Count == 0 ? -1 : Mathf.Clamp(snap.SelectedIndex, 0, _importedTerrains.Count - 1);
+        // Undo/redo can change which imported
+        // terrain objects exist/are active and their transforms - the live
+        // height grid needs to reflect that on the next paint.
+        _terrainShell?.InvalidateLiveHeightGrid();
+    }
+
+    private void ImportedTerrainsUndo()
+    {
+        if (_importedUndoStack.Count == 0) return;
+        _importedRedoStack.Push(CaptureImportedTerrainsSnapshot());
+        ApplyImportedTerrainsSnapshot(_importedUndoStack.Pop());
+    }
+
+    private void ImportedTerrainsRedo()
+    {
+        if (_importedRedoStack.Count == 0) return;
+        _importedUndoStack.Push(CaptureImportedTerrainsSnapshot());
+        ApplyImportedTerrainsSnapshot(_importedRedoStack.Pop());
+    }
+
+    /// <summary>Coalesces a click-drag on one Vector3Field into a single undo
+    /// step — mirrors SC2TerrainShell.DrawCompactSlider's DraggingSliderKeys
+    /// (see that field's own doc comment for why: Vector3Field's X/Y/Z
+    /// sub-fields support drag-to-scrub and would otherwise report a changed
+    /// value on every frame of the drag).</summary>
+    private Vector3 DrawUndoableVector3Field(GameObject root, string label, Vector3 value, float width)
+    {
+        var key = root.GetInstanceID() + ":" + label;
+        var next = EditorGUILayout.Vector3Field(label, value, GUILayout.Width(width), GUILayout.MaxWidth(width));
+        if (next != value && _importedTransformDragging.Add(key))
+            RecordImportedTerrainsUndo();
+        if (Event.current != null && Event.current.type == EventType.MouseUp)
+            _importedTransformDragging.Remove(key);
+        return next;
+    }
+    private SC2TerrainShell _terrainShell;
+    /// <summary>Exposed for SC2InfoBdfEditorWindow — a standalone floating
+    /// EditorWindow outside this class's own object graph that needs to
+    /// find "the currently active map" to save into. Mirrors MapSession's
+    /// existing public-getter pattern below.</summary>
+    public SC2TerrainShell TerrainShell => _terrainShell;
+    private int _terrainShellLastSubtab = -1;
+    private bool? _terrainShellPaintBlendSubMode;
+    private GUIStyle _panelStyle;
+    private GUIStyle _headerStyle;
+    private GUIStyle _titleStyle;
+    private GUIStyle _tabStyle;
+    private GUIStyle _activeTabStyle;
+    private GUIStyle _subtabStyle;
+    private GUIStyle _activeSubtabStyle;
+    private GUIStyle _menuBarButtonStyle;
+    private GUIStyle _menuBarButtonActiveStyle;
+    private GUIStyle _dropdownItemStyle;
+    private GUIStyle _dropdownToggleStyle;
+    private GUIStyle _miniTextStyle;
+    private GUIStyle _secondaryTextStyle;
+    private GUIStyle _statusPillStyle;
+    private GUIStyle _cardStyle;
+    private GUIStyle _shadowStyle;
+    private GUIStyle _logoDotStyle;
+    private GUIStyle _gizmoLabelStyle;
+    private Texture2D _headerTexture;
+    private Texture2D _panelTexture;
+    private Texture2D _buttonTexture;
+    private Texture2D _activeButtonTexture;
+    private Texture2D _cardTexture;
+    private Texture2D _cardShadowTexture;
+    private Texture2D _accentTexture;
+    private Texture2D _accentSoftTexture;
+    private Texture2D _dividerTexture;
+    private Texture2D _hoverTexture;
+    private Texture2D _gizmoBallSolid;
+    private Texture2D _gizmoBallHollow;
+    private Texture2D _gizmoBackdrop;
+
+    // ---- Modern dark palette (deliberately not pure black — a soft graphite/slate tone) ----
+    private static readonly Color ColorBg        = new Color(0.106f, 0.114f, 0.129f, 1f); // base chrome background
+    // Surface/SurfaceHi were only ~0.04 above ColorBg, so ghost-pill buttons
+    // (File/Edit/View tabs, panel buttons) barely read as distinct controls
+    // against the header/panel background. Bumped both up for clear contrast.
+    private static readonly Color ColorSurface   = new Color(0.208f, 0.220f, 0.251f, 1f); // cards / panels / buttons
+    private static readonly Color ColorSurfaceHi = new Color(0.267f, 0.281f, 0.318f, 1f); // hover / elevated
+    private static readonly Color ColorAccent    = new Color(0.357f, 0.576f, 0.929f, 1f); // primary accent (blue)
+    private static readonly Color ColorAccentSoft = new Color(0.357f, 0.576f, 0.929f, 0.16f);
+    private static readonly Color ColorBorder    = new Color(0.34f, 0.365f, 0.415f, 1f);
+    private static readonly Color ColorDivider   = new Color(0.243f, 0.259f, 0.294f, 0.75f);
+    private static readonly Color ColorShadow    = new Color(0f, 0f, 0f, 0.28f);
+    private static readonly Color ColorTextPrimary   = new Color(0.90f, 0.92f, 0.95f, 1f);
+    // Used everywhere for notes/help text/inactive-tab labels/status
+    // secondary text — at (0.56, 0.60, 0.67) it read as too close to
+    // ColorBg (0.106) across every tab. Brightened for real readability
+    // while staying visibly dimmer than TextPrimary.
+    private static readonly Color ColorTextSecondary = new Color(0.72f, 0.75f, 0.80f, 1f);
+
+    // Kept for backwards-compatible call sites; mapped onto the new palette.
+    private static readonly Color HeaderColor = new Color(0.106f, 0.114f, 0.129f, 1f);
+    private static readonly Color PanelColor = new Color(0.145f, 0.153f, 0.176f, 1f);
+    private bool _orbiting;
+    private bool _panning;
+    private bool _flying;
+    private Vector2 _lastMouse;
+    private string _mouseMapCoordinates = "Mouse: -";
+    private Rect _panelRect;
+    private Vector2 _panelScroll;
+    // Horizontal-only scroll position for DrawSubtabs' compact-mode strip.
+    private Vector2 _subtabsScroll;
+    // Reserved so PanelContentWidth accounts for the vertical scrollbar
+    // DrawMainPanel's scroll view can show — matches Unity's own default
+    // vertical scrollbar width closely enough that content never has to
+    // fight the scrollbar for the last few pixels on the right edge.
+    // Scaled through SC2UiScale — sliders/text fields
+    // used to render out past their row's own right edge, into where the
+    // NOW-WIDER scrollbar (SC2UnifiedSkin's verticalScrollbar.fixedWidth,
+    // also scaled) actually sits. This constant staying fixed meant every
+    // shell's own `w` parameter (PanelContentWidth, threaded through as
+    // panelWidth to every DrawEmbeddedGUI call) was computed too WIDE
+    // once Scale grew the real scrollbar past this old 16px assumption.
+    // Was 16f — content used to be left with a visible
+    // dead gap between its own right edge and the real scrollbar, not
+    // flush against it. SC2UnifiedSkin.StyleScrollbar (the style this
+    // panel's GUILayout.BeginScrollView actually renders with, since
+    // GUI.skin = SC2UnifiedSkin.Get() for the whole draw) sets the real
+    // vertical scrollbar's fixedWidth to SC2UiScale.Pxf(10f), not 16f —
+    // this was over-reserving by 6px worth of scale for no reason, and
+    // reserving it UNCONDITIONALLY even on tabs whose content doesn't
+    // actually overflow (so no scrollbar draws at all, but the gap was
+    // still there). Matching the real style's own width exactly removes
+    // that dead strip.
+    private static float PanelScrollbarWidth => SC2UiScale.Pxf(10f);
+
+    /// <summary>
+    /// Actual width of the embedded inspector panel. EditorGUIUtility.currentViewWidth
+    /// is NOT reliable here: this UI is drawn from a Camera's OnGUI (Game View overlay),
+    /// not from an EditorWindow.OnGUI, so currentViewWidth reflects whatever GUIView last
+    /// set it globally and can change between the Layout and Repaint passes of the very
+    /// same frame. That flips conditional layout (e.g. "compact" toggles) mid-frame and
+    /// shifts auto-allocated control IDs, which is what breaks keyboard focus on fields
+    /// like Radius/Height/Map Name. Consumers should use this instead.
+    /// </summary>
+    public float PanelWidth => _panelRect.width;
+    public float PanelContentWidth => Mathf.Max(1f, _panelRect.width - (_panelStyle != null ? _panelStyle.padding.horizontal : 20f) - PanelScrollbarWidth);
+    public GUIStyle TitleTextStyle => _titleStyle;
+    public GUIStyle SmallTextStyle => _miniTextStyle;
+    private Rect _fileMenuRect;
+    private Rect _editMenuRect;
+    private Rect _viewMenuRect;
+    private Rect _visibilityMenuRect;
+    private Rect _symmetryMenuRect;
+    private Rect _toolsMenuRect;
+    private Rect _statusRect;
+    private Rect _viewportRect;
+    private Rect _navigationGizmoRect;
+    private Vector3 _mapViewCenter = DefaultMapCenter;
+    private float _mapViewSize = 512f;
+    private bool _viewTransitionActive;
+    private float _viewTransitionStart;
+    private const float ViewTransitionDuration = 0.28f;
+    private Vector3 _viewTransitionStartPosition;
+    private Vector3 _viewTransitionTargetPosition;
+    private Quaternion _viewTransitionStartRotation;
+    private Quaternion _viewTransitionTargetRotation;
+
+    private static readonly string[] GameMainTabs =
+    {
+        "Terrain",
+        "Costs",
+        "Collision2",
+        "Objects",
+        "Decals",
+        "Environment",
+        "Scenario",
+        "Export"
+    };
+
+    private static readonly SC2EditorMainTab[] GameMainTabIds =
+    {
+        SC2EditorMainTab.Terrain,
+        SC2EditorMainTab.Costs,
+        SC2EditorMainTab.Collision2,
+        SC2EditorMainTab.Objects,
+        SC2EditorMainTab.Decals,
+        SC2EditorMainTab.Environment,
+        SC2EditorMainTab.Scenario,
+        SC2EditorMainTab.Export
+    };
+
+    // Session object shared by the various document-backed commands/shells
+    // (SC2CostsShell, SC2TerrainShell, etc.) alongside the legacy
+    // RuntimeTerrainData / _terrainShell / _objectsShell data flow.
+    private SC2MapSession _mapSession;
+    public SC2MapSession MapSession => _mapSession;
+
+    private void OnEnable()
+    {
+        _activeInstance = this;
+        _mapSession = new SC2MapSession(new SC2MapDocument())
+        {
+            // Persistent, tied to the same save root SC2RuntimeTerrainPersistence
+            // uses for Build & Run JSON saves (Application.persistentDataPath/
+            // SC2Terrains) rather than a throwaway temp folder — the user's
+            // explicit choice, made knowing ISC2BlobStore has no
+            // compaction/GC policy yet (SC2DirectoryBlobStore's own doc
+            // comment), so this directory will only ever grow across
+            // sessions until that's addressed separately. Shared across all
+            // maps (not per-map) since blobs are content-addressed by hash —
+            // identical bytes from different maps dedup for free.
+            //
+            // Inlines SC2RuntimeTerrainPersistence.SaveDirectory's own path
+            // expression rather than referencing that class directly: it's
+            // compiled #if !UNITY_EDITOR only (Build & Run-only persistence),
+            // so this file — which must compile in both contexts — can't
+            // call into it here even though OnEnable() itself runs in both.
+            BlobStore = new SC2DirectoryBlobStore(System.IO.Path.Combine(Application.persistentDataPath, "SC2Terrains", "Blobs")),
+        };
+        // Keep the runtime build visible in screenshots: Editor Game View and
+        // Build & Run can otherwise be mistaken for the same player instance.
+        Status = $"Game View UI enabled  [build {BuildTag}]";
+        Camera.onPreRender += ApplyTopViewMirrorPreRender;
+        Camera.onPostRender += ApplyTopViewMirrorPostRender;
+        _pendingInitialTopView = true;
+#if UNITY_EDITOR
+        EditorApplication.update += EditorTick;
+#else
+        // Open as a normal desktop window (OS title bar + controls) even if the
+        // player was built with a fullscreen default.
+        if (Application.isPlaying)
+            SC2RuntimeWindow.EnsureWindowedOnStartup();
+        // Without this, closing the app (window X / Alt+F4 / any future Exit
+        // action, all of which route through Application.Quit under the
+        // hood) would have no "save changes?" prompt at all — a real Build
+        // could lose unsaved terrain edits with one accidental click.
+        // wantsToQuit is the one interception point that covers every quit
+        // path, not just an in-app button.
+        //
+        // This class has known cases of multiple
+        // live instances existing at once (see the _activeInstance == this
+        // ? return : ... guard in Update/HandleGameViewGUI/OnGUI below) —
+        // OnEnable can fire more than once without a matching OnDisable in
+        // between. Subscribing HandleWantsToQuit per-instance meant N live
+        // instances produced N independent MessageBoxW calls for a single
+        // quit request. A process-lifetime-once static guard, with the
+        // handler itself reading _activeInstance rather than a captured
+        // `this`, means exactly one dialog ever shows regardless of how
+        // many instances exist or churn.
+        if (!_wantsToQuitSubscribed)
+        {
+            Application.wantsToQuit += HandleWantsToQuit;
+            _wantsToQuitSubscribed = true;
+        }
+#endif
+    }
+
+    private void OnDisable()
+    {
+        if (_activeInstance == this)
+            _activeInstance = null;
+
+        Camera.onPreRender -= ApplyTopViewMirrorPreRender;
+        Camera.onPostRender -= ApplyTopViewMirrorPostRender;
+        GL.invertCulling = false;
+#if UNITY_EDITOR
+        EditorApplication.update -= EditorTick;
+#endif
+        // wantsToQuit is intentionally left subscribed for the process's
+        // whole lifetime (see the static-guard comment in OnEnable above) —
+        // never unsubscribed here.
+        _terrainShell?.Dispose();
+        _terrainShell = null;
+        _costsShell?.Dispose();
+        _costsShell = null;
+        _collision2Shell?.Dispose();
+        _collision2Shell = null;
+        _decalsShell?.Dispose();
+        _decalsShell = null;
+        _environmentShell = null;
+        _objectsShell = null;
+        _scenarioShell = null;
+        _mapImportPanel = null;
+        _mapSession = null;
+    }
+
+    private void LateUpdate()
+    {
+        // THE fix for the editor-UI-baked-into-the-blend-mask bug. IMGUI
+        // (OnGUI) captures the "current" render target ONCE at the start of the
+        // frame's Repaint and renders the entire UI into it. If
+        // RenderTexture.active was left pointing at BlendRT/PairMapRT by any GPU
+        // op, the whole UI renders into that texture instead of the screen —
+        // baking a screenshot of the interface into the terrain's blend mask.
+        // Every reset placed INSIDE OnGUI runs too late: after IMGUI has already
+        // captured its target for the frame. LateUpdate runs after all Update
+        // logic and BEFORE this frame's camera render + OnGUI, so resetting the
+        // active target here guarantees IMGUI captures the screen backbuffer, no
+        // matter what left the target dangling on a previous frame.
+        RenderTexture.active = null;
+
+        // SC2GameAssetScenePreview batches every placed Unit/Prop's SCM mesh
+        // by blueprint via Graphics.DrawMeshInstanced instead of one real
+        // MeshRenderer GameObject per instance - an immediate-mode draw call
+        // that (unlike a real MeshRenderer) Unity does not repeat on its own,
+        // so it needs a real per-frame call site. LateUpdate runs
+        // unconditionally in both the Editor and a standalone Build (Update()
+        // above is play-mode-gated), matching every other Objects-tab preview
+        // sync already anchored here.
+        // Always resynced here, every frame, regardless of which tab is
+        // active or whether the Visibility menu is even open — see
+        // OverlayProps's own doc comment for why this can't just be a
+        // GUI-click-time write like CommitOverlayToContext's pattern.
+        SC2GameAssetScenePreview.HideProps = !OverlayProps;
+        SC2GameAssetScenePreview.HideUnits = !OverlayUnits;
+        // Resolved once and passed to both batches below so each can cull
+        // individual instances against the real camera frustum before
+        // submitting them to Graphics.DrawMeshInstanced — see
+        // SC2TerrainShell.IsSphereInFrustum's own doc comment for why this
+        // is needed (FPS dropped hard specifically once
+        // props' models were on screen, even after the batching/allocation
+        // fixes — DrawMeshInstanced only culls a submitted batch as one
+        // group, never per instance, and a batch already spans a
+        // blueprint's every instance across the whole map). May be null
+        // (e.g. before the game camera resolves) — both methods treat that
+        // as "skip culling this frame," same as before this was added.
+        // Each of these 3 draw calls isolated in its own try/catch —
+        // marker 3D gizmo models used to silently stop
+        // rendering on a freshly-imported map, with NOTHING logged at all
+        // (not even the "[SC2 Marker] GPU instancing is supported" line
+        // SC2MarkerScenePreview.DrawAllBatches unconditionally logs once on
+        // its very first call — meaning that method plausibly never even
+        // ran). LateUpdate had no exception isolation between these 3
+        // calls before this fix: an unhandled exception thrown partway
+        // through Props/Units' own DrawAllBatches (e.g. a bad batch/
+        // material on a newly-imported prop) would silently abort every
+        // call AFTER it in this same method for that frame — Markers and
+        // the pick-dot billboard renderer both sit after Props/Units here,
+        // so either could go permanently dark this way with only Unity's
+        // own generic exception log (easy to miss/filter past) as evidence,
+        // never anything tagged "[SC2 Marker]" specifically. Each call is
+        // now independent regardless of which theory turns out to be
+        // right, and a real exception (if that's the actual cause) now
+        // logs clearly instead of silently swallowing every later draw
+        // call for the rest of that frame.
+        var scenePreviewCamera = ResolveCamera();
+        try { SC2GameAssetScenePreview.DrawAllBatches(scenePreviewCamera); }
+        catch (System.Exception ex) { Debug.LogError("[SC2 LateUpdate] SC2GameAssetScenePreview.DrawAllBatches threw: " + ex); }
+
+        // SC2MarkerScenePreview now batches real placed markers via
+        // Graphics.DrawMeshInstanced the same way Props/Units do (see that
+        // class's own doc comment) — same "needs a real per-frame call
+        // site" reasoning as the Props/Units call directly above. Marker
+        // visibility itself is already fully handled inside Sync() (called
+        // from SC2ObjectsShell.OnGameViewGUI every frame, same as before) —
+        // no separate Hide flag needed here, unlike Props/Units.
+        try { SC2MarkerScenePreview.DrawAllBatches(scenePreviewCamera); }
+        catch (System.Exception ex) { Debug.LogError("[SC2 LateUpdate] SC2MarkerScenePreview.DrawAllBatches threw: " + ex); }
+
+        // GPU-instanced replacement for the Objects tab's IMGUI viewport
+        // pick-dots (SC2ObjectMarkerRenderer, user-specced) — same "needs a
+        // real per-frame call site" reasoning as the two calls above. Its
+        // own Sync() is called from SC2ObjectsShell's dirty-gated block,
+        // not here; this call only issues this frame's actual draw calls.
+        try { SC2ObjectMarkerRenderer.DrawAllBatches(scenePreviewCamera); }
+        catch (System.Exception ex) { Debug.LogError("[SC2 LateUpdate] SC2ObjectMarkerRenderer.DrawAllBatches threw: " + ex); }
+    }
+
+    private void Update()
+    {
+        if (!Application.isPlaying)
+            return;
+#if !UNITY_EDITOR
+        // See HandleWantsToQuit/ScheduleForceQuit's own comments — the
+        // user already answered Save/Don't Save, so this fires unconditionally
+        // even if ShowUI/_activeInstance below would otherwise skip the rest
+        // of this method.
+        if (_forceQuitAt >= 0f && Time.realtimeSinceStartup >= _forceQuitAt)
+        {
+            _forceQuitAt = -1f;
+            // Environment.Exit(0) crashes the app even when
+            // deferred to this ordinary Update() frame — moving it out of
+            // the reentrant WM_CLOSE/wantsToQuit callback stack alone does
+            // NOT fix it. Environment.Exit runs the full
+            // managed shutdown sequence (finalizers, AppDomain.ProcessExit),
+            // which is a known crash source in IL2CPP/Mono builds when
+            // native subsystems (audio, graphics, plugins) aren't expecting
+            // it. Process.Kill() calls TerminateProcess directly instead —
+            // no managed shutdown, no finalizers, nothing for a native
+            // subsystem to race against; it just ends the process outright.
+            try { System.Diagnostics.Process.GetCurrentProcess().Kill(); }
+            catch { System.Environment.Exit(0); } // last-resort fallback if Kill() itself is denied
+        }
+#endif
+        if (!ShowUI)
+            return;
+        if (_activeInstance != null && _activeInstance != this)
+            return;
+        if (_activeInstance == null)
+            _activeInstance = this;
+
+        // Wiring blueprint indexing to SC2TerrainShell.
+        // DataChanged (fired from SetData/LoadFromDisk) alone is not
+        // enough to guarantee the Unit/Prop Browser opens indexed — that
+        // event-based path depends on
+        // a real "data identity changed" transition happening AFTER
+        // EnsureObjectsShell has already subscribed, which isn't guaranteed
+        // for every load/session-restore path (e.g. a build's own runtime
+        // persistence reconstructing SC2TerrainData through a different
+        // route). Call it directly and unconditionally every frame instead —
+        // trivially cheap (EnsureObjectsShell/EnsureAssetsIndexed/
+        // EnsureIndexed are all early-return no-ops once already indexed or
+        // in progress), and removes the dependency on that event's timing
+        // entirely.
+        EnsureObjectsShell();
+        _objectsShell?.EnsureAssetsIndexed();
+
+        TickFlyCamera();
+        TickViewTransition();
+        ApplyPendingInitialTopView();
+        // Standalone-build path: EditorTick below is #if UNITY_EDITOR-only
+        // and never exists here, so this Update() (which only fires while
+        // Application.isPlaying — guaranteed true in a real build) is the
+        // ONLY place that can ever resolve SC2TerrainShell's own deferred
+        // SchedulePreviewBuild() (_previewBuildQueued), which nothing but
+        // SC2TerrainShell.Update() itself clears. Without this call,
+        // _previewBuildQueued stays true forever after any terrain load —
+        // and SC2TerrainShell.OnGameViewGUI() early-returns unconditionally
+        // whenever it's set, before ever reaching Geometry/Paint mode's own
+        // OnGameViewGUI — so every brush (sculpt, Assign Pairs, RNM blend)
+        // goes permanently dead, regardless of which one is selected. This
+        // was a real regression: SetData() (used by LoadFromDisk) switched
+        // from an immediate DestroyPreview() to SchedulePreviewBuild() to
+        // fix the "terrain darker after load" race, but nothing here was
+        // ever calling SC2TerrainShell.Update() to begin with — the bug
+        // was latent (SchedulePreviewBuild() was already used by "Create
+        // flat terrain"/"Import Heightmap") until SetData() started hitting
+        // it on every single load, not just those two buttons.
+        _terrainShell?.Update();
+
+#if !UNITY_EDITOR
+        // A single attempt in OnEnable was unreliable (window handle can still
+        // be IntPtr.Zero for the first frame or two after the native window is
+        // created) — keep retrying each frame until it actually applies. Cheap
+        // no-op once done (see SC2RuntimeWindow.RetryEnableNativeMaximizeIfNeeded).
+        SC2RuntimeWindow.RetryEnableNativeMaximizeIfNeeded();
+#endif
+    }
+
+#if UNITY_EDITOR
+    private void EditorTick()
+    {
+        if (!ShowUI)
+            return;
+        if (_activeInstance != null && _activeInstance != this)
+            return;
+        if (_activeInstance == null)
+            _activeInstance = this;
+
+        // Same direct, unconditional trigger as Update() (see its own
+        // comment) — needed here too since testing/using this editor mostly
+        // happens in Edit mode (not Play mode), where Update() itself never
+        // fires at all.
+        EnsureObjectsShell();
+        _objectsShell?.EnsureAssetsIndexed();
+
+        // Runs on every EditorApplication.update tick regardless of Play
+        // state (unlike TickFlyCamera/TickViewTransition below, which the
+        // MonoBehaviour's own Update() already covers whenever
+        // Application.isPlaying) — see Update()'s own comment for why this
+        // call is required at all: nothing else ever resolves
+        // SC2TerrainShell's deferred preview rebuild in Edit mode, where
+        // Update() itself never fires. Idempotent to call twice in the same
+        // frame (Play-mode-inside-the-Editor triggers both this and
+        // Update()), so no extra guard is needed here.
+        _terrainShell?.Update();
+
+        if (!Application.isPlaying)
+        {
+            TickFlyCamera();
+            TickViewTransition();
+        }
+        ApplyPendingInitialTopView();
+    }
+#endif
+
+    private void OnGUI()
+    {
+        if (!ShowUI)
+            return;
+        if (_activeInstance != null && _activeInstance != this)
+            return;
+        if (_activeInstance == null)
+            _activeInstance = this;
+
+        // Defensive: some GPU calls (Graphics.Blit, and GUI.DrawTexture when
+        // sampling a RenderTexture) leave RenderTexture.active pointed at that
+        // RT as a side effect instead of restoring the screen backbuffer —
+        // observed to be worse/more consistent in a standalone Build & Run
+        // player than in the Editor. If that leaked state survives into a new
+        // OnGUI frame, every IMGUI control drawn this frame renders into that
+        // RT instead of the screen. This was the root cause of exported RNM
+        // masks containing a captured frame of the editor's own UI. Force the
+        // screen backbuffer as the render target before any drawing happens,
+        // every frame, so no leaked state from elsewhere can ever propagate in.
+        RenderTexture.active = null;
+
+        SyncOverlayFromContext();
+
+        // Swap in the unified dark skin for the whole overlay. This is what makes
+        // every plain GUILayout.Button/TextField/Toggle/Slider across the embedded
+        // terrain editor and inspectors match the top panel, instead of falling
+        // back to Unity's legacy light-grey IMGUI skin. Restored at the end of OnGUI.
+        // Must happen BEFORE EnsureStyles: the local styles (dropdown toggles etc.)
+        // are derived from GUI.skin and would otherwise bake the legacy sprites in.
+        var previousSkin = GUI.skin;
+        GUI.skin = SC2UnifiedSkin.Get();
+
+        EnsureStyles();
+
+        var width = Screen.width;
+        var height = Screen.height;
+        UpdateLayoutRects(width, height);
+        GUI.enabled = true;
+        GUI.color = Color.white;
+        GUI.backgroundColor = Color.white;
+        GUI.contentColor = Color.white;
+        UpdateMouseMapCoordinates();
+
+        // Mandatory first screen, both in the Editor Game View and in a real
+        // Build & Run player — nothing below this (terrain tabs, menus,
+        // viewport input) exists yet until the user configures a game
+        // install and opens/creates a map, so none of it is drawn until then.
+        if (!StartupComplete)
+        {
+            DrawStartupOverlay(width, height);
+            GUI.enabled = true;
+            GUI.color = Color.white;
+            GUI.backgroundColor = Color.white;
+            GUI.contentColor = Color.white;
+            GUI.skin = previousSkin;
+            return;
+        }
+
+        // Every dropdown (File/Edit/View/Visibility/Tools) opens directly under
+        // the title bar and, depending on its item count, its card can extend
+        // down far enough to visually cover the main-tabs row, the subtabs row,
+        // and the top of the left panel/viewport. GUI.depth only controls PAINT
+        // order (which is why the dropdown correctly renders on top) — it does
+        // NOT reorder input hit-testing for plain immediate-mode controls, which
+        // still resolve in the order they were drawn this frame. Without this
+        // guard, whatever tab/button happens to sit underneath a dropdown item
+        // gets first claim on the click (since it's drawn earlier in OnGUI) and
+        // the dropdown item never receives it — exactly the "menu items are
+        // unclickable" bug. So: while a menu is open, disable everything drawn
+        // BEFORE DrawOpenMenus() that could overlap it, for real input events
+        // only (Repaint/Layout must still run normally so layout stays stable).
+        // Same exact hit-testing problem, one level down: SC2RuntimeDropdown/
+        // SC2RuntimeObjectPicker/SC2RuntimeColorPalette are also drawn last
+        // (DrawOverlays(), after DrawMainPanel) so they paint on top
+        // correctly, but any button underneath their floating list —
+        // "Clear All"/"Assign ALL to this pair" sitting right below the
+        // Paint mode's pair-assign Popup, for instance — is drawn/evaluated
+        // EARLIER in this same OnGUI call and claims the MouseDown first,
+        // consuming it before the dropdown's own (later) buttons ever see
+        // it. That's exactly why clicking an item in that dropdown fired
+        // whatever control happened to be positioned underneath it instead.
+        var runtimeOverlayOpen = false;
+#if !UNITY_EDITOR
+        runtimeOverlayOpen = SC2RuntimeDropdown.IsAnyOpen || SC2RuntimeObjectPicker.IsAnyOpen || SC2RuntimeColorPalette.IsAnyOpen;
+#endif
+        _menuOverlayBlocksInput = (AnyMenuOpen() || runtimeOverlayOpen)
+            && Event.current != null
+            && Event.current.type != EventType.Repaint
+            && Event.current.type != EventType.Layout;
+
+        // Must run before DrawHeader/DrawMainPanel below — see this method's
+        // own doc comment for why (a focused numeric field's native TextField
+        // consumes Ctrl+Z internally while DRAWING itself, which happens
+        // inside DrawMainPanel).
+        HandleGlobalUndoRedoSaveHotkey();
+
+        DrawHeader(width);
+        // DrawSubtabs applies this same _menuOverlayBlocksInput guard
+        // internally itself (see its own GUI.enabled handling), so it's
+        // already correctly protected regardless of call order here.
+        DrawSubtabs(width);
+
+        var previousEnabled = GUI.enabled;
+        GUI.enabled = previousEnabled && !_menuOverlayBlocksInput;
+
+        if (ShowPanel)
+            DrawMainPanel(width, height);
+
+        // Re-assert immediately before drawing, not just once at the top of
+        // OnGUI: DrawMainPanel above can paint into BlendRT/PairMapRT
+        // (Paint Pairs/Paint Blend brush strokes, mask-group switches) partway
+        // through this same frame, and if any of those leave the active
+        // render target in an unexpected state, the gizmo drawn right after
+        // would render straight into that texture instead of the screen.
+        RenderTexture.active = null;
+        DrawNavigationGizmo(width);
+        GUI.enabled = previousEnabled;
+
+        // REVERTED: tried calling DrawOpenMenus() here (before
+        // DrawHeader/DrawSubtabs/DrawMainPanel) on the theory that GUI.depth
+        // reorders paint independent of call order, so input priority could
+        // be fixed without breaking visual stacking. Confirmed WRONG via
+        // real Build testing: GUI.depth reordering only applies to real
+        // GUI.Window/GUILayout.Window-based UI, not plain GUILayout.BeginArea
+        // content like DrawCard uses here - moving the call earlier broke
+        // the ONLY thing actually keeping the dropdown on top (being drawn
+        // last), without confirmed proof it even fixed the original click
+        // issue. Back to drawing it last, matching every other overlay in
+        // this file - correct paint order is proven, still investigating
+        // the real fix for menu-item clicks.
+        DrawOpenMenus();
+
+        // Imported terrain.bdf objects are now edited inline as the
+        // Terrain tab's "Imported" subtab (DrawImportedTerrainsLeftPanelContent,
+        // wired via SC2TerrainShell.DrawImportedTerrainsContent) instead of a
+        // floating overlay card — nothing to draw here anymore.
+
+        // Shared catalog browser: the same UI and selection semantics in the
+        // Unity Game view and in a standalone build. Draw last so it remains modal.
+        SC2TerrainShell.DrawRuntimeTexturePickerOverlay();
+#if !UNITY_EDITOR
+        // Same reasoning for the runtime Popup/ColorField shims (UnityEditorRuntimeShim.cs):
+        // their dropdown lists and color palettes are floating overlays that must be
+        // drawn last so they render unclipped, on top of the panel that opened them.
+        SC2RuntimeDropdown.DrawOverlays();
+        SC2RuntimeColorPalette.DrawOverlays();
+        // Same reasoning again for EditorGUILayout.ObjectField's picker shim
+        // (e.g. the "Terrain Data" field) — see SC2RuntimeObjectPicker.
+        SC2RuntimeObjectPicker.DrawOverlays();
+        // Drawn last of all: a confirm dialog must sit on top of everything,
+        // including the dropdowns above (e.g. confirming a terrain picked
+        // from the "Delete Saved Terrain..." list).
+        SC2RuntimeConfirm.DrawOverlays();
+
+        if (SC2RuntimeDropdown.TryConsumeLabel(LoadTerrainDropdownId, out var loadTerrainName))
+            ApplyLoadedTerrainName(loadTerrainName);
+        if (SC2RuntimeDropdown.TryConsumeLabel(DeleteTerrainDropdownId, out var deleteTerrainName))
+            RequestDeleteTerrainName(deleteTerrainName);
+#endif
+
+        // Not gated behind #if !UNITY_EDITOR: SC2MapImportPanel/
+        // SC2MapImportOrchestrator have no UnityEditor dependency, so this
+        // draws identically in the Editor Game View and a build — the
+        // unified "Import Map" pipeline (this replaced the old Build-only
+        // SC2RuntimeScdImporter + its own separate report overlay).
+        _mapImportPanel?.DrawOverlay(width, height);
+        // Same reasoning — must actually work in a real Build & Run player,
+        // not just the Editor (a real EditorWindow never can).
+        _infoBdfEditorPanel?.DrawOverlay(width, height);
+
+        GUI.enabled = true;
+        GUI.color = Color.white;
+        GUI.backgroundColor = Color.white;
+        GUI.contentColor = Color.white;
+        GUI.skin = previousSkin;
+
+        if (Event.current == null || Event.current.type != EventType.Used)
+        {
+            // Viewport overlays (Objects' Areas/Chains/Graph lines, Terrain's
+            // paint cursor, Costs' grid, Collision2's preview mesh, Decals'
+            // placement preview — all 5 Handle*GameViewInput calls below)
+            // were drawing ON TOP of modals
+            // (DrawRuntimeTexturePickerOverlay/_mapImportPanel/
+            // _infoBdfEditorPanel, drawn above specifically "so it remains
+            // modal") because these calls run at the very END of OnGUI,
+            // AFTER those modals had already drawn this same frame.
+            // Reordering the 5 calls to run earlier isn't safe here (they
+            // also consume real input events, and GUI.enabled/skin/color
+            // state is deliberately reset for them right below) — skipping
+            // them entirely while a modal is genuinely open is also the more
+            // correct behavior anyway: a modal should block viewport
+            // painting/placing/navigation underneath it, not just visually
+            // cover it.
+            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false);
+            if (!anyModalOpen)
+            {
+                // Same reasoning as the reset before DrawNavigationGizmo above:
+                // HandleTerrainGameViewInput below is what actually calls
+                // PaintPair/PaintBlend (Graphics.Blit into PairMapRT/BlendRT), and
+                // it runs after every panel/menu/overlay this frame has already
+                // drawn — re-assert once more immediately before it so the brush
+                // cursor it draws first (DrawGameViewGizmo, before the paint call
+                // itself) can't inherit a leaked render target from anything above.
+                RenderTexture.active = null;
+                HandleTerrainGameViewInput();
+                SyncTerrainOverlayFlags();
+                HandleCostsGameViewInput();
+                HandleCollision2GameViewInput();
+                HandleObjectsGameViewInput();
+                HandleDecalsGameViewInput();
+                HandleHotkeys();
+
+                // Consume navigation events when mouse is over the GameView UI.
+                // This prevents the SceneView OnSceneGUI from receiving clicks on
+                // our buttons/menus as navigation events.
+                HandleGameViewNavigation();
+            }
+        }
+    }
+
+#if UNITY_EDITOR
+    private void OnDrawGizmos()
+    {
+        var selected = Selection.activeGameObject;
+        if (selected == null)
+            return;
+
+        var meshFilters = selected.GetComponentsInChildren<MeshFilter>();
+        Gizmos.color = new Color(1f, 0.85f, 0.05f, 1f);
+
+        if (meshFilters.Length > 0)
+        {
+            for (var i = 0; i < meshFilters.Length; i++)
+            {
+                var meshFilter = meshFilters[i];
+                if (meshFilter == null || meshFilter.sharedMesh == null)
+                    continue;
+
+                var t = meshFilter.transform;
+                Gizmos.DrawWireMesh(meshFilter.sharedMesh, t.position, t.rotation, t.lossyScale);
+            }
+
+            return;
+        }
+
+        var renderers = selected.GetComponentsInChildren<Renderer>();
+        if (renderers.Length == 0)
+        {
+            Gizmos.DrawWireCube(selected.transform.position, Vector3.one * 3f);
+            return;
+        }
+
+        for (var i = 0; i < renderers.Length; i++)
+            Gizmos.DrawWireCube(renderers[i].bounds.center, renderers[i].bounds.size);
+    }
+#endif
+
+    private void EnsureStyles()
+    {
+        // _headerTexture doubles as a liveness sentinel: baked textures use
+        // HideFlags.HideAndDontSave and can still be destroyed by Unity on
+        // assembly reloads / play-mode transitions. If that happened, every
+        // GUIStyle here points at dead textures and the overlay renders as
+        // grey/blank boxes — rebuild instead of trusting _stylesReady forever.
+        // _gizmoBallSolid is checked too: it's a plain Texture2D (destroyable
+        // the same way) but was added after _headerTexture, so a stale
+        // instance that somehow kept _headerTexture alive while this one
+        // lagged null would otherwise NRE inside GUI.Label every frame
+        // (DrawGizmoAxisBall) instead of self-healing.
+        // _stylesLastScale: rebuild whenever UI Scale changes too, not just
+        // on the texture-liveness check above — this method is only run
+        // once lazily (per the "no need to rebuild every frame" reasoning
+        // right below), so a scale change needs its own explicit trigger.
+        if (_stylesReady && _headerTexture != null && _gizmoBallSolid != null && _gizmoLabelStyle != null && Mathf.Approximately(_stylesLastScale, SC2UiScale.Scale))
+            return;
+        _stylesLastScale = SC2UiScale.Scale;
+
+        _headerTexture = MakeSolidTexture(ColorBg);
+        // Panel uses the darker chrome color (same as the header) so that the
+        // rounded Surface-colored cards inside it read as elevated elements —
+        // one background/card relationship across the whole UI.
+        _panelTexture = MakeSolidTexture(ColorBg);
+        _buttonTexture = MakeSolidTexture(new Color(1f, 1f, 1f, 0f));
+        _activeButtonTexture = MakeSolidTexture(ColorSurfaceHi);
+        _hoverTexture = MakeSolidTexture(new Color(1f, 1f, 1f, 0.05f));
+        _dividerTexture = MakeSolidTexture(Color.white);
+        _accentTexture = MakeSolidTexture(ColorAccent);
+        _accentSoftTexture = MakeSolidTexture(ColorAccentSoft);
+
+        // 9-sliced rounded-corner textures: small baked texture + GUIStyle.border so
+        // Unity stretches only the flat middle, keeping corners crisp at any size.
+        _cardTexture = MakeRoundedTexture(28, 9, ColorSurface, ColorBorder, 1.25f);
+        _cardShadowTexture = MakeRoundedTexture(28, 10, ColorShadow, new Color(0, 0, 0, 0), 0f);
+        var pillFill = MakeRoundedTexture(24, 12, ColorSurfaceHi, new Color(0, 0, 0, 0), 0f);
+        var pillAccent = MakeRoundedTexture(24, 12, ColorAccent, new Color(0, 0, 0, 0), 0f);
+        var pillGhost = MakeRoundedTexture(24, 10, ColorSurface, ColorBorder, 1f);
+        var pillHover = MakeRoundedTexture(24, 10, ColorSurfaceHi, ColorBorder, 1f);
+
+        _panelStyle = new GUIStyle(GUIStyle.none)
+        {
+            padding = new RectOffset(10, 10, 8, 8),
+            margin = new RectOffset(0, 0, 0, 0),
+            border = new RectOffset(0, 0, 0, 0),
+            normal = { background = _panelTexture, textColor = ColorTextPrimary }
+        };
+        _headerStyle = new GUIStyle(GUIStyle.none)
+        {
+            padding = new RectOffset(12, 12, 0, 0),
+            margin = new RectOffset(0, 0, 0, 0),
+            border = new RectOffset(0, 0, 0, 0),
+            normal = { background = _headerTexture, textColor = ColorTextPrimary }
+        };
+        _titleStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = SC2UiScale.F(13),
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleLeft,
+            normal = { textColor = ColorTextPrimary }
+        };
+        _logoDotStyle = new GUIStyle(GUI.skin.box)
+        {
+            fixedWidth = SC2UiScale.Pxf(8),
+            fixedHeight = SC2UiScale.Pxf(8),
+            margin = new RectOffset(0, 6, 8, 0),
+            normal = { background = _accentTexture }
+        };
+
+        // Main tabs: flat "ghost" pill that fills with a solid accent pill when active —
+        // a segmented-control look instead of chunky inverse-color toolbar buttons.
+        //
+        // Inactive-tab text used ColorTextSecondary here, which is tuned for
+        // dim/muted text on the darker page background (ColorBg, L≈0.11). But
+        // this text sits on pillGhost (ColorSurface, L≈0.22) — a much LIGHTER
+        // background — where even a bright text color gets nowhere near a
+        // readable contrast ratio; that's the literal "grey text on grey
+        // background" look. Active/inactive is already conveyed by bold weight
+        // + accent fill vs ghost fill, so inactive tab text doesn't need its
+        // own dimmer color too — use full TextPrimary for both states.
+        _tabStyle = new GUIStyle(GUI.skin.button)
+        {
+            fixedHeight = SC2UiScale.Pxf(26),
+            fontSize = SC2UiScale.F(11),
+            alignment = TextAnchor.MiddleCenter,
+            border = new RectOffset(10, 10, 10, 10),
+            margin = new RectOffset(2, 2, 6, 6),
+            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), 0, 0),
+            normal = { background = pillGhost, textColor = ColorTextPrimary },
+            hover = { background = pillHover, textColor = ColorTextPrimary },
+            active = { background = pillHover, textColor = ColorTextPrimary },
+            focused = { background = pillGhost, textColor = ColorTextPrimary }
+        };
+        _activeTabStyle = new GUIStyle(_tabStyle)
+        {
+            fontStyle = FontStyle.Bold,
+            normal = { background = pillAccent, textColor = Color.white },
+            hover = { background = pillAccent, textColor = Color.white },
+            focused = { background = pillAccent, textColor = Color.white }
+        };
+
+        // Sub-tabs reuse the same segmented look at a slightly smaller scale.
+        // Clipping is a deliberate safety net on top of CompactSubtabLabel's
+        // abbreviations below — a label this method doesn't recognize (e.g.
+        // an unexpected Costs block name) should get visually clipped to its
+        // button's own width instead of bleeding text into the neighbouring
+        // tab, which is what the base tab styles (no clipping set) did.
+        _subtabStyle = new GUIStyle(_tabStyle) { fixedHeight = SC2UiScale.Pxf(22), fontSize = SC2UiScale.F(10), margin = new RectOffset(2, 2, 5, 5), clipping = TextClipping.Clip };
+        _activeSubtabStyle = new GUIStyle(_activeTabStyle) { fixedHeight = SC2UiScale.Pxf(22), fontSize = SC2UiScale.F(10), margin = new RectOffset(2, 2, 5, 5), clipping = TextClipping.Clip };
+
+        // Menu-bar buttons (File/Edit/View/...): flat text with a soft hover highlight,
+        // not a heavy 3D button — matches menu bars in modern desktop apps.
+        _menuBarButtonStyle = new GUIStyle(GUI.skin.button)
+        {
+            fixedHeight = SC2UiScale.Pxf(24),
+            fontSize = SC2UiScale.F(11),
+            alignment = TextAnchor.MiddleCenter,
+            border = new RectOffset(6, 6, 6, 6),
+            margin = new RectOffset(1, 1, 0, 0),
+            padding = new RectOffset(SC2UiScale.Px(8), SC2UiScale.Px(8), 0, 0),
+            normal = { background = pillGhost, textColor = ColorTextPrimary },
+            hover = { background = pillHover, textColor = ColorTextPrimary },
+            active = { background = pillHover, textColor = ColorTextPrimary },
+            focused = { background = pillGhost, textColor = ColorTextPrimary }
+        };
+        _menuBarButtonActiveStyle = new GUIStyle(_menuBarButtonStyle)
+        {
+            normal = { background = pillFill, textColor = ColorTextPrimary },
+            focused = { background = pillFill, textColor = ColorTextPrimary }
+        };
+
+        // Dropdown menu items: flat list rows with hover highlight instead of default
+        // chunky GUI.skin.button rows.
+        // Sits directly on the dropdown card's own background (ColorSurface,
+        // same lightness issue as the tab pills above) — full TextPrimary.
+        _dropdownItemStyle = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = SC2UiScale.F(11),
+            alignment = TextAnchor.MiddleLeft,
+            fixedHeight = SC2UiScale.Pxf(22),
+            border = new RectOffset(4, 4, 4, 4),
+            margin = new RectOffset(0, 0, 1, 1),
+            padding = new RectOffset(SC2UiScale.Px(8), SC2UiScale.Px(8), 0, 0),
+            normal = { background = _buttonTexture, textColor = ColorTextPrimary },
+            hover = { background = _hoverTexture, textColor = ColorTextPrimary },
+            active = { background = _hoverTexture, textColor = ColorTextPrimary }
+        };
+        _dropdownToggleStyle = new GUIStyle(GUI.skin.toggle)
+        {
+            fontSize = SC2UiScale.F(11),
+            normal = { textColor = ColorTextPrimary },
+            onNormal = { textColor = ColorTextPrimary }
+        };
+
+        _miniTextStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = SC2UiScale.F(11),
+            normal = { textColor = ColorTextPrimary }
+        };
+        _secondaryTextStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = SC2UiScale.F(10),
+            normal = { textColor = ColorTextSecondary }
+        };
+        _statusPillStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = SC2UiScale.F(10),
+            alignment = TextAnchor.MiddleCenter,
+            border = new RectOffset(9, 9, 9, 9),
+            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), SC2UiScale.Px(2), SC2UiScale.Px(2)),
+            // Clipping as a deliberate safety net (same reasoning as
+            // _subtabStyle/_activeSubtabStyle above) — a status message longer
+            // than this pill's own (deliberately capped, see DrawHeader) width
+            // should clip to its own box instead of overflowing MiddleCenter-
+            // aligned text symmetrically past both edges into the menu bar/
+            // mouse-coordinates label next to it.
+            clipping = TextClipping.Clip,
+            normal = { background = pillFill, textColor = ColorTextPrimary }
+        };
+        _cardStyle = new GUIStyle(GUIStyle.none)
+        {
+            padding = new RectOffset(10, 10, 8, 8),
+            border = new RectOffset(9, 9, 9, 9),
+            normal = { background = _cardTexture, textColor = ColorTextPrimary }
+        };
+        _shadowStyle = new GUIStyle(GUIStyle.none)
+        {
+            border = new RectOffset(10, 10, 10, 10),
+            normal = { background = _cardShadowTexture }
+        };
+        // Navigation gizmo: plain circular textures (not 9-sliced/GUIStyle
+        // backgrounds like the rest of the chrome) so the axis balls are true
+        // circles, tinted per-axis at draw time — matches Blender's viewport
+        // gizmo look (floating colored spheres, no card/box behind them).
+        _gizmoBallSolid = MakeCircleTexture(48, 0f);
+        _gizmoBallHollow = MakeCircleTexture(48, 5f);
+        _gizmoBackdrop = MakeCircleTexture(64, 0f);
+        // Built from scratch (not "new GUIStyle(GUI.skin.label)" like the other
+        // text styles here) so it has no dependency on the current GUI.skin at
+        // all — the label of a re-baked/rebuilt SC2UnifiedSkin, or any GUISkin
+        // fragility, can't leave this one in a broken state.
+        _gizmoLabelStyle = new GUIStyle
+        {
+            fontSize = SC2UiScale.F(11),
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter,
+            normal = { textColor = Color.white }
+        };
+
+        _stylesReady = true;
+    }
+
+    /// <summary>
+    /// Bakes an anti-aliased circle texture: a solid filled disc when
+    /// <paramref name="ringThickness"/> is 0, or a hollow ring of that pixel
+    /// thickness otherwise (used for the gizmo's negative-axis balls).
+    /// </summary>
+    private static Texture2D MakeCircleTexture(int size, float ringThickness)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+
+        var half = size * 0.5f;
+        var outerRadius = half - 1f;
+        var innerRadius = outerRadius - ringThickness;
+        var hollow = ringThickness > 0.01f;
+
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var dx = x + 0.5f - half;
+            var dy = y + 0.5f - half;
+            var dist = Mathf.Sqrt(dx * dx + dy * dy);
+            var alpha = Mathf.Clamp01(0.5f - (dist - outerRadius));
+            if (hollow)
+                alpha *= Mathf.Clamp01(0.5f - (innerRadius - dist));
+            tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+        }
+
+        tex.Apply(false, true);
+        return tex;
+    }
+
+    /// <summary>
+    /// Bakes a small anti-aliased rounded-rectangle texture with an optional 1px border,
+    /// meant to be used with a matching GUIStyle.border (9-slice) so it stretches cleanly
+    /// to any control size without corner distortion.
+    /// </summary>
+    private static Texture2D MakeRoundedTexture(int size, float radius, Color fill, Color border, float borderWidth)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+
+        var hasBorder = border.a > 0f && borderWidth > 0f;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var d = RoundedRectDistance(x + 0.5f, y + 0.5f, size, radius);
+                var coverage = Mathf.Clamp01(0.5f - d);
+                var pixel = fill;
+                if (hasBorder && d > -borderWidth)
+                {
+                    var edgeT = Mathf.Clamp01((d + borderWidth) / borderWidth);
+                    pixel = Color.Lerp(fill, border, edgeT);
+                }
+                pixel.a *= coverage;
+                tex.SetPixel(x, y, pixel);
+            }
+        }
+
+        tex.Apply(false, true);
+        return tex;
+    }
+
+    private static float RoundedRectDistance(float x, float y, float size, float radius)
+    {
+        var half = size * 0.5f;
+        var dx = Mathf.Abs(x - half) - (half - radius);
+        var dy = Mathf.Abs(y - half) - (half - radius);
+        var ax = Mathf.Max(dx, 0f);
+        var ay = Mathf.Max(dy, 0f);
+        var outside = Mathf.Sqrt(ax * ax + ay * ay) - radius;
+        var inside = Mathf.Min(Mathf.Max(dx, dy), 0f);
+        return outside + inside;
+    }
+
+    private static Texture2D MakeSolidTexture(Color color)
+    {
+        var texture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        texture.SetPixel(0, 0, color);
+        texture.Apply();
+        return texture;
+    }
+
+    private static void DrawSolidRect(Rect rect, Color color, Texture2D fallbackTexture)
+    {
+#if UNITY_EDITOR
+        EditorGUI.DrawRect(rect, color);
+#else
+        if (fallbackTexture == null)
+            return;
+
+        var previousColor = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(rect, fallbackTexture, ScaleMode.StretchToFill, false);
+        GUI.color = previousColor;
+#endif
+    }
+
+    private void DrawHeader(int width)
+    {
+        var titleBarRect = new Rect(0, 0, width, TitleBarHeight);
+        var tabsRect = new Rect(0, TitleBarHeight, width, TabsRowHeight);
+        DrawSolidRect(titleBarRect, ColorBg, _headerTexture);
+        DrawSolidRect(tabsRect, ColorBg, _headerTexture);
+
+        GUILayout.BeginArea(titleBarRect, _headerStyle);
+        GUILayout.BeginHorizontal(GUILayout.Height(TitleBarHeight));
+        GUILayout.Space(2);
+        DrawMenuButton("File", ref _showFileMenu, ref _fileMenuRect, 44);
+        DrawMenuButton("Edit", ref _showEditMenu, ref _editMenuRect, 44);
+        DrawMenuButton("View", ref _showViewMenu, ref _viewMenuRect, 46);
+        DrawMenuButton("Visibility", ref _showVisibilityMenu, ref _visibilityMenuRect, 78);
+        DrawMenuButton("Symmetry", ref _showSymmetryMenu, ref _symmetryMenuRect, 76);
+        DrawMenuButton("Tools", ref _showToolsMenu, ref _toolsMenuRect, 48);
+        GUILayout.FlexibleSpace();
+
+        // Drop the least-critical labels first on narrow windows (small Build &
+        // Run resolutions) instead of letting them overflow past the right edge
+        // of the title bar — the fixed-width labels + status pill together need
+        // roughly 500px, which does not fit alongside the menu buttons at small
+        // window sizes.
+        var showMouseCoordinates = width >= 900;
+        var showMapName = width >= 680;
+        if (showMapName)
+            GUILayout.Label(MapName, _secondaryTextStyle, GUILayout.Width(SC2UiScale.Pxf(190f)));
+        if (showMouseCoordinates)
+            GUILayout.Label(_mouseMapCoordinates, _secondaryTextStyle, GUILayout.Width(SC2UiScale.Pxf(230f)));
+        GUILayout.Label(Status, _statusPillStyle, GUILayout.Width(Mathf.Min(SC2UiScale.Pxf(320f), Mathf.Max(SC2UiScale.Pxf(110f), width * 0.18f))), GUILayout.Height(SC2UiScale.Pxf(20f)));
+        GUILayout.Space(4);
+
+        // Minimize/maximize/close are exclusively the native OS title bar's
+        // job — no in-UI duplicates. SC2RuntimeWindow.EnsureWindowedOnStartup
+        // (called on enable) patches the real OS window's style bits directly
+        // via Win32 so that native title bar's own maximize box actually
+        // works on this project's Unity version, instead of adding a
+        // custom button here to compensate for it being disabled.
+
+        GUILayout.EndHorizontal();
+        GUILayout.EndArea();
+
+        // An open dropdown's card can extend down far enough to cover this row
+        // (see the comment on _menuOverlayBlocksInput in OnGUI) — disable it for
+        // real input events so a tab underneath doesn't steal the dropdown's click.
+        var previousEnabledTabs = GUI.enabled;
+        GUI.enabled = previousEnabledTabs && !_menuOverlayBlocksInput;
+        GUILayout.BeginArea(tabsRect, _headerStyle);
+        GUILayout.BeginHorizontal(GUILayout.Height(TabsRowHeight));
+        for (var i = 0; i < GameMainTabs.Length; i++)
+        {
+            var style = i == _mainTab ? _activeTabStyle : _tabStyle;
+            // Was GUILayout.Height(26) — a raw unscaled literal that, as an
+            // explicit GUILayoutOption, overrides the style's own already-
+            // correctly-scaled fixedHeight (SC2UiScale.Pxf(26) in EnsureStyles)
+            // instead of the other way around, forcing every main-tab button's
+            // real rendered/hit-tested height back down to a fixed 26px
+            // regardless of UI Scale. Let the style's fixedHeight govern
+            // instead, same as every other segmented-tab button in this file.
+            if (GUILayout.Button(GameMainTabs[i], style))
+            {
+                _mainTab = i;
+                _subTab = 0;
+            }
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.EndArea();
+        GUI.enabled = previousEnabledTabs;
+
+        var dividerRect = new Rect(0, TitleBarHeight + TabsRowHeight - 1, width, 1);
+        DrawSolidRect(dividerRect, ColorDivider, _dividerTexture);
+    }
+
+
+    private static void SC2EditorStylesDivider()
+    {
+        GUILayout.Space(6);
+        var r = GUILayoutUtility.GetRect(1f, SC2UiScale.Pxf(18f), GUILayout.Width(1f));
+        DrawSolidRect(r, ColorDivider, null);
+        GUILayout.Space(6);
+    }
+
+    private void DrawMenuButton(string label, ref bool open, ref Rect rect, float width)
+    {
+        // width/24 are the CALLER's unscaled base pixel values — scaled
+        // here, once, rather than at each of the 6 call sites, since without
+        // scaling, at UI Scale > 1x the menu-bar's own bigger font
+        // ("View"/"Visibility"/"Symmetry"/"Tools" etc.) no longer fits their
+        // fixed-width buttons, so adjacent buttons' text visually runs
+        // together ("ViewVisibilitySymmetrTools") — same root-cause shape
+        // as the dropdown-menu clipping issue avoided just before this one,
+        // just on the horizontal axis of the menu BAR itself instead of the
+        // vertical axis of an open dropdown's card.
+        var style = open ? _menuBarButtonActiveStyle : _menuBarButtonStyle;
+        if (GUILayout.Button(label, style, GUILayout.Width(SC2UiScale.Pxf(width)), GUILayout.Height(SC2UiScale.Pxf(24))))
+        {
+            CloseMenusExcept(label);
+            open = !open;
+        }
+
+        if (Event.current.type == EventType.Repaint)
+            rect = GUILayoutUtility.GetLastRect();
+    }
+
+    private void CloseMenusExcept(string label)
+    {
+        if (label != "File") _showFileMenu = false;
+        if (label != "Edit") _showEditMenu = false;
+        if (label != "View") _showViewMenu = false;
+        if (label != "Visibility") _showVisibilityMenu = false;
+        if (label != "Symmetry") _showSymmetryMenu = false;
+        if (label != "Tools") _showToolsMenu = false;
+    }
+
+    private void DrawOpenMenus()
+    {
+        if (!AnyMenuOpen())
+            return;
+
+        var previousDepth = GUI.depth;
+        GUI.depth = -1000;
+        DrawMenuClickCatcher();
+
+        if (_showFileMenu) DrawFileMenu();
+        if (_showEditMenu) DrawEditMenu();
+        if (_showViewMenu) DrawViewMenu();
+        if (_showVisibilityMenu) DrawVisibilityMenu();
+        if (_showSymmetryMenu) DrawSymmetryMenu();
+        if (_showToolsMenu) DrawToolsMenu();
+
+        GUI.depth = previousDepth;
+    }
+
+    private bool AnyMenuOpen()
+    {
+        return _showFileMenu || _showEditMenu || _showViewMenu || _showVisibilityMenu || _showSymmetryMenu || _showToolsMenu;
+    }
+
+    private void DrawMenuClickCatcher()
+    {
+        var e = Event.current;
+        if (e == null)
+            return;
+        if (e.type == EventType.Used)
+            return;
+
+        if ((e.type == EventType.MouseDown || e.type == EventType.MouseUp) && !IsMouseOverOpenMenu(e.mousePosition) && e.mousePosition.y > TitleBarHeight)
+        {
+            CloseAllMenus();
+            e.Use();
+        }
+    }
+
+    private void CloseAllMenus()
+    {
+        _showFileMenu = false;
+        _showEditMenu = false;
+        _showViewMenu = false;
+        _showVisibilityMenu = false;
+        _showSymmetryMenu = false;
+        _showToolsMenu = false;
+        _openMenuRect = Rect.zero;
+    }
+
+    private void DrawFileMenu()
+    {
+        DrawMenuPanel(_fileMenuRect.x, TitleBarHeight, 210,
+#if UNITY_EDITOR
+            10,
+#else
+            11, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
+#endif
+            () =>
+        {
+            if (GUILayout.Button("New Terrain", _dropdownItemStyle)) { RequestNewTerrain(); _showFileMenu = false; }
+            if (GUILayout.Button("Import Map...", _dropdownItemStyle)) { OpenMapDocumentImportPanel(); _showFileMenu = false; }
+            if (GUILayout.Button("Import terrain.bdf", _dropdownItemStyle)) { OpenTerrainBdfImport(); _showFileMenu = false; }
+            if (GUILayout.Button("Import decals.bdf", _dropdownItemStyle)) { OpenDecalsBdfImport(); _showFileMenu = false; }
+            if (GUILayout.Button("Export .scd", _dropdownItemStyle)) { OpenScdExportWindow(); _showFileMenu = false; }
+            if (GUILayout.Button("Save Terrain (Ctrl+S)", _dropdownItemStyle)) { SaveActiveTerrain(); _showFileMenu = false; }
+            if (GUILayout.Button("Load Terrain...", _dropdownItemStyle)) { OpenLoadTerrainMenu(); _showFileMenu = false; }
+            if (GUILayout.Button("Delete Saved Terrain...", _dropdownItemStyle)) { OpenDeleteTerrainMenu(); _showFileMenu = false; }
+            if (GUILayout.Button("Diagnostics", _dropdownItemStyle)) { OpenBatchImportDiagnostics(); _showFileMenu = false; }
+            if (GUILayout.Button("Show Game View UI", _dropdownItemStyle)) { OpenGameViewUiBootstrap(); _showFileMenu = false; }
+#if !UNITY_EDITOR
+            // Application.Quit() fires wantsToQuit (HandleWantsToQuit) the
+            // same as the OS window's own close button/Alt+F4, so this
+            // reuses the exact same "save changes?" prompt, not a second one.
+            if (GUILayout.Button("Exit", _dropdownItemStyle)) { _showFileMenu = false; Application.Quit(); }
+#endif
+        });
+    }
+
+    private void DrawEditMenu()
+    {
+        // Move/Rotate/Scale tool-switch entries removed — per direct
+        // instruction, G is no longer a hotkey at all (dragging an
+        // already-selected prop is unconditional default behavior now, no
+        // "Move tool" to switch into) and Rotate/Scale are no longer
+        // persistent tool-switch modes — R/S now each arm a one-shot
+        // interactive gesture on the current Props selection directly
+        // (SC2ObjectsShell.OnGameViewGUI's own R/S handling), not a
+        // menu-clickable mode toggle.
+        DrawMenuPanel(_editMenuRect.x, TitleBarHeight, 190, 4, () =>
+        {
+            if (GUILayout.Button("Undo (Ctrl+Z)", _dropdownItemStyle)) { UndoTerrainEdit(); _showEditMenu = false; }
+            if (GUILayout.Button("Redo (Ctrl+Y)", _dropdownItemStyle)) { RedoTerrainEdit(); _showEditMenu = false; }
+            if (GUILayout.Button("Select (LMB)", _dropdownItemStyle)) { SetTool("Select"); _showEditMenu = false; }
+            if (GUILayout.Button("Measure (M)", _dropdownItemStyle)) { SetTool("Measure"); _showEditMenu = false; }
+        });
+    }
+
+    private void DrawViewMenu()
+    {
+        // reset button + 3 toggles + divider block + zoom-speed row +
+        // UI-scale row + hint lines (one extra in a build, for the
+        // fullscreen shortcut — meaningless in the Editor). The "62+40+22"
+        // budget covers rows whose real height isn't MenuItemHeight-based
+        // (auto-sized labels/sliders) — scaled by Scale too so it keeps
+        // pace with how big those rows actually render now; see
+        // MenuItemHeight's own doc comment for why this class of bug
+        // exists at all.
+        var contentHeight = 4 * MenuItemHeight + (62f + 40f + 22f) * SC2UiScale.Scale;
+#if !UNITY_EDITOR
+        contentHeight += 14f * SC2UiScale.Scale;
+#endif
+        DrawMenuPanel(_viewMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
+        {
+            if (GUILayout.Button("Reset View (Home)", _dropdownItemStyle)) { ResetView(); _showViewMenu = false; }
+            ShowPanel = GUILayout.Toggle(ShowPanel, "Inspector Panel", _dropdownToggleStyle);
+            EnableGameViewNavigation = GUILayout.Toggle(EnableGameViewNavigation, "Game Navigation", _dropdownToggleStyle);
+            EnableHotkeys = GUILayout.Toggle(EnableHotkeys, "Hotkeys", _dropdownToggleStyle);
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+            // _miniTextStyle (TextPrimary), not _secondaryTextStyle: this sits on
+            // the dropdown card's Surface-colored background, where
+            // ColorTextSecondary doesn't reach a readable contrast ratio (same
+            // "grey on grey" issue as the tab pills).
+            GUILayout.Label("MMB: rotate camera", _miniTextStyle);
+            GUILayout.Label("Shift+MMB: move over map", _miniTextStyle);
+            GUILayout.Label("Wheel: zoom", _miniTextStyle);
+#if !UNITY_EDITOR
+            GUILayout.Label("F11: toggle fullscreen", _miniTextStyle);
+#endif
+            GUILayout.Label($"Zoom Speed: {ZoomSpeed:0.0}x", _miniTextStyle);
+            ZoomSpeed = GUILayout.HorizontalSlider(ZoomSpeed, 0.2f, 3f);
+            // UI Scale (fonts/buttons up to ~30% bigger, left panel up to
+            // ~40% wider) is a live, persisted parameter (View
+            // menu, same row shape as Zoom Speed right above) rather than a
+            // one-time hardcoded bump. Drives SC2UnifiedSkin/SC2EnvFieldGui/
+            // this class's own chrome styles' font sizes and paddings, plus
+            // the panel-width formula in UpdateLayoutRects — see
+            // SC2UiScale's own doc comment for why this is real layout
+            // numbers, not a GUI.matrix transform.
+            GUILayout.Label($"UI Scale: {SC2UiScale.Scale:0.00}x", _miniTextStyle);
+            SC2UiScale.Scale = GUILayout.HorizontalSlider(SC2UiScale.Scale, SC2UiScale.Min, SC2UiScale.Max);
+        });
+    }
+
+    private void DrawVisibilityMenu()
+    {
+        // 2 Path rows (Land/Air) or 4 (+Naval/Amphibious) — same
+        // Data.PlayableWater signal the Paths tab itself already uses to
+        // decide the required graph set (SC2ObjectsShell.RequiredGraphKinds)
+        // — a map with no playable water never has Naval/Amphibious graphs
+        // to begin with, so showing those 2 extra toggles there would just
+        // be dead controls.
+        var playableWater = _objectsShell != null && _objectsShell.PlayableWater;
+        // FIXED: was "11 + ..." — undercounted by 2, which shrank this
+        // menu's computed hit-test rect (_openMenuRect, set from this
+        // itemCount) below its actual rendered content height. The dropdown
+        // still PAINTED every row correctly (GUILayout draws whatever
+        // content this closure produces regardless of the rect passed to
+        // DrawMenuPanel), but the last rows fell outside the rect used for
+        // input/overlap hit-testing, contributing to clicks near the bottom
+        // of this now much-taller (11->15) menu reaching whatever panel
+        // content sat underneath instead of this dropdown's own toggles.
+        var itemCount = 14 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units (3) + Land/Air (2) + Chains/Areas/Water/RNM/Grid (5) [+ Naval/Amphibious]
+
+        DrawMenuPanel(_visibilityMenuRect.x, TitleBarHeight, 210, itemCount, () =>
+        {
+            DrawToggle("Terrain", ref OverlayTerrain);
+            DrawToggle("Hfield", ref OverlayHfield);
+            DrawToggle("Costs", ref OverlayCosts);
+            DrawToggle("Collision2", ref OverlayCollision2);
+            DrawToggle("Props", ref OverlayProps);
+            DrawToggle("Markers", ref OverlayMarkers);
+            DrawToggle("Units", ref OverlayUnits);
+            DrawToggle("Path: Land", ref OverlayGraphLand);
+            DrawToggle("Path: Air", ref OverlayGraphAir);
+            if (playableWater)
+            {
+                DrawToggle("Path: Naval", ref OverlayGraphNaval);
+                DrawToggle("Path: Amphibious", ref OverlayGraphAmphibious);
+            }
+            DrawToggle("Chains", ref OverlayChains);
+            DrawToggle("Areas", ref OverlayAreas);
+            DrawToggle("Water", ref OverlayWater);
+            DrawToggle("RNM", ref OverlayRNM);
+            DrawToggle("Grid", ref OverlayGrid);
+            DrawToggle("Wireframe", ref OverlayWireframe);
+        });
+        // CommitOverlayToContext was never called anywhere - SyncOverlayFromContext
+        // (runs at the very top of every OnGUI, before this menu is drawn) kept
+        // overwriting a just-clicked local OverlayX field back to SharedContext's
+        // own never-updated copy on the very next frame, so every checkbox visually
+        // snapped back and no toggle's downstream effect (SetTerrainOverlayVisible,
+        // HandleCostsGameViewInput's cross-tab branch, etc.) ever stuck. Commit here,
+        // every frame this menu is open, so a click survives past the next repaint.
+        CommitOverlayToContext();
+    }
+
+    private void DrawToolsMenu()
+    {
+        // 220, not the 260 this briefly needed for a since-removed
+        // "(Editor only)" label suffix - the extra width pushed this card's
+        // right edge further into the subtabs row than either label
+        // actually needs, matching every other 190-220px dropdown here.
+        DrawMenuPanel(_toolsMenuRect.x, TitleBarHeight, 220, 2, () =>
+        {
+            if (GUILayout.Button("Focus Selection", _dropdownItemStyle)) { FocusCamera(); _showToolsMenu = false; }
+            // Unlike the reflection-based InvokeEditorStaticMethod calls
+            // elsewhere in this menu, SC2InfoBdfEditorPanel is a plain
+            // GUILayout overlay (not a real EditorWindow), so it's called
+            // directly and works identically in the Editor Game view and a
+            // real Build & Run player.
+            if (GUILayout.Button("Info.bdf Editor...", _dropdownItemStyle))
+            {
+                OpenInfoBdfEditorPanel();
+                _showToolsMenu = false;
+            }
+        });
+    }
+
+    /// <summary>Symmetry axis/mode/center is a cross-cutting setting shared
+    /// by Terrain, Costs, and Objects (all three read Data.Symmetry/
+    /// SymmetryCenter/RadialCount) — this menu lives next to Visibility
+    /// rather than inside the Terrain tab for the same reason Visibility
+    /// itself does: it's not a Terrain-only concern. Reads/writes
+    /// _terrainShell.Data directly (the same SC2TerrainData every domain
+    /// shell shares) rather than duplicating a second copy of the setting.</summary>
+    private void DrawSymmetryMenu()
+    {
+        var data = _terrainShell?.Data;
+        var contentHeight = data == null ? MenuItemHeight : 5 * MenuItemHeight + (data.Symmetry == SymmetryMode.Radial ? MenuItemHeight : 0f);
+        DrawMenuPanel(_symmetryMenuRect.x, TitleBarHeight, 210, contentHeight, () =>
+        {
+            if (data == null)
+            {
+                GUILayout.Label("No terrain loaded", _dropdownItemStyle);
+                return;
+            }
+
+            DrawSymmetryModeToggle(data, SymmetryMode.None, "None");
+            DrawSymmetryModeToggle(data, SymmetryMode.X, "X");
+            DrawSymmetryModeToggle(data, SymmetryMode.Y, "Y");
+            DrawSymmetryModeToggle(data, SymmetryMode.XY, "XY");
+            DrawSymmetryModeToggle(data, SymmetryMode.Radial, "Radial");
+
+            if (data.Symmetry == SymmetryMode.Radial)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Count", _miniTextStyle, GUILayout.Width(50));
+                var newCount = Mathf.RoundToInt(GUILayout.HorizontalSlider(data.RadialCount, 2, 8));
+                GUILayout.Label(newCount.ToString(), _miniTextStyle, GUILayout.Width(20));
+                GUILayout.EndHorizontal();
+                if (newCount != data.RadialCount)
+                {
+                    _terrainShell.RecordUndoCheckpoint("Change Symmetry");
+                    data.RadialCount = newCount;
+                    EditorUtility.SetDirty(data);
+                }
+            }
+        });
+    }
+
+    private void DrawSymmetryModeToggle(SC2TerrainData data, SymmetryMode mode, string label)
+    {
+        var isOn = data.Symmetry == mode;
+        var newOn = GUILayout.Toggle(isOn, label, _dropdownToggleStyle);
+        if (newOn && !isOn)
+        {
+            _terrainShell.RecordUndoCheckpoint("Change Symmetry");
+            data.Symmetry = mode;
+            EditorUtility.SetDirty(data);
+        }
+    }
+
+    private static void SC2EditorStylesDivider_Horizontal()
+    {
+        var r = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true));
+        DrawSolidRect(r, ColorDivider, null);
+    }
+
+    // Scaled through SC2UiScale, not fixed constants: if
+    // _dropdownItemStyle/_dropdownToggleStyle's own rendered row height grows
+    // with UI Scale (EnsureStyles above) but this stays fixed, every dropdown
+    // menu's computed card/hit-test rect (_openMenuRect, built from these two
+    // values — see DrawMenuPanel below) undersizes itself relative to the
+    // taller real content, pushing later rows outside the clickable area —
+    // the same failure shape DrawVisibilityMenu's own "FIXED: was
+    // undercounted by 2" comment already documents for a different instance
+    // of this same bug class.
+    private static float MenuItemHeight => SC2UiScale.Pxf(24f);   // dropdown row incl. margin
+    private static float MenuChromeHeight => SC2UiScale.Pxf(18f); // card padding top+bottom
+
+    /// <summary>
+    /// Dropdown card sized to its content. The old fixed 260px height left a big
+    /// empty card under short menus (File has 4 rows) that both looked broken and
+    /// swallowed clicks meant for the viewport below it.
+    /// </summary>
+    /// <summary>Actual rect of the currently open dropdown, recorded by DrawMenuPanel.</summary>
+    private Rect _openMenuRect;
+
+    private void DrawMenuPanel(float x, float y, float width, float contentHeight, System.Action drawContent)
+    {
+        // width scaled here, once, so every Draw*Menu call site's literal
+        // width (190/210/220...) gets more room for bigger text at higher
+        // UI Scale without each one needing its own edit.
+        var rect = new Rect(x, y + 4, width * SC2UiScale.Scale, contentHeight + MenuChromeHeight);
+        _openMenuRect = rect;
+        DrawCard(rect, _cardStyle, drawContent);
+    }
+
+    private void DrawMenuPanel(float x, float y, float width, int itemCount, System.Action drawContent)
+    {
+        DrawMenuPanel(x, y, width, itemCount * MenuItemHeight, drawContent);
+    }
+
+    private void DrawSubtabs(int width)
+    {
+        var mainTabId = GameMainTabIds[_mainTab];
+        // Costs' sub-tabs aren't a fixed list — WS1: one tab per real Costs
+        // block (3 land-only or 5 playable-water, matching Data.PlayableWater)
+        // plus a trailing "Terrain Types" tab, so the count/labels vary with
+        // the loaded map. EnsureCostsShell() first so _costsShell exists even
+        // on the very first frame Costs becomes the active main tab (this
+        // runs before HandleCostsGameViewInput, which normally ensures it).
+        string[] tabs;
+        if (mainTabId == SC2EditorMainTab.Costs)
+        {
+            EnsureCostsShell();
+            tabs = _costsShell.GetSubtabLabels();
+        }
+        else
+        {
+            tabs = SC2EditorTabs.GetSubtabs(mainTabId);
+        }
+        _subTab = Mathf.Clamp(_subTab, 0, tabs.Length - 1);
+        var rect = new Rect(0, TitleBarHeight + TabsRowHeight, width, SubtabsRowHeight);
+        DrawSolidRect(rect, ColorBg, _headerTexture);
+
+        // Same reasoning as the main-tabs row in DrawHeader: an open dropdown's
+        // card commonly extends down far enough to cover this whole row, so its
+        // buttons must not be able to steal clicks meant for the dropdown.
+        var previousEnabledSubtabs = GUI.enabled;
+        GUI.enabled = previousEnabledSubtabs && !_menuOverlayBlocksInput;
+        GUILayout.BeginArea(rect, _headerStyle);
+        var usableWidth = Mathf.Max(1f, width - SC2UiScale.Pxf(20f));
+
+        // Decide full-label vs. compact layout from the *actual* space the full
+        // labels need, not a fixed screen-width guess. The old "width < 760"
+        // heuristic only checked the viewport size, not how many/long the
+        // subtabs for the current main tab are (e.g. Costs has 6 tabs incl.
+        // "Islands/Validation"), so full-width buttons could sum to more than
+        // usableWidth and run off the right edge of the screen.
+        //
+        // The "9px/char + 28px padding" estimate below assumes the BASE
+        // (Scale=1) font metrics — scaled by SC2UiScale.Scale here (both
+        // this estimate and the clamp bounds) since _subtabStyle's own
+        // fontSize now scales too (EnsureStyles); otherwise at higher UI
+        // Scale this row's real text no longer fits the widths this
+        // heuristic computes for it, visually crowding/clipping the sub-tab
+        // labels.
+        var fullWidthSum = 0f;
+        for (var i = 0; i < tabs.Length; i++)
+            fullWidthSum += Mathf.Clamp(tabs[i].Length * SC2UiScale.Pxf(9f) + SC2UiScale.Pxf(28f), SC2UiScale.Pxf(78f), SC2UiScale.Pxf(148f)) + 4f; // +margin (2+2)
+        var compactTabs = tabs.Length > 0 && fullWidthSum > usableWidth;
+
+        if (compactTabs)
+        {
+            // Neither an equal-share divide (every tab gets
+            // usableWidth/tabCount, however tiny) nor a fixed-minimum-width
+            // floor (which just overflows instead) stays legible once a tab
+            // list gets long enough (Environment has 16 sub-tabs after the
+            // InfoBdf field remap). Every compact tab instead gets one
+            // fixed, always-legible width
+            // regardless of tab count, laid out in a horizontally
+            // SCROLLABLE strip instead of forced into the row's own width —
+            // when everything fits, the scrollbar simply never appears
+            // (GUI.BeginScrollView already degrades to that automatically);
+            // when it doesn't, the user scrolls instead of reading clipped
+            // mid-word fragments.
+            // Widened from 58f: several real tab labels (Terrain's own
+            // "Geometry"/"Imported", not just Environment's long ones
+            // CompactSubtabLabel already targets) clipped mid-word inside
+            // the narrower fixed width once TextClipping.Clip kicked in,
+            // since 58px was only ever sized against the short abbreviations
+            // already in that switch, never against Terrain's own subtab
+            // list.
+            var compactTabWidth = SC2UiScale.Pxf(72f);
+            var contentWidth = Mathf.Max(usableWidth, compactTabWidth * tabs.Length);
+            var scrollViewRect = new Rect(0f, 0f, usableWidth, rect.height);
+            var contentRect = new Rect(0f, 0f, contentWidth, rect.height);
+            // A stray vertical scrollbar sliver can show up here, though this
+            // row never scrolls vertically by design (contentRect's height
+            // always equals scrollViewRect's).
+            // Classic GUI.BeginScrollView gotcha: once the horizontal
+            // scrollbar is shown, it eats some height from the actual
+            // viewport, so content sized to the ORIGINAL (taller) viewport
+            // now technically "overflows" by the scrollbar's own thickness —
+            // Unity then shows a vertical scrollbar too, despite
+            // alwaysShowVertical:false, since that flag only controls
+            // whether it shows when NOT needed, not whether it can appear
+            // when Unity's own internal math thinks it is. Passing
+            // GUIStyle.none for the vertical scrollbar's style makes it
+            // draw as nothing regardless, which is what's actually wanted
+            // here — this row only ever needs horizontal scrolling.
+            _subtabsScroll = GUI.BeginScrollView(scrollViewRect, _subtabsScroll, contentRect, false, false, GUI.skin.horizontalScrollbar, GUIStyle.none);
+            for (var i = 0; i < tabs.Length; i++)
+            {
+                var style = i == _subTab ? _activeSubtabStyle : _subtabStyle;
+                var label = CompactSubtabLabel(tabs[i]);
+                var btnRect = new Rect(i * compactTabWidth + 2f, 0f, compactTabWidth - 4f, rect.height);
+                if (GUI.Button(btnRect, label, style))
+                    _subTab = i;
+            }
+            GUI.EndScrollView();
+        }
+        else
+        {
+            GUILayout.BeginHorizontal();
+            for (var i = 0; i < tabs.Length; i++)
+            {
+                var style = i == _subTab ? _activeSubtabStyle : _subtabStyle;
+                var requestedWidth = Mathf.Clamp(tabs[i].Length * SC2UiScale.Pxf(9f) + SC2UiScale.Pxf(28f), SC2UiScale.Pxf(78f), SC2UiScale.Pxf(148f));
+                if (GUILayout.Button(tabs[i], style, GUILayout.Width(requestedWidth)))
+                    _subTab = i;
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndArea();
+        GUI.enabled = previousEnabledSubtabs;
+
+        var dividerRect = new Rect(0, rect.yMax - 1, width, 1);
+        DrawSolidRect(dividerRect, ColorDivider, _dividerTexture);
+
+        // Consume events from this area to prevent SceneView navigation.
+        // Gated on !_menuOverlayBlocksInput: this is a raw Event.Use(), not a
+        // GUI.Button, so the GUI.enabled guard above (which correctly disables
+        // the tab buttons themselves while a dropdown is open) has no effect
+        // on it. An open dropdown's card commonly extends down over this exact
+        // row, and without this gate every click meant for the dropdown was
+        // being eaten here before DrawOpenMenus (drawn later) ever saw it —
+        // root cause of "Tools/Symmetry menu items don't respond to clicks."
+        var e = Event.current;
+        if (e.type == EventType.MouseDown && rect.Contains(e.mousePosition) && !_menuOverlayBlocksInput)
+            e.Use();
+    }
+
+    private static string CompactSubtabLabel(string label)
+    {
+        switch (label)
+        {
+            // Terrain's own tabs (SC2EditorTabs.TerrainTabs) — "Geometry"
+            // and "Imported" had no case at all (fell through to the
+            // default below, which only truncates labels over 10 chars —
+            // both are exactly 8, so they were returned verbatim and
+            // clipped mid-word by the compact button's fixed width).
+            // "Lighting Bake" did hit the default truncation but
+            // "Lighting…" is still too wide for the compact box.
+            case "Geometry":
+                return "Geom.";
+            case "Imported":
+                return "Import";
+            case "Lighting Bake":
+                return "Light.";
+            case "Materials":
+                return "Mats";
+            case "Simplified":
+                return "Simpl.";
+            case "Auto Generate":
+                return "Auto";
+            case "Paint Overrides":
+                return "Paint";
+            case "Paint Pairs":
+                return "Pairs";
+            case "Paint Blend":
+                return "Blend";
+            case "Background":
+                return "Bkgnd.";
+            case "Terrain Types":
+                return "Types";
+            case "Islands/Validation":
+                return "Valid.";
+            // CostsTabs' "Unit Layer" and CollisionTabs' "Collision2" are
+            // both exactly 10 characters — the default case's old
+            // "> 10" check let both through verbatim (same class of bug
+            // as Geometry/Imported above, just at a different boundary).
+            case "Unit Layer":
+                return "Units";
+            case "Collision2":
+                return "Coll2";
+            // EnvironmentTabs' long multi-word names — the original
+            // motivating case for this whole compact-mode redesign
+            // (16 subtabs), but never actually checked against the NEW
+            // fixed-width box; the old ">9 chars" default truncation
+            // ("Depth of…", "Render Pa…") is still too wide for it.
+            case "Point Clouds":
+                return "P.Cloud";
+            case "Fog of War":
+                return "FogWar";
+            case "Depth of Field":
+                return "DoField";
+            case "Render Passes":
+                return "R.Pass";
+            case "Air Elevation":
+                return "AirElev";
+            // Real vanilla Costs block names (SC2CostsShell.GetSubtabLabels) —
+            // long enough (up to 35 chars, e.g. "Land_Small_water_Surface_ShoreLine")
+            // to overflow a compact sub-tab button unabbreviated, which is
+            // exactly what happened before these cases existed (the "default"
+            // case below returned the name verbatim).
+            case "Land_Small":
+                return "Small";
+            case "Land_Medium":
+                return "Medium";
+            case "Land_Large":
+                return "Large";
+            case "Land_Small_water_Surface_ShoreLine":
+                return "Sm. Shore";
+            case "Land_medium":
+                return "Medium";
+            case "Land_Large_water_Abyss_ShoreLine":
+                return "Lg. Abyss";
+            case "Land_Large_water_Seafloor":
+                return "Lg. Seafloor";
+            case "Land_Medium_Water_Surface":
+                return "Med. Surface";
+            default:
+                // Generic fallback for any other unrecognized label (a
+                // renamed/custom Costs block, etc.) — truncate rather than
+                // let it overflow; _subtabStyle's own Clip setting is a
+                // second safety net for whatever this doesn't catch. Was
+                // "> 10 chars, keep 9" — sized against the OLD variable-
+                // width (78-148px) layout, not the compact mode's fixed,
+                // much narrower box: even short-ish 8-char names like
+                // "Geometry"/"Imported" clipped mid-word once returned
+                // verbatim here. 6 chars is a safer budget
+                // for the compact box at any UI Scale, since both the box
+                // and the font scale together — the ratio between them
+                // never changes with Scale, only with the label itself.
+                return label.Length > 6 ? label.Substring(0, 5) + "…" : label;
+        }
+    }
+
+    private void DrawCard(Rect rect, GUIStyle style, System.Action drawContent)
+    {
+        var shadowRect = new Rect(rect.x - 2, rect.y + 3, rect.width + 4, rect.height + 4);
+        GUI.Box(shadowRect, GUIContent.none, _shadowStyle);
+        GUILayout.BeginArea(rect, style);
+        drawContent();
+        GUILayout.EndArea();
+    }
+
+    private void DrawMainPanel(int width, int height)
+    {
+        DrawSolidRect(_panelRect, ColorBg, _panelTexture);
+        DrawSolidRect(new Rect(_panelRect.xMax - 1f, _panelRect.y, 1f, _panelRect.height), ColorDivider, _dividerTexture);
+
+        GUILayout.BeginArea(_panelRect, _panelStyle);
+        // Scrollable: some tabs' content (e.g. Environment's merged Water
+        // tab, 6 foldouts that can all be expanded at once) can legitimately
+        // exceed the panel's fixed height — previously just clipped/
+        // inaccessible below the fold with no way to reach it, since
+        // BeginArea alone doesn't scroll.
+        var outerWidth = Mathf.Max(1f, _panelRect.width - _panelStyle.padding.horizontal);
+        var outerHeight = Mathf.Max(1f, _panelRect.height - _panelStyle.padding.vertical);
+        _panelScroll = GUILayout.BeginScrollView(_panelScroll, GUILayout.Width(outerWidth), GUILayout.Height(outerHeight));
+        GUILayout.BeginVertical(GUILayout.Width(PanelContentWidth));
+        {
+            switch (_mainTab)
+            {
+                case 0:
+                    DrawTerrainInspector();
+                    break;
+                case 1:
+                    DrawCostsInspector();
+                    break;
+                case 2:
+                    DrawCollisionInspector();
+                    break;
+                case 3:
+                    DrawObjectsInspector();
+                    break;
+                case 4:
+                    DrawDecalsInspector();
+                    break;
+                case 5:
+                    DrawEnvironmentInspector();
+                    break;
+                case 6:
+                    DrawScenarioInspector();
+                    break;
+                case 7:
+                    DrawExportInspector();
+                    break;
+                case 8:
+                    DrawDiagnosticsInspector();
+                    break;
+                default:
+                    GUILayout.Label("Panel is ready for migration from the editor window.", _miniTextStyle);
+                    break;
+            }
+        }
+        GUILayout.EndVertical();
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+
+        // Child IMGUI controls must receive MouseDown/MouseUp normally.
+    }
+
+    private void DrawTerrainInspector()
+    {
+        EnsureTerrainShell();
+        SyncTerrainShellSubtab();
+        TryAdoptTerrainData();
+        _terrainShell.OnEmbeddedGUI(PanelContentWidth);
+
+        // Propagate data changes made inside the shell (e.g. "Create new
+        // SC2TerrainData" or ObjectField pick inside OnEmbeddedGUI) back to
+        // the public RuntimeTerrainData field so that the Inspector and
+        // TryAdoptTerrainData stay in sync — bidirectional binding.
+        if (_terrainShell.Data != RuntimeTerrainData)
+            RuntimeTerrainData = _terrainShell.Data;
+    }
+
+    private void EnsureTerrainShell()
+    {
+        if (_terrainShell != null)
+            return;
+
+        _terrainShell = ScriptableObject.CreateInstance<SC2TerrainShell>();
+        _terrainShell.hideFlags = HideFlags.HideAndDontSave;
+        _terrainShell.Session = _mapSession;
+        _terrainShell.RepaintHost = RepaintGameView;
+        _terrainShell.OnPreviewModeChanged = ApplyPreviewModeToImportedTerrains;
+        _terrainShell.DrawImportedTerrainsContent = DrawImportedTerrainsLeftPanelContent;
+        _terrainShell.PreSaveSync = SyncImportedTerrainsToDocument;
+        _terrainShell.GetImportedTerrainsForExport = GetImportedTerrainsForExport;
+        // Same colliders _objectsShell already gets (below), shared via
+        // BuildImportedTerrainColliders so SC2CostsShell (which holds a
+        // reference to this _terrainShell, not to this class) can raycast
+        // the real imported surface too.
+        _terrainShell.GetImportedTerrainColliders = BuildImportedTerrainColliders;
+        // Prop/unit blueprint indexing (and the Objects document sync just
+        // below it) must not depend on the Objects tab having been opened
+        // first — EnsureObjectsShell is otherwise only called from Objects-
+        // tab-specific code paths, so on a session where the mapmaker never
+        // visits that tab, _objectsShell (and its DataChanged subscriptions)
+        // never even exists. This EnsureTerrainShell method, by contrast, is
+        // the one bootstrap point every tab's own EnsureXShell chain already
+        // funnels through — call it here, BEFORE the SetData call below
+        // (which fires DataChanged for this method's own startup load), so
+        // the subscription is already registered in time to catch it, not
+        // just for later loads.
+        EnsureObjectsShell();
+#if UNITY_EDITOR
+
+        // In the Editor, keep supporting an explicitly assigned RuntimeTerrainData
+        // field for quick testing and asset selection.
+        var runtimeDataWasAssigned = RuntimeTerrainData != null;
+        if (RuntimeTerrainData == null)
+            RuntimeTerrainData = LoadSharedTerrainData();
+        if (RuntimeTerrainData != null)
+            _terrainShell.SetData(RuntimeTerrainData,
+                runtimeDataWasAssigned
+                    ? RuntimeFieldTerrainSourceLabel(RuntimeTerrainData)
+                    : SharedTerrainSourceLabel(RuntimeTerrainData));
+#else
+        // In a standalone build, do not trust the serialized scene/inspector
+        // RuntimeTerrainData reference as startup data. It can silently bake an
+        // old ScriptableObject into the player and survive deleting LocalLow or
+        // Resources from the project after the fact. Startup data must come from
+        // Resources; runtime JSON is only adopted through explicit LoadFromDisk.
+        RuntimeTerrainData = LoadSharedTerrainData();
+        if (RuntimeTerrainData != null)
+            _terrainShell.SetData(RuntimeTerrainData, SharedTerrainSourceLabel(RuntimeTerrainData));
+#endif
+    }
+
+    private void SyncTerrainShellSubtab()
+    {
+        if (_terrainShell == null)
+            return;
+
+        var mode = TerrainModeFromSubtab(_subTab);
+        if (_terrainShellLastSubtab != _subTab || _terrainShell.Mode != mode)
+        {
+            _terrainShell.SetMode(mode);
+            _terrainShellLastSubtab = _subTab;
+        }
+
+        if (mode == SC2TerrainShell.EditorMode.Paint)
+        {
+            var blendSubMode = _subTab == 4;
+            if (_terrainShellPaintBlendSubMode != blendSubMode)
+            {
+                _terrainShell.SetPaintRnmSubMode(blendSubMode);
+                _terrainShellPaintBlendSubMode = blendSubMode;
+            }
+        }
+        else
+        {
+            _terrainShellPaintBlendSubMode = null;
+        }
+    }
+
+    private static SC2TerrainShell.EditorMode TerrainModeFromSubtab(int subtabIndex)
+    {
+        switch (subtabIndex)
+        {
+            case 1: return SC2TerrainShell.EditorMode.Materials;
+            case 2: return SC2TerrainShell.EditorMode.Pairs;
+            case 3:
+            case 4: return SC2TerrainShell.EditorMode.Paint;
+            case 5: return SC2TerrainShell.EditorMode.Simplified;
+            case 6: return SC2TerrainShell.EditorMode.Imported;
+            case 7: return SC2TerrainShell.EditorMode.Water;
+            case 8: return SC2TerrainShell.EditorMode.LightingBake;
+            case 9: return SC2TerrainShell.EditorMode.Background;
+            default: return SC2TerrainShell.EditorMode.Geometry;
+        }
+    }
+
+    private void TryAdoptTerrainData()
+    {
+        if (_terrainShell == null)
+            return;
+
+        // ---- RuntimeTerrainData → shell (inspector / external assignment) ----
+        // Check every frame: the user may swap RuntimeTerrainData in the Inspector
+        // at any time, not just when the shell is empty. SC2TerrainShell.SetData
+        // already guards against no-op assignments (if _data == data) return).
+#if UNITY_EDITOR
+        if (RuntimeTerrainData != null && _terrainShell.Data != RuntimeTerrainData)
+        {
+            _terrainShell.SetData(RuntimeTerrainData, RuntimeFieldTerrainSourceLabel(RuntimeTerrainData));
+            return;
+        }
+#endif
+
+        // ---- Shared Resources asset → shell (Editor AND build) ----
+        // When nothing is explicitly assigned, load the same asset from
+        // Resources in both the Editor and a build so they never diverge. This
+        // deliberately runs before the Editor-only Selection fallback below so
+        // the two stay consistent (the Editor no longer silently adopts whatever
+        // happens to be selected in the Project window when a shared asset
+        // exists).
+        if (_terrainShell.Data == null)
+        {
+            var shared = LoadSharedTerrainData();
+            if (shared != null)
+            {
+                RuntimeTerrainData = shared;
+                _terrainShell.SetData(shared, SharedTerrainSourceLabel(shared));
+                return;
+            }
+        }
+
+#if UNITY_EDITOR
+        // ---- Project selection → shell (Editor only, last resort) ----
+        // Only reached when no shared Resources asset exists yet (i.e. before
+        // the first "Create new SC2TerrainData"), so the Editor still lets you
+        // pick one to get started.
+        if (_terrainShell.Data == null)
+        {
+            var selected = Selection.activeObject as SC2TerrainData;
+            if (selected != null)
+                _terrainShell.SetData(selected);
+        }
+#endif
+    }
+
+    private void HandleTerrainGameViewInput()
+    {
+        if (_mainTab != 0 || Event.current == null || IsMouseOverUi(Event.current.mousePosition))
+            return;
+
+        var camera = ResolveCamera();
+        if (camera == null)
+            return;
+
+        EnsureTerrainShell();
+        SyncTerrainShellSubtab();
+        TryAdoptTerrainData();
+        _terrainShell.OnGameViewGUI(camera, new Rect(0f, 0f, Screen.width, Screen.height), Event.current.mousePosition);
+    }
+
+    /// <summary>Keeps OverlayTerrain/OverlayRNM (top-panel Visibility menu)
+    /// effective regardless of active tab — runs every frame, unlike
+    /// HandleTerrainGameViewInput above, which only runs while the Terrain
+    /// tab itself is active. Mirrors HandleCostsGameViewInput/
+    /// HandleCollision2GameViewInput's own cross-tab overlay handling.</summary>
+    private void SyncTerrainOverlayFlags()
+    {
+        if (_terrainShell == null)
+            return;
+        _terrainShell.SetTerrainOverlayVisible(OverlayTerrain);
+        _terrainShell.SetForceRnmOverlay(OverlayRNM);
+        _terrainShell.SetForceHfieldOverlay(OverlayHfield);
+        _terrainShell.SetWaterOverlayVisible(OverlayWater);
+        _terrainShell.SetHeightGridOverlay(OverlayGrid);
+        _terrainShell.SetWireframeOverlay(OverlayWireframe);
+    }
+
+    private SC2CostsShell _costsShell;
+
+    private void EnsureCostsShell()
+    {
+        EnsureTerrainShell();
+        if (_costsShell == null)
+        {
+            _costsShell = new SC2CostsShell(_terrainShell) { RepaintHost = RepaintGameView, Session = _mapSession };
+            // Same reasoning as EnsureObjectsShell's own DataChanged
+            // subscription — keeps SC2MapDocument.Costs/Hfield populated at
+            // the exact load/create moment, not only whenever the Costs tab
+            // next happens to be drawn.
+            _terrainShell.DataChanged += _ => _costsShell?.SyncDocumentFromLive();
+            // A placed decal's own mesh completely hides the Costs paint
+            // overlay wherever it sits (decals render as a
+            // separate mesh on top, with no idea the overlay exists). Push
+            // the overlay into SC2DecalsShell's preview material the same
+            // way it's already pushed into the imported-terrain materials.
+            EnsureDecalsShell();
+            _costsShell.PushOverlayToDecalPreview = (tex, enabled, gridSize) => _decalsShell?.SetCostsOverlay(tex, enabled, gridSize);
+        }
+    }
+
+    private void HandleCostsGameViewInput()
+    {
+        // mainTab index 1 = Costs (see SC2EditorTabs.MainTabs ordering, mirrored
+        // by DrawMainPanel's switch(_mainTab)). Leaving the tab disables the
+        // overlay shader parameter so Terrain/other tabs don't keep showing
+        // the costs/terrainTypes tint — UNLESS OverlayCosts (top-panel
+        // Visibility menu) is on, in which case the overlay stays visible
+        // from any tab (painting itself still only works from the Costs tab,
+        // via allowInput below — this only affects the overlay's visibility).
+        var costsTabActive = _mainTab == 1;
+        if (!costsTabActive)
+        {
+            // Disarm "Enable Painting" the moment the user leaves the Costs
+            // tab (e.g. to Terrain) — without this, painting stayed armed in
+            // the background, so switching back into Costs later (or a
+            // stray click while OverlayCosts keeps the overlay visible from
+            // another tab) could silently resume painting the user thought
+            // they'd turned off. Independent of the OverlayCosts branch
+            // below, which only controls the overlay's VISIBILITY, not the
+            // paint-armed state.
+            _costsShell?.DisarmPainting();
+            if (!OverlayCosts)
+            {
+                _costsShell?.DisableOverlay();
+                return;
+            }
+        }
+
+        EnsureCostsShell();
+        TryAdoptTerrainData();
+
+        var camera = ResolveCamera();
+        if (camera == null)
+            return;
+
+        // Painting is suppressed while the mouse is over the side panel/menus
+        // — same mouse-over-UI gate HandleTerrainGameViewInput uses for
+        // terrain painting. The overlay itself (PushOverlayToRuntime, called
+        // unconditionally inside OnGameViewGUI below) is NOT gated on this —
+        // it's a persistent shader-texture parameter, so it keeps showing
+        // regardless of input/mouse state, painting toggle, or mouse-up.
+        // Also gated on costsTabActive: OverlayCosts alone should only show
+        // the overlay, never let painting fire from a different tab.
+        var mousePos = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
+        var allowInput = costsTabActive && Event.current != null && !IsMouseOverUi(mousePos);
+        // A single unhandled exception here (e.g. a null shader, per the
+        // "Value cannot be null. Parameter name: shader" class of bug already
+        // hit and fixed elsewhere in this project) would otherwise propagate
+        // out of OnGUI mid-frame and leave the ENTIRE GameView UI blank for
+        // every subsequent frame (nothing after the throw point gets drawn,
+        // and this runs every frame once the Costs tab is active — so it
+        // never recovers). Contain it here instead: log it once and disable
+        // input handling until the tab is re-entered, so a bug in the Costs
+        // overlay/painting path can't take down the rest of the editor UI.
+        try
+        {
+            _costsShell.OnGameViewGUI(camera, new Rect(0f, 0f, Screen.width, Screen.height), mousePos, allowInput);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            SetStatus("Costs tab error (see log): " + ex.Message);
+        }
+    }
+
+    private void TickFlyCamera()
+    {
+        if (!_flying)
+            return;
+
+        var moved = false;
+        if (Input.GetKey(KeyCode.W)) moved |= FlyCamera(KeyCode.W);
+        if (Input.GetKey(KeyCode.A)) moved |= FlyCamera(KeyCode.A);
+        if (Input.GetKey(KeyCode.S)) moved |= FlyCamera(KeyCode.S);
+        if (Input.GetKey(KeyCode.D)) moved |= FlyCamera(KeyCode.D);
+        if (Input.GetKey(KeyCode.Q)) moved |= FlyCamera(KeyCode.Q);
+        if (Input.GetKey(KeyCode.E)) moved |= FlyCamera(KeyCode.E);
+
+#if UNITY_EDITOR
+        if (moved)
+            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+#endif
+    }
+
+    // ---- Shared inspector building blocks -------------------------------------
+    // All static tab inspectors use the same section header + description card +
+    // fixed-height buttons, so they match the terrain shell's unified panel boxes
+    // and the top-panel design language (one font scale, one card, one pill).
+
+    private void DrawInspectorHeader(string title, string description)
+    {
+        GUILayout.Space(2);
+        GUILayout.Label(title, _titleStyle);
+        SC2TerrainShell.DrawUnifiedNote(description);
+        GUILayout.Space(4);
+    }
+
+    private bool DrawInspectorButton(string label)
+    {
+        return GUILayout.Button(label, GUILayout.Height(26));
+    }
+
+    private void DrawCostsInspector()
+    {
+        DrawInspectorHeader("Costs",
+            "Costs and Terrain Types paint live over the current procedural terrain, exactly as sculpted — brush in the viewport below, both persist with the terrain (Save Terrain).");
+        EnsureCostsShell();
+        // Same reasoning as the try/catch in HandleCostsGameViewInput — an
+        // exception thrown while drawing this panel's controls would
+        // otherwise abort the rest of OnGUI for the frame (header, tab
+        // strip, everything), which is the "whole UI goes blank/black"
+        // symptom this guards against.
+        try
+        {
+            _costsShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            EditorGUILayout.HelpBox("Costs panel error (see log): " + ex.Message, MessageType.Error);
+        }
+    }
+
+    private void DrawCollisionInspector()
+    {
+        DrawInspectorHeader("Collision2",
+            "Collision2 is auto-generated from the current terrain's hfield — an error-adaptive Delaunay TIN mesh, simplified to a user-adjustable triangle budget (default 2500, up to 10000 — see the Polygon Budget slider below).");
+        EnsureCollision2Shell();
+        // Same reasoning as the try/catch in DrawCostsInspector — an
+        // exception here would otherwise abort the rest of OnGUI for the
+        // frame.
+        try
+        {
+            _collision2Shell.DrawEmbeddedGUI(PanelContentWidth);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            EditorGUILayout.HelpBox("Collision2 panel error (see log): " + ex.Message, MessageType.Error);
+        }
+
+        EditorGUILayout.Space(6);
+        if (DrawInspectorButton("Export Mesh To Blender"))
+        {
+            var path = PickCollision2ObjPath(save: true);
+            if (!string.IsNullOrEmpty(path))
+                SetStatus(_collision2Shell.ExportMeshToObj(path));
+        }
+        if (DrawInspectorButton("Import Corrected Mesh"))
+        {
+            var path = PickCollision2ObjPath(save: false);
+            if (!string.IsNullOrEmpty(path))
+                SetStatus(_collision2Shell.ImportCorrectedMeshObj(path));
+        }
+        if (DrawInspectorButton("Save Corrected Mesh As collision2.bdf..."))
+        {
+            string path;
+#if UNITY_EDITOR
+            path = UnityEditor.EditorUtility.SaveFilePanel("Save collision2.bdf", "", "collision2.win", "bdf");
+#else
+            path = SC2RuntimeFileDialog.SaveFile("Save collision2.bdf", "Collision2 BDF (*.bdf)", "bdf");
+#endif
+            if (!string.IsNullOrEmpty(path))
+                SetStatus(_collision2Shell.SaveCorrectedMeshAsCollision2Bdf(path));
+        }
+        if (DrawInspectorButton("Import collision2.bdf..."))
+        {
+            string path;
+#if UNITY_EDITOR
+            path = UnityEditor.EditorUtility.OpenFilePanel("Import collision2.bdf", "", "bdf");
+#else
+            path = SC2RuntimeFileDialog.OpenFile("Import collision2.bdf", "Collision2 BDF (*.bdf)", "bdf");
+#endif
+            if (!string.IsNullOrEmpty(path))
+                SetStatus(_collision2Shell.ImportCollision2Bdf(path));
+        }
+    }
+
+    /// <summary>Shared file-picker for the Collision2 Blender round-trip
+    /// buttons above — same Editor-vs-Build dual-path pattern already used
+    /// throughout this codebase (e.g. SC2ObjectsShell.ImportObjectsFromFile,
+    /// SC2InfoBdfEditorPanel.PickFile).</summary>
+    private static string PickCollision2ObjPath(bool save)
+    {
+#if UNITY_EDITOR
+        return save
+            ? UnityEditor.EditorUtility.SaveFilePanel("Export Collision2 Mesh", "", "collision2_mesh", "obj")
+            : UnityEditor.EditorUtility.OpenFilePanel("Import Corrected Collision2 Mesh", "", "obj");
+#else
+        return save
+            ? SC2RuntimeFileDialog.SaveFile("Export Collision2 Mesh", "Wavefront OBJ (*.obj)", "obj")
+            : SC2RuntimeFileDialog.OpenFile("Import Corrected Collision2 Mesh", "Wavefront OBJ (*.obj)", "obj");
+#endif
+    }
+
+    private SC2Collision2Shell _collision2Shell;
+
+    private void EnsureCollision2Shell()
+    {
+        EnsureTerrainShell();
+        if (_collision2Shell == null)
+            _collision2Shell = new SC2Collision2Shell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView };
+    }
+
+    private void HandleCollision2GameViewInput()
+    {
+        // mainTab index 2 = Collision2 (see GameMainTabIds ordering, mirrored
+        // by DrawMainPanel's switch(_mainTab)) — hides the preview mesh when
+        // the user leaves this tab, same as Costs disables its overlay.
+        // OverlayCollision2 (top-panel Visibility menu) keeps it visible from
+        // any tab, same idea as the Costs overlay below — SetTabActive only
+        // ever drives UpdatePreviewVisibility, never input handling, so OR-ing
+        // it in here can't accidentally enable dragging/painting elsewhere.
+        EnsureCollision2Shell();
+        _collision2Shell.SetTabActive(_mainTab == 2 || OverlayCollision2);
+    }
+
+    private void DrawEnvironmentInspector()
+    {
+        DrawInspectorHeader("Environment",
+            "Environment (info.bdf) — Sun, Water, Fog, Glow and related fields for the current procedural terrain.");
+        EnsureEnvironmentShell();
+        // Same reasoning as the try/catch around Costs/Collision2's embedded
+        // GUI — an exception here shouldn't blank the rest of the panel.
+        try
+        {
+            _environmentShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            EditorGUILayout.HelpBox("Environment panel error (see log): " + ex.Message, MessageType.Error);
+        }
+    }
+
+    private SC2EnvironmentShell _environmentShell;
+
+    private void EnsureEnvironmentShell()
+    {
+        EnsureTerrainShell();
+        if (_environmentShell == null)
+            _environmentShell = new SC2EnvironmentShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView };
+    }
+
+    private void DrawScenarioInspector()
+    {
+        DrawInspectorHeader("Scenario",
+            "Scenario — map name used by Save/Export for the current procedural terrain.");
+        EnsureScenarioShell();
+        try
+        {
+            _scenarioShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            EditorGUILayout.HelpBox("Scenario panel error (see log): " + ex.Message, MessageType.Error);
+        }
+    }
+
+    private SC2ScenarioShell _scenarioShell;
+
+    private void EnsureScenarioShell()
+    {
+        EnsureTerrainShell();
+        if (_scenarioShell == null)
+            _scenarioShell = new SC2ScenarioShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView };
+    }
+
+    private void DrawExportInspector()
+    {
+        DrawInspectorHeader("Export",
+            "Export — write the procedural map to real .bdf/.lua files, preview what an export would do first, and check for validation issues before you export.");
+        EnsureExportShell();
+        try
+        {
+            _exportShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            EditorGUILayout.HelpBox("Export panel error (see log): " + ex.Message, MessageType.Error);
+        }
+    }
+
+    private SC2ExportShell _exportShell;
+
+    private void EnsureExportShell()
+    {
+        EnsureTerrainShell();
+        if (_exportShell == null)
+            _exportShell = new SC2ExportShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView };
+    }
+
+    private void DrawObjectsInspector()
+    {
+        DrawInspectorHeader("Objects",
+            "Objects — armies, units, props, markers, path graphs, zones and chains for the current procedural terrain.");
+        EnsureObjectsShell();
+        try
+        {
+            _objectsShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            EditorGUILayout.HelpBox("Objects panel error (see log): " + ex.Message, MessageType.Error);
+        }
+    }
+
+    private SC2ObjectsShell _objectsShell;
+
+    private void EnsureObjectsShell()
+    {
+        EnsureTerrainShell();
+        if (_objectsShell == null)
+        {
+            _objectsShell = new SC2ObjectsShell(_terrainShell)
+            {
+                Session = _mapSession,
+                RepaintHost = RepaintGameView,
+                ReportStatus = SetStatus,
+                RequestSubTab = i => _subTab = i,
+                RequestCameraFocus = FocusCameraOnWorldPoint,
+                // A prop placed via "Browse prop
+                // blueprints" (which spawns immediately at this point, not
+                // via click-to-place) must not land at what would feel like a
+                // random spot on the map. A fixed
+                // "camera.position + camera.forward*40" point bears no
+                // reliable relationship to what's actually visible on
+                // screen for this editor's typically steep/top-down camera
+                // angle (a nearly-straight-down forward vector barely moves
+                // the point horizontally; a shallow/grazing angle overshoots
+                // far past the visible area). Raycast the real viewport
+                // CENTER against the actual ground instead (imported
+                // terrain first, live heightfield fallback — the same
+                // precedence every real click-to-place already uses via
+                // TryHandlePlacementClick), so this lands on the ground the
+                // user is actually looking at.
+                GetCameraFocusPoint = () =>
+                {
+                    var cam = ResolveCamera();
+                    if (cam == null) return Vector3.zero;
+                    var centerGui = new Vector2(_viewportRect.x + _viewportRect.width * 0.5f, _viewportRect.y + _viewportRect.height * 0.5f);
+                    var ray = SC2TerrainShell.GameGuiPointToRay(cam, _viewportRect, centerGui);
+                    if (SC2TerrainShell.TryRaycastImportedTerrain(BuildImportedTerrainColliders(), ray, out var hit))
+                        return hit;
+                    if (_terrainShell != null && SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+                        return hit;
+                    // Nothing under the viewport center (e.g. camera pointed
+                    // at open sky past the map edge) — fall back to the old
+                    // forward-projection rather than Vector3.zero.
+                    return cam.transform.position + cam.transform.forward * 40f;
+                },
+                GetImportedTerrainColliders = BuildImportedTerrainColliders
+            };
+            // SC2TerrainShell can't reach into SC2ObjectsShell directly
+            // (siblings, both owned here), so it fires this event at the
+            // exact load/create moment instead — see SC2TerrainShell.
+            // DataChanged's own doc comment.
+            _terrainShell.DataChanged += _ => _objectsShell?.EnsureObjectsDocumentSynced();
+            // Prop/unit blueprint indexing must not wait for the Objects tab
+            // or the Unit/Prop Browser modal to be opened first, which would
+            // cause a noticeable stall right when it's first needed. Kick it
+            // off at the same load/create moment instead, regardless of
+            // which tab is active.
+            _terrainShell.DataChanged += _ => _objectsShell?.EnsureAssetsIndexed();
+        }
+    }
+
+    // "Import .scd (Document)" panel. Separate from _objectsShell/
+    // _terrainShell on purpose: it reads and writes _mapSession, not legacy
+    // SC2TerrainData.
+    private SC2MapImportPanel _mapImportPanel;
+
+    private void EnsureMapImportPanel()
+    {
+        EnsureTerrainShell();
+        if (_mapImportPanel == null)
+        {
+            _mapImportPanel = new SC2MapImportPanel(_mapSession, () => _terrainShell.Data)
+            {
+                RepaintHost = RepaintGameView,
+                ReportStatus = SetStatus,
+                OnImportComplete = OnMapImportComplete,
+            };
+        }
+    }
+
+    private void OpenMapDocumentImportPanel()
+    {
+        EnsureMapImportPanel();
+        _mapImportPanel.Open();
+        SetStatus("Opened Import Map.");
+    }
+
+    /// <summary>Wires a completed SC2MapImportOrchestrator.Result into live
+    /// scene/UI state — the panel/orchestrator only ever produce data
+    /// (parsed models, imported SC2TerrainData fields), never touch
+    /// _importedTerrains/_collision2Shell/scene GameObjects directly, same
+    /// separation OpenTerrainBdfImport/OpenDecalsBdfImport already keep.</summary>
+    private void OnMapImportComplete(SC2MapImportOrchestrator.Result result)
+    {
+        if (result?.TerrainImport?.Root != null)
+        {
+            var terrainImport = result.TerrainImport;
+            var meshRenderer = terrainImport.Root.GetComponent<MeshRenderer>();
+            var originalMaterials = meshRenderer != null ? meshRenderer.sharedMaterials : System.Array.Empty<Material>();
+            var entry = new SC2ImportedTerrainEntry
+            {
+                Root = terrainImport.Root,
+                DisplayName = terrainImport.Root.name,
+                TextureAttempts = terrainImport.TextureAttempts,
+                Model = terrainImport.Model,
+                OriginalBdfBytes = terrainImport.RawBytes,
+                OriginalMaterials = originalMaterials,
+                OriginalEnableRnm = originalMaterials
+                    .Select(m => m != null && m.HasProperty("_EnableRNM") ? m.GetFloat("_EnableRNM") : 0f)
+                    .ToArray()
+            };
+            _importedTerrains.Add(entry);
+            _selectedImportedTerrain = _importedTerrains.Count - 1;
+            _terrainShell?.InvalidateLiveHeightGrid();
+            _mainTab = 0;
+            _subTab = System.Array.IndexOf(SC2EditorTabs.TerrainTabs, "Imported");
+            if (_terrainShell != null)
+                ApplyPreviewModeToImportedTerrain(entry, _terrainShell.Prev);
+        }
+
+        // An empty decals.bdf (real map with no decal geometry) still gets a
+        // real (but empty) GameObject from SC2DecalsBdfImporter.Import — no
+        // point leaving that in the scene.
+        if (result?.DecalsImport?.Root != null)
+        {
+            if (result.DecalsImport.Model != null && result.DecalsImport.Model.HasDecals)
+            {
+                result.DecalsImport.Root.name = "Decals (" + result.DecalsImport.Root.name + ")";
+                _importedDecalsRoots.Add(result.DecalsImport.Root);
+            }
+            else
+                UnityEngine.Object.DestroyImmediate(result.DecalsImport.Root);
+        }
+
+        if (result?.Collision2Preview != null)
+        {
+            EnsureCollision2Shell();
+            _collision2Shell.ImportCollision2Model(result.Collision2Preview, "imported map's collision2.bdf");
+        }
+    }
+
+    // Independent of _mapImportPanel above — reads/writes an arbitrary
+    // loaded .bdf file plus (on Save) the active terrain's EnvironmentHeader,
+    // not _mapSession/SC2MapDocument at all.
+    private SC2InfoBdfEditorPanel _infoBdfEditorPanel;
+
+    private void EnsureInfoBdfEditorPanel()
+    {
+        if (_infoBdfEditorPanel == null)
+        {
+            _infoBdfEditorPanel = new SC2InfoBdfEditorPanel(() => _terrainShell)
+            {
+                RepaintHost = RepaintGameView,
+                ReportStatus = SetStatus,
+            };
+        }
+    }
+
+    private void OpenInfoBdfEditorPanel()
+    {
+        EnsureInfoBdfEditorPanel();
+        _infoBdfEditorPanel.Open();
+        SetStatus("Opened Info.bdf Editor.");
+    }
+
+    /// <summary>Re-centers the camera on a world point (an Objects tab
+    /// selection) without changing its current orientation or distance —
+    /// same smoothed StartViewTransition the view-gizmo axis balls
+    /// (LookAlong) already use, just targeting an explicit point instead of
+    /// GetViewPivot()'s Selection.activeTransform (Objects are plain
+    /// SC2TerrainData list entries, not GameObjects, so there is no
+    /// Transform to select).</summary>
+    private void FocusCameraOnWorldPoint(Vector3 worldPos)
+    {
+        var cam = ResolveCamera();
+        if (cam == null) return;
+        var currentRotation = cam.transform.rotation;
+        var distance = Mathf.Max(20f, Vector3.Distance(cam.transform.position, worldPos));
+        var targetPosition = worldPos - (currentRotation * Vector3.forward) * distance;
+        StartViewTransition(cam, targetPosition, currentRotation);
+        SetStatus("Focused camera on selected object.");
+    }
+
+    private void HandleObjectsGameViewInput()
+    {
+        // mainTab index 3 = Objects (GameMainTabIds ordering). Previously
+        // bailed out entirely whenever the Objects tab wasn't active, so
+        // the Visibility menu's Objects/Markers/Graphs/Areas checkboxes had
+        // no effect at all from any other tab - unlike Terrain/Water/RNM/
+        // Hfield/Costs/Collision2, which all explicitly stay visible
+        // cross-tab. Now this keeps running (overlay-drawing only, via
+        // allowInput=false below) whenever any relevant flag is on, and
+        // only gates real interaction (placement/selection/drag/delete) on
+        // actually being on the Objects tab.
+        var objectsTabActive = _mainTab == 3;
+        if (!objectsTabActive && !OverlayProps && !OverlayMarkers && !OverlayUnits
+            && !OverlayGraphLand && !OverlayGraphAir && !OverlayGraphNaval && !OverlayGraphAmphibious
+            && !OverlayChains && !OverlayAreas)
+            return;
+
+        EnsureObjectsShell();
+        TryAdoptTerrainData();
+
+        if (_wasObjectsTabActive && !objectsTabActive)
+            _objectsShell.CancelActiveTools();
+        _wasObjectsTabActive = objectsTabActive;
+
+        var camera = ResolveCamera();
+        if (camera == null)
+            return;
+
+        var mousePos = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
+        var allowInput = objectsTabActive && Event.current != null && !IsMouseOverUi(mousePos);
+        // Same contain-the-exception reasoning as HandleCostsGameViewInput —
+        // a bug in the viewport dot-picking code shouldn't blank the rest of
+        // the GameView UI for every subsequent frame.
+        try
+        {
+            _objectsShell.OnGameViewGUI(camera, _viewportRect, mousePos, allowInput, _tool,
+                OverlayProps, OverlayUnits, OverlayMarkers,
+                OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
+                OverlayChains, OverlayAreas, objectsTabActive);
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            SetStatus("Objects tab viewport error (see log): " + ex.Message);
+        }
+    }
+
+    private void DrawDiagnosticsInspector()
+    {
+        DrawInspectorHeader("Diagnostics",
+            "Diagnostics target vanilla import, BDF parsing, scene build and export validation.");
+        if (DrawInspectorButton("Batch Import Vanilla Maps")) SetStatus("Batch import diagnostics queued.");
+        if (DrawInspectorButton("Run BDF Parse Checks")) SetStatus("BDF parse checks queued.");
+        if (DrawInspectorButton("Open Last Report")) ExecuteEditorMenu("SC2/Open Log File");
+    }
+
+    private void DrawToggle(string label, ref bool value)
+    {
+        value = GUILayout.Toggle(value, label, _dropdownToggleStyle);
+    }
+
+    private void UpdateLayoutRects(int width, int height)
+    {
+        // headerHeight now comes from the shared HeaderHeight constant (title bar + tabs + subtabs)
+        // Objects' Units > Groups sub-tab specifically can need more than
+        // the normal 240-300px range for its rows' inline action buttons
+        // not to clip at the right edge. Computed directly (not from a
+        // value the Groups tree left behind last time it drew) so the panel
+        // is correctly sized on THIS same frame even right after a map
+        // import switches away from the Objects tab before the tree ever
+        // gets a chance to draw and report its own width need. Gated on
+        // both the active main tab AND sub-tab (ComputeGroupsPanelMinWidth
+        // itself also checks the Groups-vs-Units pill) so only Units >
+        // Groups ever widens the panel — Armies/Props/Markers/Paths/Areas/
+        // Chains, and the flat Units list, have no group tree to clip
+        // against and must not stay stuck at a stale wide width just
+        // because deep groups exist elsewhere. _objectsShell can still be
+        // null here on the very first frame the Objects tab is ever opened
+        // (EnsureObjectsShell only runs later this same frame, from
+        // DrawObjectsInspector).
+        // Panel width's own base fraction (0.30) scales up together with
+        // SC2UiScale (View menu > UI Scale) — a bigger Scale means bigger
+        // fonts/buttons need more room, and this ties both to the one same
+        // parameter instead of a second, independent "panel width" setting.
+        // NOTE: _objectsShell.ComputeGroupsPanelMinWidth's own row-width
+        // formula (SC2ObjectsShell.cs, "depth * 14f + 280f") is NOT scaled
+        // by SC2UiScale yet — left as a known follow-up, not fixed in this
+        // pass. Its only effect if left unscaled is that a deep Units>Groups
+        // tree's own extra width demand doesn't grow with Scale; the base
+        // 0.30 fraction above still does.
+        var minPanelWidthFloor = SC2UiScale.Pxf(240f);
+        var minPanelWidth = _mainTab == 3 ? Mathf.Max(minPanelWidthFloor, _objectsShell?.ComputeGroupsPanelMinWidth(_subTab) ?? 0f) : minPanelWidthFloor;
+        var maxPanelWidth = Mathf.Max(minPanelWidth, Mathf.Min(Mathf.Max(SC2UiScale.Pxf(300f), minPanelWidth), width * 0.6f));
+        var panelWidth = Mathf.Clamp(width * 0.30f * SC2UiScale.Scale, minPanelWidth, maxPanelWidth);
+
+        _panelRect = new Rect(0f, HeaderHeight, panelWidth, Mathf.Max(1f, height - HeaderHeight));
+        // Hit-test region for the title bar's right-side cluster (map name +
+        // mouse coordinates + status pill) — scaled the same as those labels'
+        // own widths (DrawHeader) so clicks over the real (now wider at
+        // higher Scale) cluster still register as "over the header," not the
+        // viewport underneath it.
+        var statusRectWidth = SC2UiScale.Pxf(620f);
+        _statusRect = new Rect(width - statusRectWidth, 0, statusRectWidth, TitleBarHeight);
+        _navigationGizmoRect = new Rect(width - 118, HeaderHeight + 10f, 104, 104);
+
+        var left = ShowPanel ? panelWidth : 0f;
+        _viewportRect = new Rect(left, HeaderHeight, Mathf.Max(1f, width - left), Mathf.Max(1f, height - HeaderHeight));
+    }
+
+    private void UpdateMouseMapCoordinates()
+    {
+        var cam = ResolveCamera();
+        if (cam == null || Event.current == null)
+        {
+            _mouseMapCoordinates = "Mouse: -";
+            return;
+        }
+
+        var mouse = Event.current.mousePosition;
+        var ray = SC2TopViewMirror.ScreenPointToRay(cam, mouse);
+
+        // Raycasting against a flat Y=0 plane to resolve the mouse's ground
+        // X/Z, then sampling height at THAT X/Z, is only correct for a
+        // dead-flat, zero-elevation map — for a camera looking down at an
+        // angle (the normal case here), a Y=0 plane intersection drifts away
+        // from the point actually under the cursor by an amount proportional
+        // to how far the real surface height is from 0 (terrain above
+        // water, hills, the default ~100 flat height, all qualify). The
+        // drifted X/Z then gets a height sample from wherever it landed
+        // instead of from the real point under the cursor — commonly a
+        // nearby lower/water-covered spot, which reads as "Y only ever
+        // shows the water height" rather than a water-exclusion bug.
+        // TryRaycastLiveHeightGrid ray-marches against the actual
+        // merged live+imported height surface (the same one Costs painting/
+        // Objects placement already use), converging on the true X/Y/Z in
+        // one pass instead of guessing X/Z first and sampling Y second.
+        if (_terrainShell != null && _terrainShell.TryRaycastLiveHeightGrid(ray, out var hit))
+        {
+            _mouseMapCoordinates = string.Format("Mouse X:{0:0.0} Y:{1:0.0} Z:{2:0.0}", hit.x, hit.y, hit.z);
+            return;
+        }
+
+        // Fallback for when no terrain shell/height grid exists yet (or the
+        // ray misses the grid's bounds entirely) — flat Y=0 plane, same as
+        // before, better than showing nothing.
+        var ground = new Plane(Vector3.up, Vector3.zero);
+        float enter;
+        if (!ground.Raycast(ray, out enter))
+        {
+            _mouseMapCoordinates = "Mouse: -";
+            return;
+        }
+
+        var p = ray.GetPoint(enter);
+        _mouseMapCoordinates = string.Format("Mouse X:{0:0.0} Y:{1:0.0} Z:{2:0.0}", p.x, p.y, p.z);
+    }
+
+    // ── Navigation gizmo (Blender-style viewport axis widget) ───────────────
+    // Six axis "balls" projected from the camera's current orientation onto a
+    // 2D circle, like Blender's top-right viewport gizmo: solid colored discs
+    // with a letter for +X/+Y/+Z, smaller hollow rings (no letter) for the
+    // negative axes, no connecting lines and no boxed card behind them — just
+    // the balls floating over a faint circular backdrop. All six are always
+    // clickable regardless of which way they currently face (so you can click
+    // a "far side" ring to snap the view there), and nearer balls are drawn
+    // on top of farther ones for a correct sphere-like overlap.
+    //
+    // Not implemented (out of scope for this pass): Blender's extra 26-way
+    // corner/edge click zones for isometric-style views — this keeps the
+    // original 6-direction (X/Y/Z ±) navigation the tool already had.
+
+    private struct GizmoAxis
+    {
+        public Vector2 Position;
+        public float Depth;      // camera-space Z of the axis direction: >0 faces the camera
+        public float Size;
+        public Color Color;
+        public string Label;
+        public bool Solid;
+        public System.Action Action;
+    }
+
+    private void DrawNavigationGizmo(int width)
+    {
+        // Defensive: EnsureStyles() already ran earlier this frame and should
+        // have baked these, but if anything ever leaves them null (stale
+        // instance state, a destroyed HideAndDontSave texture the sentinel
+        // check didn't catch, etc.) skip drawing instead of NREing inside
+        // GUI.DrawTexture/GUI.Label and aborting the rest of OnGUI for the frame.
+        if (_gizmoBallSolid == null || _gizmoBallHollow == null || _gizmoBackdrop == null || _gizmoLabelStyle == null)
+        {
+            EnsureStyles();
+            if (_gizmoBallSolid == null || _gizmoBallHollow == null || _gizmoBackdrop == null || _gizmoLabelStyle == null)
+                return;
+        }
+
+        var cam = ResolveCamera();
+        var r = _navigationGizmoRect;
+        var center = new Vector2(r.x + r.width * 0.5f, r.y + r.height * 0.5f);
+
+        // A clearly visible grey disc behind the balls, like Blender's gizmo —
+        // the earlier near-black/near-transparent version was easy to miss
+        // entirely against a busy 3D viewport.
+        var prevBackdropColor = GUI.color;
+        GUI.color = new Color(0.20f, 0.21f, 0.23f, 0.6f);
+        GUI.DrawTexture(CenteredRect(center, r.width), _gizmoBackdrop);
+        GUI.color = prevBackdropColor;
+
+        var axisX = new Color(0.847f, 0.208f, 0.271f, 1f);
+        var axisY = new Color(0.522f, 0.769f, 0.184f, 1f);
+        var axisZ = new Color(0.161f, 0.557f, 0.898f, 1f);
+        var axisRadius = r.width * 0.36f;
+
+        var axes = new[]
+        {
+            BuildGizmoAxis(cam, Vector3.right,   center, axisRadius, axisX, "X", true,  () => LookAlong(Vector3.left, Vector3.up, "X")),
+            BuildGizmoAxis(cam, Vector3.left,    center, axisRadius, axisX, "",  false, () => LookAlong(Vector3.right, Vector3.up, "-X")),
+            BuildGizmoAxis(cam, Vector3.up,      center, axisRadius, axisY, "Y", true,  () => LookAlong(Vector3.down, Vector3.forward, "Top")),
+            BuildGizmoAxis(cam, Vector3.down,    center, axisRadius, axisY, "",  false, () => LookAlong(Vector3.up, Vector3.forward, "Bottom")),
+            BuildGizmoAxis(cam, Vector3.forward, center, axisRadius, axisZ, "Z", true,  () => LookAlong(Vector3.back, Vector3.up, "Z")),
+            BuildGizmoAxis(cam, Vector3.back,    center, axisRadius, axisZ, "",  false, () => LookAlong(Vector3.forward, Vector3.up, "-Z")),
+        };
+
+        // Depth-sort so nearer axis balls are drawn on top of farther ones,
+        // instead of a fixed draw order that could look wrong from some angles.
+        System.Array.Sort(axes, (a, b) => a.Depth.CompareTo(b.Depth));
+
+        var e = Event.current;
+        var hoverIndex = -1;
+        for (var i = 0; i < axes.Length; i++)
+        {
+            if (e != null && CenteredRect(axes[i].Position, axes[i].Size + 6f).Contains(e.mousePosition))
+                hoverIndex = i;
+        }
+
+        for (var i = 0; i < axes.Length; i++)
+            DrawGizmoAxisBall(axes[i], i == hoverIndex);
+
+        // Small center button — resets pan/zoom/rotation back to the default
+        // top-down overview; Home does the same thing as a hotkey.
+        var centerSize = r.width * 0.15f;
+        var centerRect = CenteredRect(center, centerSize);
+        var centerHover = hoverIndex < 0 && e != null && centerRect.Contains(e.mousePosition);
+        var prevCenterColor = GUI.color;
+        GUI.color = centerHover ? new Color(0.42f, 0.66f, 1f, 0.95f) : new Color(0.5f, 0.53f, 0.58f, 0.8f);
+        GUI.DrawTexture(centerRect, _gizmoBallSolid);
+        GUI.color = prevCenterColor;
+
+        if (e != null && e.type == EventType.MouseDown && e.button == 0)
+        {
+            if (hoverIndex >= 0)
+            {
+                axes[hoverIndex].Action?.Invoke();
+                e.Use();
+            }
+            else if (centerHover)
+            {
+                ResetView();
+                e.Use();
+            }
+        }
+    }
+
+    private static GizmoAxis BuildGizmoAxis(Camera cam, Vector3 worldAxis, Vector2 center, float radius, Color color, string label, bool solid, System.Action action)
+    {
+        var local = cam != null
+            ? cam.transform.InverseTransformDirection(worldAxis.normalized)
+            : worldAxis.normalized;
+
+        // IMPORTANT: do NOT normalize (local.x, -local.y) onto the circle
+        // boundary. That was the bug that made the gizmo look broken/only
+        // half its balls visible: it forced every axis onto the same fixed
+        // ring regardless of how it's actually facing, so whenever the
+        // camera looked straight down (or along) any single world axis — the
+        // terrain editor's default view! — that axis's ball collapsed via a
+        // "too close to center" fallback onto the SAME screen position as
+        // whichever other axis happened to occupy that angle, hiding one
+        // completely behind the other (only 4 of 6 balls ever showed).
+        // Using the raw (unnormalized) local x/y — exactly what Blender's own
+        // gizmo does — makes a ball smoothly slide toward the center as it
+        // becomes more axis-aligned with the view, and only ever reaches
+        // dead-center when it's the one unique axis the camera is looking
+        // straight along, so no two balls can ever land on the same spot.
+        var depth = local.z;
+        var position = center + new Vector2(local.x, -local.y) * radius;
+
+        var baseSize = solid ? 21f : 15f;
+        var size = baseSize * Mathf.Lerp(0.88f, 1.12f, (depth + 1f) * 0.5f);
+
+        return new GizmoAxis
+        {
+            Position = position,
+            Depth = depth,
+            Size = size,
+            Color = color,
+            Label = label,
+            Solid = solid,
+            Action = action
+        };
+    }
+
+    private void DrawGizmoAxisBall(GizmoAxis axis, bool hover)
+    {
+        var size = axis.Size * (hover ? 1.18f : 1f);
+        var color = hover ? Color.Lerp(axis.Color, Color.white, 0.35f) : axis.Color;
+        if (axis.Depth < 0f)
+            color.a *= 0.82f; // subtle "facing away" depth cue — still fully clickable
+
+        var previousColor = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(CenteredRect(axis.Position, size), axis.Solid ? _gizmoBallSolid : _gizmoBallHollow);
+        GUI.color = previousColor;
+
+        if (axis.Solid && !string.IsNullOrEmpty(axis.Label) && _gizmoLabelStyle != null)
+            GUI.Label(CenteredRect(axis.Position, size), axis.Label, _gizmoLabelStyle);
+    }
+
+    private static Rect CenteredRect(Vector2 center, float size)
+    {
+        return new Rect(center.x - size * 0.5f, center.y - size * 0.5f, size, size);
+    }
+
+    private void SetTool(string toolName)
+    {
+        _tool = toolName;
+        SetStatus("Tool selected: " + toolName);
+    }
+
+#if !UNITY_EDITOR
+    private const int LoadTerrainDropdownId = 0x5C2A1CAD;
+    private const int DeleteTerrainDropdownId = 0x5C2A1CAE;
+#endif
+
+    private void OpenLoadTerrainMenu()
+    {
+#if !UNITY_EDITOR
+        var names = SC2TerrainShell.ListSavedTerrains();
+        if (names.Count == 0)
+        {
+            SetStatus("No saved terrains found on disk.");
+            return;
+        }
+        var anchor = new Rect(_fileMenuRect.x, TitleBarHeight + 4f, 220f, TitleBarHeight);
+        SC2RuntimeDropdown.Toggle(LoadTerrainDropdownId, names.ToArray(), anchor);
+#else
+        SetStatus("Load Terrain from disk only applies to standalone builds — in the Editor, assign a Terrain Data asset directly.");
+#endif
+    }
+
+    private void OpenDeleteTerrainMenu()
+    {
+#if !UNITY_EDITOR
+        var names = SC2TerrainShell.ListSavedTerrains();
+        if (names.Count == 0)
+        {
+            SetStatus("No saved terrains found on disk.");
+            return;
+        }
+        var anchor = new Rect(_fileMenuRect.x, TitleBarHeight + 4f, 220f, TitleBarHeight);
+        SC2RuntimeDropdown.Toggle(DeleteTerrainDropdownId, names.ToArray(), anchor);
+#else
+        SetStatus("Delete Saved Terrain only applies to standalone builds — in the Editor, delete the .asset file from the Project window.");
+#endif
+    }
+
+    private void RequestNewTerrain()
+    {
+#if UNITY_EDITOR
+        if (_terrainShell == null || _terrainShell.Data == null ||
+            EditorUtility.DisplayDialog("New Terrain", "Start a new terrain? Any unsaved changes to the current one will be lost.", "Yes", "Cancel"))
+        {
+            ApplyNewTerrain();
+        }
+#else
+        if (_terrainShell == null || _terrainShell.Data == null)
+        {
+            ApplyNewTerrain();
+            return;
+        }
+        SC2RuntimeConfirm.Open(
+            "New Terrain",
+            "Start a new terrain? Any unsaved changes to the current one will be lost.",
+            "New",
+            ApplyNewTerrain);
+#endif
+    }
+
+    private void ApplyNewTerrain()
+    {
+        EnsureTerrainShell();
+        _terrainShell?.NewTerrain();
+        // A previous map's imported terrain.bdf GameObjects/list would
+        // otherwise linger in the scene indefinitely — NewTerrain/SetData
+        // never cleared this list at all before this fix (same gap
+        // RestoreImportedTerrainsFromDocument's own doc comment describes
+        // for Load). No entries to restore for a genuinely blank map.
+        RestoreImportedTerrainsFromDocument(null);
+        RuntimeTerrainData = null;
+        SetStatus("Started a new terrain.");
+    }
+
+#if !UNITY_EDITOR
+    private void ApplyLoadedTerrainName(string mapName)
+    {
+        EnsureTerrainShell();
+        if (_terrainShell != null && _terrainShell.LoadFromDisk(mapName, out var loadedDocument))
+        {
+            RuntimeTerrainData = _terrainShell.Data;
+            RestoreImportedTerrainsFromDocument(loadedDocument?.Terrain?.ImportedEntries);
+            SetStatus("Loaded terrain: " + mapName);
+        }
+        else
+        {
+            SetStatus("Failed to load terrain: " + mapName);
+        }
+    }
+
+    private void RequestDeleteTerrainName(string mapName)
+    {
+        SC2RuntimeConfirm.Open(
+            "Delete Saved Terrain",
+            $"Permanently delete the saved terrain '{mapName}'? This cannot be undone.",
+            "Delete",
+            () => ApplyDeleteTerrainName(mapName));
+    }
+
+    private void ApplyDeleteTerrainName(string mapName)
+    {
+        EnsureTerrainShell();
+        if (_terrainShell != null && _terrainShell.DeleteFromDisk(mapName))
+        {
+            if (_terrainShell.Data == null)
+                RuntimeTerrainData = null;
+            SetStatus("Deleted terrain: " + mapName);
+        }
+        else
+        {
+            SetStatus("Failed to delete terrain: " + mapName);
+        }
+    }
+#endif
+
+    /// <summary>One candidate for the global Undo/Redo dispatcher below — a
+    /// shell's HasUndo/HasRedo + LastActionTimestamp (see each shell's
+    /// identical property doc comment) plus the actual Undo()/Redo() delegate
+    /// to invoke if it wins. Without this, the global Ctrl+Z/Y shortcut would
+    /// only ever call _terrainShell.Undo()/Redo() — every other domain's
+    /// edits (Objects/Costs/Collision2/Scenario/Environment) would only be
+    /// reachable through that domain's OWN on-screen button, never through
+    /// the keyboard shortcut at all.</summary>
+    private readonly struct UndoRedoCandidate
+    {
+        public readonly bool Available;
+        public readonly long Timestamp;
+        public readonly System.Action Invoke;
+
+        public UndoRedoCandidate(bool available, long timestamp, System.Action invoke)
+        {
+            Available = available;
+            Timestamp = timestamp;
+            Invoke = invoke;
+        }
+    }
+
+    private bool DispatchToMostRecent(UndoRedoCandidate[] candidates)
+    {
+        var bestIndex = -1;
+        for (var i = 0; i < candidates.Length; i++)
+        {
+            if (!candidates[i].Available) continue;
+            if (bestIndex == -1 || candidates[i].Timestamp > candidates[bestIndex].Timestamp)
+                bestIndex = i;
+        }
+        if (bestIndex == -1) return false;
+        candidates[bestIndex].Invoke();
+        return true;
+    }
+
+    private void UndoTerrainEdit()
+    {
+        var candidates = new[]
+        {
+            new UndoRedoCandidate(_terrainShell != null && _terrainShell.CanUndo, _terrainShell?.LastActionTimestamp ?? 0, () => _terrainShell.Undo()),
+            new UndoRedoCandidate(_objectsShell != null && _objectsShell.HasUndo, _objectsShell?.LastActionTimestamp ?? 0, () => _objectsShell.DoUndo()),
+            new UndoRedoCandidate(_costsShell != null && _costsShell.HasUndo, _costsShell?.LastActionTimestamp ?? 0, () => _costsShell.Undo()),
+            new UndoRedoCandidate(_collision2Shell != null && _collision2Shell.HasUndo, _collision2Shell?.LastActionTimestamp ?? 0, () => _collision2Shell.Undo()),
+            new UndoRedoCandidate(_scenarioShell != null && _scenarioShell.HasUndo, _scenarioShell?.LastActionTimestamp ?? 0, () => _scenarioShell.Undo()),
+            new UndoRedoCandidate(_environmentShell != null && _environmentShell.HasUndo, _environmentShell?.LastActionTimestamp ?? 0, () => _environmentShell.Undo()),
+            // Decals commands are real ISC2DocumentCommand entries on the
+            // shared history, so this dispatcher must ask the Decals shell
+            // whether it holds the most recent action too.
+            new UndoRedoCandidate(_decalsShell != null && _decalsShell.HasUndo, _decalsShell?.LastActionTimestamp ?? 0, () => _decalsShell.Undo()),
+            // Imported terrain's local undo stack needs its own timestamp
+            // candidate here too, same class of gap as Decals above.
+            new UndoRedoCandidate(ImportedTerrainsHasUndo, ImportedTerrainsLastActionTimestamp, ImportedTerrainsUndo),
+        };
+        SetStatus(DispatchToMostRecent(candidates) ? "Undo" : "Nothing to undo.");
+    }
+
+    private void RedoTerrainEdit()
+    {
+        var candidates = new[]
+        {
+            // Terrain/Objects/Costs each keep their own SC2ShellUndoCoordinator
+            // (legacy snapshots interleaved with real document commands) —
+            // LastRedoTimestamp, not LastActionTimestamp, is the correct
+            // signal here since Redo must replay in exact reverse of
+            // whatever was just undone; see SC2ShellUndoCoordinator.
+            // LastRedoTimestamp's own doc comment for why they differ.
+            new UndoRedoCandidate(_terrainShell != null && _terrainShell.CanRedo, _terrainShell?.LastRedoTimestamp ?? 0, () => _terrainShell.Redo()),
+            new UndoRedoCandidate(_objectsShell != null && _objectsShell.HasRedo, _objectsShell?.LastRedoTimestamp ?? 0, () => _objectsShell.DoRedo()),
+            new UndoRedoCandidate(_costsShell != null && _costsShell.HasRedo, _costsShell?.LastRedoTimestamp ?? 0, () => _costsShell.Redo()),
+            new UndoRedoCandidate(_collision2Shell != null && _collision2Shell.HasRedo, _collision2Shell?.LastActionTimestamp ?? 0, () => _collision2Shell.Redo()),
+            new UndoRedoCandidate(_scenarioShell != null && _scenarioShell.HasRedo, _scenarioShell?.LastActionTimestamp ?? 0, () => _scenarioShell.Redo()),
+            new UndoRedoCandidate(_environmentShell != null && _environmentShell.HasRedo, _environmentShell?.LastActionTimestamp ?? 0, () => _environmentShell.Redo()),
+            new UndoRedoCandidate(_decalsShell != null && _decalsShell.HasRedo, _decalsShell?.LastActionTimestamp ?? 0, () => _decalsShell.Redo()),
+            new UndoRedoCandidate(ImportedTerrainsHasRedo, ImportedTerrainsLastRedoTimestamp, ImportedTerrainsRedo),
+        };
+        SetStatus(DispatchToMostRecent(candidates) ? "Redo" : "Nothing to redo.");
+    }
+
+    private void SaveActiveTerrain()
+    {
+        // SyncImportedTerrainsToDocument runs via SC2TerrainShell.PreSaveSync
+        // (wired in EnsureTerrainShell), covering every SaveState call site —
+        // this button, Ctrl+S, and the Terrain tab's own "Save Terrain" button.
+        if (_terrainShell != null && _terrainShell.RequestSave())
+            SetStatus("Terrain saved.");
+        else
+            SetStatus("No terrain to save.");
+    }
+
+#if !UNITY_EDITOR
+    // The subscribe-once-per-process guard in OnEnable alone does not
+    // prevent stacked dialogs — the remaining failure mode is re-entrancy,
+    // not multi-subscription: SC2RuntimeQuitConfirm.Ask blocks
+    // on a real native MessageBoxW call, but the underlying OS window keeps
+    // receiving WM_CLOSE for every extra click on its own X button while
+    // that dialog is still up (GetActiveWindow() can resolve to the wrong
+    // handle depending on focus/timing, so the SYSTEMMODAL owner doesn't
+    // reliably disable it) — each extra click re-fires Application.
+    // wantsToQuit, and HandleWantsToQuit had nothing stopping it from
+    // opening a second, third, Nth MessageBoxW nested inside the first
+    // one's still-running modal loop, which is exactly what a cascade of
+    // stacked "SC2 Map Editor" windows looks like. Guard with a static
+    // re-entrancy flag: while a confirm dialog is already up, any further
+    // quit query is simply treated as "not now" (return false) instead of
+    // spawning another dialog.
+    private static bool _quitConfirmShowing;
+
+    /// <summary>Application.wantsToQuit handler (subscribed exactly once
+    /// per process — see the static guard in OnEnable) — the single
+    /// interception point for every way this Build can be asked to close
+    /// (window X button, Alt+F4, Application.Quit() from anywhere).
+    /// Returning false cancels the quit outright (the OS window stays open,
+    /// exactly as if the user had cancelled a native "unsaved changes"
+    /// dialog); returning true lets it proceed immediately. Static and reads
+    /// _activeInstance rather than a captured instance reference, since the
+    /// subscription itself is now static/singleton — see OnEnable's comment
+    /// for why a captured `this` was the actual root cause of the first
+    /// round of the stacked-dialogs bug; see the field comment above for
+    /// the second round's re-entrancy root cause.</summary>
+    private static bool HandleWantsToQuit()
+    {
+        if (_quitConfirmShowing)
+            return false; // Already asking — don't stack a second native dialog on top.
+
+        var terrainShell = _activeInstance?._terrainShell;
+        if (terrainShell?.Data == null || !terrainShell.Data.IsInitialized)
+            return true; // Nothing loaded - nothing to lose, quit immediately without prompting.
+
+        _quitConfirmShowing = true;
+        try
+        {
+            switch (SC2RuntimeQuitConfirm.Ask(terrainShell.Data.MapName))
+            {
+                case SC2RuntimeQuitConfirm.Result.Save:
+                    terrainShell.RequestSave();
+                    ScheduleForceQuit();
+                    return true;
+                case SC2RuntimeQuitConfirm.Result.DontSave:
+                    ScheduleForceQuit();
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        finally
+        {
+            _quitConfirmShowing = false;
+        }
+    }
+
+    // Calling Environment.Exit(0) directly from inside this handler crashes
+    // the app instead of exiting cleanly. This handler runs on the same
+    // call stack as the
+    // native WM_CLOSE/wantsToQuit chain (see the re-entrancy comment above)
+    // — forcibly tearing down the process from inside that still-active
+    // native callback stack is exactly the kind of reentrant teardown that
+    // can crash Unity's native layer. Deferring the hard-exit to the next
+    // ordinary Update() frame (a normal, non-reentrant call stack) keeps the
+    // same "don't trust Unity's own quit bookkeeping" guarantee without the
+    // crash risk.
+    private static float _forceQuitAt = -1f;
+
+    private static void ScheduleForceQuit()
+    {
+        _forceQuitAt = Time.realtimeSinceStartup + 0.5f;
+    }
+#endif
+
+    private void RepaintGameView()
+    {
+#if UNITY_EDITOR
+        UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+#endif
+    }
+
+    private void SetStatus(string status)
+    {
+        Status = status;
+        if (LogActions)
+            Debug.Log("[SC2 GameView UI] " + status);
+
+#if UNITY_EDITOR
+        UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+#endif
+    }
+
+    private void CreatePlaceholder(string name, PrimitiveType type)
+    {
+        var go = GameObject.CreatePrimitive(type);
+        go.name = name;
+        go.transform.position = ResolveCamera() != null
+            ? ResolveCamera().transform.position + ResolveCamera().transform.forward * 25f
+            : Vector3.zero;
+
+        Undo.RegisterCreatedObjectUndo(go, "Create " + name);
+        Selection.activeGameObject = go;
+
+        SetStatus("Created: " + name);
+    }
+
+    private void ExecuteEditorMenu(string menuPath)
+    {
+#if UNITY_EDITOR
+        if (!EditorApplication.ExecuteMenuItem(menuPath))
+            SetStatus("Menu not found: " + menuPath);
+        else
+            SetStatus("Executed: " + menuPath);
+#else
+        SetStatus("Editor menu unavailable outside Unity Editor.");
+#endif
+    }
+
+    // "Export .scd" / "Diagnostics" / "Show Game View UI" need to call
+    // ExportWindow.ShowWindow() / SC2VanillaImportDiagnostics.RunFromMenu() /
+    // SC2GameViewEditorBootstrap.EnsureGameViewUi() — but those classes live
+    // under an "Editor" folder, which Unity compiles into a separate
+    // Editor-only assembly that this Scripts/-assembly file cannot reference
+    // directly at compile time (that's the whole point of the special
+    // "Editor" folder name — it's excluded from player builds). A direct
+    // call is therefore a compile error (CS0103), which is exactly why
+    // EditorApplication.ExecuteMenuItem(...) was used originally: it doesn't
+    // need a compile-time type reference. Reflection gets the same
+    // "no compile-time reference needed" property while being more
+    // debuggable than a bare menu-path string match (it reports a missing
+    // type/method distinctly from a failed invocation).
+    private void OpenScdExportWindow() => InvokeEditorStaticMethod("ExportWindow", "ShowWindow", "Opened SC2 Map Export.");
+
+    /// <summary>
+    /// Imports a standalone terrain.bdf (already fully authored elsewhere —
+    /// materials, masks, texture paths and shader setup baked in, e.g. from
+    /// a Blender export) directly as a shaded mesh. Unlike Import .scd, this
+    /// needs no Editor-only tooling (SC2TerrainBdfImporter has no
+    /// UnityEditor dependency), so the same call path runs in the Editor and
+    /// in a build — only the file-picking dialog differs.
+    /// </summary>
+    private void OpenTerrainBdfImport()
+    {
+        string path;
+#if UNITY_EDITOR
+        path = EditorUtility.OpenFilePanel("Select terrain.bdf", "", "bdf");
+#else
+        path = SC2RuntimeFileDialog.OpenFile("Select terrain.bdf", "Terrain BDF (*.bdf)", "bdf");
+#endif
+        if (string.IsNullOrEmpty(path))
+        {
+            SetStatus("Terrain BDF import cancelled.");
+            return;
+        }
+
+        try
+        {
+            var result = SC2TerrainBdfImporter.Import(path);
+            var meshRenderer = result.Root.GetComponent<MeshRenderer>();
+            var originalMaterials = meshRenderer != null ? meshRenderer.sharedMaterials : System.Array.Empty<Material>();
+            var entry = new SC2ImportedTerrainEntry
+            {
+                Root = result.Root,
+                DisplayName = result.Root.name,
+                TextureAttempts = result.TextureAttempts,
+                Model = result.Model,
+                OriginalBdfBytes = result.RawBytes,
+                OriginalMaterials = originalMaterials,
+                OriginalEnableRnm = originalMaterials
+                    .Select(m => m != null && m.HasProperty("_EnableRNM") ? m.GetFloat("_EnableRNM") : 0f)
+                    .ToArray()
+            };
+            _importedTerrains.Add(entry);
+            _selectedImportedTerrain = _importedTerrains.Count - 1;
+            // The live height grid must include this newly imported terrain
+            // on the next paint.
+            _terrainShell?.InvalidateLiveHeightGrid();
+            // Jump to Terrain -> Imported so the newly imported object's
+            // editing panel (transform/textures/materials) is immediately
+            // visible, same as switching subtabs by hand.
+            _mainTab = 0;
+            _subTab = System.Array.IndexOf(SC2EditorTabs.TerrainTabs, "Imported");
+            var found = result.TextureAttempts?.Count(a => a.Found) ?? 0;
+            var total = result.TextureAttempts?.Count ?? 0;
+            var statusMsg = $"Imported '{result.Root.name}' from terrain.bdf. Textures: {found}/{total} loaded.";
+
+            // Importing a map's terrain.bdf alone leaves Armies/Units/
+            // Chains/Areas empty (they only exist in that same map's
+            // _save.lua/_scenario.lua, never in terrain.bdf itself), which
+            // would otherwise require separately going to the Objects tab
+            // and clicking "Import Objects from terrain.bdf..." with the
+            // SAME file a second time. Chain that same import here
+            // automatically, against the same path, whenever a live terrain
+            // (SC2TerrainData) already exists to receive it - if none does
+            // yet, leave it to the Objects tab's own explicit button.
+            if (_terrainShell != null && _terrainShell.Data != null && _terrainShell.Data.IsInitialized)
+            {
+                EnsureObjectsShell();
+                var objSummary = _objectsShell.ImportObjectsFromPath(path);
+                statusMsg += "  Objects: " + objSummary;
+            }
+
+            SetStatus(statusMsg);
+
+            // Newly imported terrains should immediately reflect whatever
+            // preview mode (Textured/RNM/Mats/...) is currently active,
+            // not always default to raw Textured.
+            if (_terrainShell != null)
+                ApplyPreviewModeToImportedTerrain(entry, _terrainShell.Prev);
+        }
+        catch (System.Exception ex)
+        {
+            SetStatus("Terrain BDF import failed: " + ex.Message);
+            Debug.LogError($"[SC2] Terrain BDF import failed: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Imports a standalone decals.win.bdf directly as one merged, shaded
+    /// mesh — same build-compatible pattern as OpenTerrainBdfImport
+    /// (SC2DecalsBdfImporter has no UnityEditor dependency; only the file
+    /// picker differs between Editor and a build). This diagnostic action
+    /// drops the baked mesh into the scene at its existing world-space
+    /// position. Authoring, placement and atlas management live in the
+    /// top-level Decals workspace.
+    /// </summary>
+    private void OpenDecalsBdfImport()
+    {
+        string path;
+#if UNITY_EDITOR
+        path = EditorUtility.OpenFilePanel("Select decals.bdf", "", "bdf");
+#else
+        path = SC2RuntimeFileDialog.OpenFile("Select decals.bdf", "Decals BDF (*.bdf)", "bdf");
+#endif
+        if (string.IsNullOrEmpty(path))
+        {
+            SetStatus("Decals BDF import cancelled.");
+            return;
+        }
+
+        try
+        {
+            var result = SC2DecalsBdfImporter.Import(path);
+            if (!result.Model.HasDecals)
+            {
+                SetStatus($"Imported '{result.Root.name}': this decals.bdf has no decal geometry (empty map).");
+                return;
+            }
+
+            _importedDecalsRoots.Add(result.Root);
+            SetStatus($"Imported '{result.Root.name}' from decals.bdf: {result.Model.Vertices.Count} verts, " +
+                       $"{result.Model.Indices.Count / 3} tris. Diffuse atlas {(result.DiffuseTextureFound ? "loaded" : "NOT found")}, " +
+                       $"normal atlas {(result.NormalTextureFound ? "loaded" : "not found")}.");
+        }
+        catch (System.Exception ex)
+        {
+            SetStatus("Decals BDF import failed: " + ex.Message);
+            Debug.LogError($"[SC2] Decals BDF import failed: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Applies the Textured/RNM/Mats/Pairs/Slope/Height preview toolbar to
+    /// every currently imported terrain.bdf object — see
+    /// SC2TerrainShell.OnPreviewModeChanged, which this is wired to.
+    /// Imported meshes have no SC2TerrainData/Pairs at all, so this offers
+    /// an analogous view for each mode, not the identical one:
+    ///  - Textured: real baked materials with _EnableRNM forced OFF (flat/
+    ///    ambient-only look).
+    ///  - RNM: same materials with _EnableRNM forced ON. Forcing both
+    ///    explicitly (instead of "restore to baked value" for Textured) is
+    ///    what actually makes these two look different — a material already
+    ///    authored with RNM_LIGHTING baked in had the same _EnableRNM value
+    ///    either way, so the two buttons rendered identically before.
+    ///  - Mats: per-pixel smooth D1/D2 blend, proportional to the real RNM
+    ///    mask alpha (not a hard threshold — the blend genuinely mixes the
+    ///    two textures over a gradient area, so a hard cutoff misrepresents
+    ///    it), colored by texture IDENTITY — see BuildMatPairPreviewMaterials.
+    ///    A "material" is an individual texture, so this shows exactly how
+    ///    much each single texture contributes at each point on the mesh.
+    ///  - Pairs: one flat color per whole submesh, keyed on the (D1, D2)
+    ///    texture-pair IDENTITY — see BuildPairFlatColorMaterials. A
+    ///    "material pair" is the (D1, D2) combination itself, so this is a
+    ///    single solid color per unique pair, not a per-pixel blend.
+    ///  - Slope/Height: real per-vertex data baked straight from the
+    ///    imported mesh (normals for slope, Y position for height) into
+    ///    vertex colors, rendered with the plain SC2/VertexColorUnlit
+    ///    shader — same idea as the paintable terrain's gradient views, just
+    ///    computed directly from this mesh instead of the chunk pipeline.
+    /// </summary>
+    /// <summary>
+    /// Feeds SC2ExportPanel's "Export terrain.bdf" button — see
+    /// SC2TerrainExporter.MergeImportedTerrain. Only entries that actually
+    /// have a parsed source Model (i.e. came from SC2TerrainBdfImporter, not
+    /// some hypothetical future import path without one) are included.
+    /// </summary>
+    private List<SC2ImportedTerrainExportData> GetImportedTerrainsForExport()
+    {
+        var result = new List<SC2ImportedTerrainExportData>();
+        foreach (var entry in _importedTerrains)
+        {
+            if (entry.Root == null || entry.Model == null) continue;
+            result.Add(new SC2ImportedTerrainExportData
+            {
+                Model = entry.Model,
+                Transform = entry.Root.transform,
+                RecomputeNormals = entry.RecomputeNormals,
+                Name = entry.DisplayName,
+                AuthoredEnableRnm = entry.OriginalEnableRnm,
+                TexturePathOverrides = entry.TexturePathOverrides,
+                IsBackgroundTerrain = entry.IsBackgroundTerrain
+            });
+        }
+        return result;
+    }
+
+    private static int CountImportedLayerTriangles(BdfIO.Formats.Terrain.TerrainModel model, int layerIndex)
+    {
+        if (model == null || layerIndex < 0 || layerIndex >= model.Layers.Count) return 0;
+        var layer = model.Layers[layerIndex];
+        var tStart = layer.CumulativeIndices / 3;
+        var tEnd = layerIndex + 1 < model.Layers.Count ? model.Layers[layerIndex + 1].CumulativeIndices / 3 : model.Triangles.Count;
+        return Mathf.Max(0, tEnd - tStart);
+    }
+
+    /// <summary>Real, permanent removal of one material/layer's geometry
+    /// from an imported terrain.bdf object — for a decorative embedded
+    /// object, e.g. a crystal cluster, that should not exist in the
+    /// scene/export at all, distinct from Collision2ExcludedMaterialNames'
+    /// non-destructive "still real, just don't eat Collision2's triangle
+    /// budget" exclusion. Vertices/Triangles are one flat buffer shared
+    /// across all layers (BdfIO.Formats.Terrain.TerrainModel's own
+    /// convention - CumulativeVertices/CumulativeIndices mark each layer's
+    /// range within it), so removing a layer means slicing its range out of
+    /// both flat lists and re-basing every SUBSEQUENT layer's cumulative
+    /// offsets by the removed counts.</summary>
+    private void DeleteImportedMaterialLayer(SC2ImportedTerrainEntry entry, int layerIndex)
+    {
+        var model = entry?.Model;
+        if (model == null || entry.Root == null || layerIndex < 0 || layerIndex >= model.Layers.Count)
+            return;
+
+        var layer = model.Layers[layerIndex];
+        var vStart = layer.CumulativeVertices;
+        var vEnd = layerIndex + 1 < model.Layers.Count ? model.Layers[layerIndex + 1].CumulativeVertices : model.Vertices.Count;
+        var tStart = layer.CumulativeIndices / 3;
+        var tEnd = layerIndex + 1 < model.Layers.Count ? model.Layers[layerIndex + 1].CumulativeIndices / 3 : model.Triangles.Count;
+        var removedVerts = Mathf.Max(0, vEnd - vStart);
+        var removedTris = Mathf.Max(0, tEnd - tStart);
+
+        if (removedVerts > 0) model.Vertices.RemoveRange(vStart, removedVerts);
+        if (removedTris > 0) model.Triangles.RemoveRange(tStart, removedTris);
+        model.Layers.RemoveAt(layerIndex);
+        if (layerIndex < model.Materials.Count) model.Materials.RemoveAt(layerIndex);
+
+        for (var i = layerIndex; i < model.Layers.Count; i++)
+        {
+            model.Layers[i].CumulativeVertices -= removedVerts;
+            model.Layers[i].CumulativeIndices -= removedTris * 3;
+        }
+
+        // Rebuild the live mesh+materials from the now-modified model,
+        // reusing the exact same real builder used at import time - build
+        // into a scratch GameObject and steal its output onto the existing
+        // one, rather than duplicating TerrainMeshBuilder's own mesh/
+        // material construction here.
+        var scratch = TerrainMeshBuilder.Build(model, null, new TerrainMeshBuilder.Options { UseSC2TerrainShader = true });
+        var newMesh = scratch.GetComponent<MeshFilter>().sharedMesh;
+        var newMaterials = scratch.GetComponent<MeshRenderer>().sharedMaterials;
+        UnityEngine.Object.DestroyImmediate(scratch);
+
+        var meshFilter = entry.Root.GetComponent<MeshFilter>();
+        var oldMesh = meshFilter != null ? meshFilter.sharedMesh : null;
+        if (meshFilter != null) meshFilter.sharedMesh = newMesh;
+        if (oldMesh != null) UnityEngine.Object.DestroyImmediate(oldMesh);
+
+        var meshRenderer = entry.Root.GetComponent<MeshRenderer>();
+        if (meshRenderer != null) meshRenderer.sharedMaterials = newMaterials;
+        entry.OriginalMaterials = newMaterials;
+        entry.OriginalEnableRnm = newMaterials
+            .Select(m => m != null && m.HasProperty("_EnableRNM") ? m.GetFloat("_EnableRNM") : 0f)
+            .ToArray();
+        // Stale caches keyed off the old material array/mesh (submesh count
+        // and vertex count both just changed).
+        entry.FlatColorMaterials = null;
+        entry.PairColorMaterials = null;
+        entry.VertexColorSharedMaterials = null;
+        entry.SlopeColors = null;
+        entry.HeightColors = null;
+
+        // The MeshCollider's sharedMesh reference is now stale (pointing at
+        // the just-destroyed old mesh) - height-query raycasts depend on
+        // this collider actually matching current geometry.
+        var collider = entry.Root.GetComponent<MeshCollider>();
+        if (collider != null) collider.sharedMesh = newMesh;
+
+        _terrainShell?.InvalidateLiveHeightGrid();
+        _terrainShell?.MarkDirtyAndRepaint();
+        SetStatus($"Deleted material geometry from '{entry.DisplayName}'.");
+    }
+
+    private void ApplyPreviewModeToImportedTerrains(SC2TerrainShell.PreviewMode mode)
+    {
+        foreach (var entry in _importedTerrains)
+            ApplyPreviewModeToImportedTerrain(entry, mode);
+    }
+
+    private void ApplyPreviewModeToImportedTerrain(SC2ImportedTerrainEntry entry, SC2TerrainShell.PreviewMode mode)
+    {
+        if (entry?.Root == null || entry.OriginalMaterials == null) return;
+        var meshRenderer = entry.Root.GetComponent<MeshRenderer>();
+        var meshFilter = entry.Root.GetComponent<MeshFilter>();
+        if (meshRenderer == null) return;
+
+        // "Terrain" Visibility-menu checkbox previously only hid the live
+        // procedural terrain (SC2TerrainShell.SetTerrainOverlayVisible) -
+        // imported terrain.bdf objects are a separate GameObject tree this
+        // shell owns, so the flag had no effect on them at all. Toggle just
+        // the renderer, not the whole GameObject (SetActive is reserved for
+        // real deletion — see "Remove From Scene" — and the collider must
+        // stay enabled regardless, so height-sampling/raycasting keep
+        // working while the mesh is merely hidden).
+        meshRenderer.enabled = _terrainShell == null || _terrainShell.TerrainOverlayVisible;
+
+        // "Hfield"/"RNM" Visibility-menu checkboxes previously only forced
+        // the live procedural terrain's shader mode (SC2TerrainShell.
+        // ApplyPreviewModeToChunks) - they never affected imported terrain
+        // unless the user also happened to already have that exact
+        // PreviewMode selected in the Terrain tab, so toggling them alone
+        // showed nothing on an imported-terrain map. Compute the same
+        // "effective mode" the live runtime already applies (an explicit
+        // MatColors/PairColors/Slope pick always wins; a forced Hfield
+        // overlay wins over a plain Textured/TexturedRNM/HeightGradient
+        // view; a forced RNM overlay only affects the "normal" Textured
+        // view) and apply THAT instead of the raw mode below.
+        var effectiveMode = mode;
+        if (mode == SC2TerrainShell.PreviewMode.Textured || mode == SC2TerrainShell.PreviewMode.TexturedRNM || mode == SC2TerrainShell.PreviewMode.HeightGradient)
+        {
+            var forceHfield = _terrainShell != null && _terrainShell.ForceHfieldOverlay;
+            var forceRnm = _terrainShell != null && _terrainShell.ForceRnmOverlay;
+            effectiveMode = mode == SC2TerrainShell.PreviewMode.HeightGradient || forceHfield
+                ? SC2TerrainShell.PreviewMode.HeightGradient
+                : mode == SC2TerrainShell.PreviewMode.TexturedRNM || forceRnm
+                    ? SC2TerrainShell.PreviewMode.TexturedRNM
+                    : SC2TerrainShell.PreviewMode.Textured;
+        }
+
+        switch (effectiveMode)
+        {
+            case SC2TerrainShell.PreviewMode.Textured:
+            case SC2TerrainShell.PreviewMode.TexturedRNM:
+                var enableRnm = effectiveMode == SC2TerrainShell.PreviewMode.TexturedRNM ? 1f : 0f;
+                foreach (var mat in entry.OriginalMaterials)
+                    if (mat != null && mat.HasProperty("_EnableRNM"))
+                        mat.SetFloat("_EnableRNM", enableRnm);
+                meshRenderer.sharedMaterials = entry.OriginalMaterials;
+                break;
+
+            case SC2TerrainShell.PreviewMode.MatColors:
+                entry.FlatColorMaterials ??= BuildMatPairPreviewMaterials(entry.OriginalMaterials, discrete: false);
+                meshRenderer.sharedMaterials = entry.FlatColorMaterials;
+                SetStatus("Mats preview: " + DescribeColors(entry.FlatColorMaterials));
+                break;
+
+            case SC2TerrainShell.PreviewMode.PairColors:
+                entry.PairColorMaterials ??= BuildPairFlatColorMaterials(entry.OriginalMaterials);
+                meshRenderer.sharedMaterials = entry.PairColorMaterials;
+                SetStatus("Pairs preview: " + DescribeColors(entry.PairColorMaterials));
+                break;
+
+            case SC2TerrainShell.PreviewMode.Slope:
+                ApplyVertexColorPreview(entry, meshFilter, meshRenderer, isSlope: true);
+                break;
+
+            case SC2TerrainShell.PreviewMode.HeightGradient:
+                ApplyVertexColorPreview(entry, meshFilter, meshRenderer, isSlope: false);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// "Mats" = a "material" is an individual texture (Diffuse1/Diffuse2) —
+    /// colors are assigned by texture IDENTITY (reference equality;
+    /// Resources.Load/AssetDatabase both cache and return the same instance
+    /// for repeated loads of the same asset) so the literal same source
+    /// texture always renders as the same color everywhere on the mesh, and
+    /// the shared colorByTexture cache is built once across ALL submeshes
+    /// (not per-material), so a texture reused across different pairs still
+    /// gets one consistent color.
+    ///
+    /// Uses SC2/MatPairPreview to do a smooth per-pixel D1/D2 blend,
+    /// proportional to the same RNM mask alpha the real shader blends
+    /// with (discrete=false — a hard threshold would misrepresent an area
+    /// that's genuinely a gradual mix of both textures) — shows how much
+    /// each texture actually contributes at each point instead of one flat
+    /// color for the whole submesh (which hid this entirely: a genuine
+    /// two-texture blend within ONE submesh wasn't visible at all with a
+    /// flat color, and two submeshes with different D1/D2 pairs but a
+    /// similar average color looked identical).
+    ///
+    /// A material with no real RNM mask defaults to a black mask (alpha=0
+    /// everywhere), so it just shows flat Color1 — correct for a material
+    /// that only ever uses a single diffuse texture.
+    /// </summary>
+    /// <summary>The "Water" Visibility checkbox would otherwise have no
+    /// effect while the "Mats" (and, same root cause, "Pairs"/"Slope"/
+    /// "Height") preview mode is active, since those modes replace
+    /// EVERY submesh's material with a synthetic debug-color one, including
+    /// water's — SC2WaterPlane.ApplyImportedWaterVisibility only ever finds
+    /// and toggles _SC2WaterVisible on materials whose shader is literally
+    /// "SC2/Water", so once that submesh's material becomes e.g.
+    /// SC2/MatPairPreview instead, the toggle has nothing left to act on and
+    /// the debug-color water submesh renders unconditionally. Fixed at the
+    /// source: water's own submesh is exempted from every one of these
+    /// color-preview modes and keeps its real, original material — so the
+    /// existing _SC2WaterVisible mechanism keeps controlling it exactly the
+    /// same regardless of which top-level preview mode is selected.</summary>
+    private static bool IsWaterShaded(Material mat) => mat != null && mat.shader != null && mat.shader.name == "SC2/Water";
+
+    private static Material[] BuildMatPairPreviewMaterials(Material[] originals, bool discrete)
+    {
+        // Shader.Find(...) "works" in the Editor (it can locate any
+        // compiled shader) but reliably returns null in an actual
+        // standalone build — Unity strips shaders nothing references —
+        // which used to throw "Value cannot be null. Parameter name:
+        // shader" here, the same crash already fixed for SC2/Terrain (see
+        // SC2TerrainMaterialFactory.ResolveShader). Resources.Load finds
+        // SC2/MatPairPreview reliably since it lives under Resources/.
+        var shader = Resources.Load<Shader>("SC2MatPairPreview") ?? SC2FallbackShader.Get();
+        var colorByTexture = new Dictionary<object, Color>();
+        var result = new Material[originals.Length];
+        for (var i = 0; i < originals.Length; i++)
+        {
+            var mat = originals[i];
+            if (IsWaterShaded(mat)) { result[i] = mat; continue; }
+            var d1 = GetTextureSafe(mat, "_Diffuse1");
+            var d2 = GetTextureSafe(mat, "_Diffuse2");
+            // d1 == null means either "this material genuinely has no
+            // _Diffuse1 slot" (mat_Water — fine to share one grey) or "the
+            // source .dds failed to load" (a real per-submesh problem that
+            // should NOT look identical to every other failed submesh) — key
+            // on the submesh index in the latter case so failed loads stay
+            // visually distinguishable instead of collapsing into one color.
+            var color1 = ColorForKey(d1 != null ? (object)d1 : MissingKey(mat, "_Diffuse1", i), colorByTexture);
+            var color2 = d2 != null ? ColorForKey((object)d2, colorByTexture) : color1;
+            var mask = GetTextureSafe(mat, "_RNMMask1");
+
+            var preview = new Material(shader) { name = (mat != null ? mat.name : "mat") + "_mat" };
+            if (preview.HasProperty("_Color1"))
+            {
+                preview.SetColor("_Color1", color1);
+                preview.SetColor("_Color2", color2);
+                if (mask != null) preview.SetTexture("_RNMMask1", mask);
+                preview.SetFloat("_Discrete", discrete ? 1f : 0f);
+            }
+            else
+            {
+                // Fallback shader has no per-pixel blend support — flat
+                // Color1 is still better than crashing.
+                preview.color = color1;
+            }
+            result[i] = preview;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// "Pairs" = a material pair is the (Diffuse1, Diffuse2) texture
+    /// COMBINATION itself — one flat color per submesh, keyed on that exact
+    /// pair (not per-pixel blended like Mats): two submeshes sharing the
+    /// same D1 but with different D2 (or vice versa) are different pairs
+    /// and get different colors; only an exact (D1, D2) match reuses a
+    /// color. Uses its own cache, independent from Mats' per-texture
+    /// identity cache, so a pair's color has no fixed relationship to
+    /// either of its component textures' individual Mats color.
+    /// </summary>
+    private static Material[] BuildPairFlatColorMaterials(Material[] originals)
+    {
+        var shader = SC2FallbackShader.Get();
+        var colorByPair = new Dictionary<object, Color>();
+        var result = new Material[originals.Length];
+        for (var i = 0; i < originals.Length; i++)
+        {
+            var mat = originals[i];
+            if (IsWaterShaded(mat)) { result[i] = mat; continue; }
+            var d1 = GetTextureSafe(mat, "_Diffuse1");
+            var d2 = GetTextureSafe(mat, "_Diffuse2");
+            // Only fall back to a per-submesh key when BOTH textures failed
+            // to resolve — a pair with at least one real texture still keys
+            // on that identity so genuinely identical pairs share a color.
+            var pairKey = (d1 != null || d2 != null) ? (object)(d1, d2) : MissingKey(mat, "_Pair", i);
+            var color = ColorForKey(pairKey, colorByPair);
+            result[i] = new Material(shader) { name = (mat != null ? mat.name : "mat") + "_pair", color = color };
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Synthetic dictionary key for "this texture slot has no real texture
+    /// assigned" (as opposed to null meaning "this shader doesn't even have
+    /// the property"), scoped per submesh index so multiple failed loads
+    /// don't collide on the same cache entry — see GetTextureSafe.
+    /// </summary>
+    private static object MissingKey(Material mat, string property, int index) =>
+        (mat != null ? mat.name : "mat", property, index);
+
+    /// <summary>
+    /// mat.GetTexture(prop) on a material whose shader doesn't have that
+    /// property (e.g. mat_Water, which uses "SC2/Water" — no _Diffuse1/
+    /// _Diffuse2 at all) logs a Unity console warning and returns null —
+    /// checking HasProperty first avoids the spurious warning; the null
+    /// result itself is legitimate (that material simply has no texture in
+    /// that slot) and is handled by ColorForKey below.
+    ///
+    /// A property that DOES exist but was never explicitly SetTexture'd
+    /// (e.g. SC2TerrainMaterialFactory.TrySetTexture silently skipped it
+    /// because the source .dds failed to resolve on disk) still returns the
+    /// shader's declared default — "white" for _Diffuse1/_Diffuse2 in
+    /// SC2/Terrain.shader — which is ONE shared built-in Texture2D instance
+    /// across every material that hit this. Treating that the same as a
+    /// real distinct texture made ColorForKey's reference-equality cache
+    /// collapse every failed-load material into a single shared color (the
+    /// "Mats button paints everything one color" bug), so it's normalized
+    /// to null here too, same as a missing property.
+    /// </summary>
+    private static Texture GetTextureSafe(Material mat, string property)
+    {
+        if (mat == null || !mat.HasProperty(property)) return null;
+        var tex = mat.GetTexture(property);
+        return IsBuiltinDefaultTexture(tex) ? null : tex;
+    }
+
+    private static bool IsBuiltinDefaultTexture(Texture tex) =>
+        tex != null && (tex == Texture2D.whiteTexture || tex == Texture2D.blackTexture ||
+                        tex == Texture2D.grayTexture || tex == Texture2D.normalTexture);
+
+    /// <summary>
+    /// Returns a stable color for a given key (texture, or texture-pair
+    /// tuple), assigning a new one from a cycling HSV palette the first
+    /// time that exact key is seen and reusing it for every later match —
+    /// this is what makes identical textures/pairs render as the same
+    /// color instead of an arbitrary color per submesh index.
+    ///
+    /// A null key (e.g. a material with no Diffuse1 at all — mat_Water)
+    /// must NOT be looked up in the dictionary: Dictionary&lt;TKey,
+    /// TValue&gt;.TryGetValue throws ArgumentNullException for a null
+    /// reference-type key, which used to crash the whole Mats/Pairs
+    /// preview build the instant any Water submesh was present — the
+    /// button did nothing because the exception aborted
+    /// BuildMatPairPreviewMaterials before it ever reached
+    /// meshRenderer.sharedMaterials = ... — every null key instead gets a
+    /// single shared flat grey, without touching the cache.
+    /// </summary>
+    private static Color ColorForKey<TKey>(TKey key, Dictionary<TKey, Color> cache)
+    {
+        if (key == null)
+            return Color.grey;
+        if (cache.TryGetValue(key, out var existing))
+            return existing;
+        var hue = (cache.Count % 12) / 12f;
+        var color = Color.HSVToRGB(hue, 0.6f, 0.85f);
+        cache[key] = color;
+        return color;
+    }
+
+    /// <summary>
+    /// Console output isn't visible in a shipped standalone player, so this
+    /// puts the actual applied hex colors into the status bar (already
+    /// visible in-game) whenever Mats/Pairs preview is applied — a way to
+    /// confirm from inside a build whether the two modes are computing
+    /// different colors.
+    /// </summary>
+    private static string DescribeColors(Material[] mats)
+    {
+        var parts = new string[mats.Length];
+        for (var i = 0; i < mats.Length; i++)
+            parts[i] = DescribeColor(mats[i]);
+        return string.Join(" ", parts);
+    }
+
+    /// <summary>
+    /// Material.color requires the shader to have a property named exactly
+    /// "_Color" — SC2/MatPairPreview (used for Mats) has "_Color1"/
+    /// "_Color2" instead, so calling .color on it logged a Unity warning
+    /// every single frame this ran. Read whichever color property the
+    /// material's shader actually exposes.
+    /// </summary>
+    private static string DescribeColor(Material mat)
+    {
+        if (mat == null) return "null";
+        if (mat.HasProperty("_Color")) return "#" + ColorUtility.ToHtmlStringRGB(mat.color);
+        if (mat.HasProperty("_Color1"))
+        {
+            var c1 = ColorUtility.ToHtmlStringRGB(mat.GetColor("_Color1"));
+            var c2 = mat.HasProperty("_Color2") ? ColorUtility.ToHtmlStringRGB(mat.GetColor("_Color2")) : "?";
+            return $"#{c1}/#{c2}";
+        }
+        return "?";
+    }
+
+    /// <summary>
+    /// Bakes slope (from vertex normals) or height (from vertex Y) into the
+    /// imported mesh's vertex color stream and swaps in a plain vertex-
+    /// color-unlit material so it displays. The baked color arrays and
+    /// material are cached per entry/mode — cheap to swap back and forth
+    /// afterward, just SetColors + a material array swap.
+    /// </summary>
+    private void ApplyVertexColorPreview(SC2ImportedTerrainEntry entry, MeshFilter meshFilter, MeshRenderer meshRenderer, bool isSlope)
+    {
+        var mesh = meshFilter != null ? meshFilter.sharedMesh : null;
+        if (mesh == null) return;
+
+        if (isSlope)
+        {
+            entry.SlopeColors ??= ComputeSlopeColors(mesh);
+            mesh.SetColors(entry.SlopeColors);
+        }
+        else
+        {
+            entry.HeightColors ??= ComputeHeightColors(mesh);
+            mesh.SetColors(entry.HeightColors);
+        }
+
+        if (entry.VertexColorMaterial == null)
+        {
+            var shader = Resources.Load<Shader>("SC2VertexColorUnlit") ?? SC2FallbackShader.Get();
+            entry.VertexColorMaterial = new Material(shader) { name = "VertexColorPreview" };
+        }
+        if (entry.VertexColorSharedMaterials == null || entry.VertexColorSharedMaterials.Length != mesh.subMeshCount)
+        {
+            entry.VertexColorSharedMaterials = new Material[mesh.subMeshCount];
+            for (var i = 0; i < mesh.subMeshCount; i++)
+            {
+                // Water submesh exempted from the debug-color view (same fix
+                // as BuildMatPairPreviewMaterials/BuildPairFlatColorMaterials
+                // — see IsWaterShaded's own doc comment) — keeps its real
+                // material so the "Water" Visibility toggle's
+                // _SC2WaterVisible mechanism still works in Slope/Height too.
+                var original = entry.OriginalMaterials != null && i < entry.OriginalMaterials.Length ? entry.OriginalMaterials[i] : null;
+                entry.VertexColorSharedMaterials[i] = IsWaterShaded(original) ? original : entry.VertexColorMaterial;
+            }
+        }
+        meshRenderer.sharedMaterials = entry.VertexColorSharedMaterials;
+    }
+
+    private static Color[] ComputeSlopeColors(Mesh mesh)
+    {
+        var normals = mesh.normals;
+        var colors = new Color[normals.Length];
+        for (var i = 0; i < normals.Length; i++)
+        {
+            // 0 = flat (facing straight up), 1 = vertical/overhanging.
+            var slope01 = Mathf.Clamp01(1f - Vector3.Dot(normals[i].normalized, Vector3.up));
+            colors[i] = Color.Lerp(new Color(0.2f, 0.8f, 0.2f), new Color(0.9f, 0.15f, 0.1f), slope01);
+        }
+        return colors;
+    }
+
+    private static Color[] ComputeHeightColors(Mesh mesh)
+    {
+        var verts = mesh.vertices;
+        var colors = new Color[verts.Length];
+        if (verts.Length == 0) return colors;
+
+        var minY = float.MaxValue;
+        var maxY = float.MinValue;
+        foreach (var v in verts) { if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y; }
+        var range = Mathf.Max(0.0001f, maxY - minY);
+
+        for (var i = 0; i < verts.Length; i++)
+        {
+            var t = Mathf.Clamp01((verts[i].y - minY) / range);
+            colors[i] = SC2TerrainShell.EvaluateHeightGradient(t);
+        }
+        return colors;
+    }
+
+    private static bool GetMaterialFlag(Material mat, string prop) => mat.HasProperty(prop) && mat.GetFloat(prop) > 0.5f;
+
+    /// <summary>Looks up a real, as-parsed-from-terrain.bdf flag value by
+    /// name — untouched by the Textured/RNM preview toolbar, which only
+    /// ever mutates the LIVE Material's shader properties, never this list.
+    /// Real ShaderSetup values are the string "1"/"0" (or a numeric
+    /// threshold for ALPHA_TEST specifically) — non-"0" counts as set,
+    /// matching how SC2TerrainMaterialFactory.ApplyShaderSetup itself
+    /// interprets these entries.</summary>
+    private static bool GetShaderSetupBool(List<BdfIO.Formats.Terrain.ShaderSetupEntry> shaderSetup, string flagName)
+    {
+        if (shaderSetup == null) return false;
+        foreach (var entry in shaderSetup)
+            if (string.Equals(entry.Name, flagName, System.StringComparison.OrdinalIgnoreCase))
+                return !string.IsNullOrEmpty(entry.Value) && entry.Value != "0";
+        return false;
+    }
+    private void SetMaterialFlag(Material mat, string prop, bool value)
+    {
+        if (!mat.HasProperty(prop)) return;
+        if (GetMaterialFlag(mat, prop) == value) return;
+        RecordImportedTerrainsUndo();
+        mat.SetFloat(prop, value ? 1f : 0f);
+    }
+
+    // Maps a shader property to the exact TerrainMaterial.TexturePaths slot
+    // SC2TerrainMaterialExporter.ApplyFromScene actually writes for it — the
+    // same mapping that file's own header comment documents. Used only to
+    // show the real, already-parsed original path as a display fallback
+    // (see DrawMaterialTextureSlot); _RNMMask1/_RNMMask2 have no slot of
+    // their own (all 3 RNM slices share base path slot 10, derived only from
+    // _RNMMask0 — see ApplyFromScene), so they're absent here and simply
+    // show blank until the user types something, same as before this fix.
+    private static readonly Dictionary<string, int> kImportedTexturePathSlots = new()
+    {
+        { "_Diffuse1", 0 }, { "_Diffuse2", 1 }, { "_Normal1", 2 }, { "_Normal2", 3 },
+        { "_Mask1", 6 }, { "_Mask2", 7 }, { "_Ramp", 8 }, { "_RNMMask0", 10 },
+    };
+
+    private void DrawMaterialTextureSlot(SC2ImportedTerrainEntry entry, int materialIndex, Material mat, string shaderProp, string label, string pickerKeyPrefix)
+    {
+        if (!mat.HasProperty(shaderProp)) return;
+        var current = mat.GetTexture(shaderProp) as Texture2D;
+        var overrideKey = materialIndex + ":" + shaderProp;
+        entry.TexturePathOverrides.TryGetValue(overrideKey, out var pathDraft);
+        // This field can otherwise show blank even though the texture has
+        // already loaded successfully — fall back to the path actually
+        // parsed from the real terrain.bdf at import time (entry.Model,
+        // untouched by any later edit) rather than only ever showing the
+        // manual override.
+        string fallbackPath = null;
+        if (entry.Model != null && materialIndex < entry.Model.Materials.Count &&
+            kImportedTexturePathSlots.TryGetValue(shaderProp, out var slot) &&
+            slot < entry.Model.Materials[materialIndex].TexturePaths.Length)
+            fallbackPath = entry.Model.Materials[materialIndex].TexturePaths[slot];
+        var picked = SC2TerrainShell.DrawTexturePickerWithPath(label, current, pickerKeyPrefix + ":" + shaderProp, ref pathDraft, out var pickedViaBrowser, fallbackPath);
+        if (picked != current)
+        {
+            RecordImportedTerrainsUndo();
+            mat.SetTexture(shaderProp, picked);
+        }
+        // A browser pick clears any manual override (matches
+        // SC2MaterialsPairsMode.DrawTextureField's clear-only-on-browser-pick
+        // rule); a typed path is kept even once it resolves a texture.
+        if (pickedViaBrowser) pathDraft = "";
+        if (!string.IsNullOrEmpty(pathDraft)) entry.TexturePathOverrides[overrideKey] = pathDraft;
+        else entry.TexturePathOverrides.Remove(overrideKey);
+    }
+
+    /// <summary>
+    /// Content for the Terrain tab's "Imported" subtab — migrated from a
+    /// floating overlay card (drawn on top of everything, with its own
+    /// BeginArea/GUI.depth/close button) to a plain left-panel subtab, drawn
+    /// inline by SC2TerrainShell.DrawEditorBody exactly like Geometry/
+    /// Materials/Export Preview/etc. (see SC2TerrainShell.DrawImportedTerrainsContent).
+    /// Since the source mesh is already fully authored (materials/masks/
+    /// shaders baked in by the export pipeline), the only geometry edits
+    /// offered here are the whole-object Transform (position/rotation/
+    /// scale) — no heightmap/pair painting, which only makes sense for the
+    /// separate paintable SC2TerrainData workflow. Material textures and
+    /// per-material shader flags remain editable in case a texture needs
+    /// pointing at a different asset in this project, or a lighting flag
+    /// needs a tweak.
+    /// </summary>
+    /// <summary>Every real MeshCollider currently sitting on an active
+    /// imported-terrain.bdf GameObject (SC2TerrainBdfImporter.Import adds one
+    /// at import time). Shared by _objectsShell and _terrainShell's own
+    /// GetImportedTerrainColliders wiring (EnsureObjectsShell/EnsureTerrainShell)
+    /// so both raycast against the exact same real surface instead of two
+    /// independently-collected lists that could drift apart.</summary>
+    private List<Collider> BuildImportedTerrainColliders()
+    {
+        var list = new List<Collider>();
+        foreach (var entry in _importedTerrains)
+        {
+            if (entry?.Root == null || !entry.Root.activeInHierarchy) continue;
+            var col = entry.Root.GetComponent<Collider>();
+            if (col != null) list.Add(col);
+        }
+        return list;
+    }
+
+    private void DrawImportedTerrainsLeftPanelContent(float width)
+    {
+        _importedTerrains.RemoveAll(e => e.Root == null);
+        _importedTerrainsRemoved.RemoveAll(e => e.Root == null);
+
+        // Drawn even when the visible list is empty — otherwise removing the
+        // only imported entry (via "Remove From Scene" below) would strand
+        // the user with no way to reach Undo to bring it back.
+        EditorGUILayout.BeginHorizontal(GUILayout.Width(width), GUILayout.MaxWidth(width));
+        EditorGUI.BeginDisabledGroup(_importedUndoStack.Count == 0);
+        if (GUILayout.Button($"↩ Undo ({_importedUndoStack.Count})")) ImportedTerrainsUndo();
+        EditorGUI.EndDisabledGroup();
+        EditorGUI.BeginDisabledGroup(_importedRedoStack.Count == 0);
+        if (GUILayout.Button($"↪ Redo ({_importedRedoStack.Count})")) ImportedTerrainsRedo();
+        EditorGUI.EndDisabledGroup();
+        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.Space(4);
+
+        if (_importedTerrains.Count == 0)
+        {
+            SC2TerrainShell.DrawUnifiedNote("No terrain.bdf imported yet — use File → Import terrain.bdf.");
+            return;
+        }
+        if (_selectedImportedTerrain < 0 || _selectedImportedTerrain >= _importedTerrains.Count)
+            _selectedImportedTerrain = 0;
+
+        // Real, exclusive "this map ships from the import alone" switch. Off
+        // by default: live plane + import both ship. On: the live
+        // plane's own painted geometry contributes zero triangles to
+        // terrain.bdf/hfield.bdf/collision2.bdf — see SC2TerrainData.
+        // ImportOnlyMode's own doc comment for what this actually fixes
+        // (z-fighting and live-plane-showing-through-import-gaps).
+        var data = _terrainShell.Data;
+        if (data != null)
+        {
+            // Plain string, not GUIContent — UnityEditorRuntimeShim's ToggleLeft
+            // (used in a real Build, where UnityEditor.EditorGUILayout isn't
+            // available) only has a string-label overload, no GUIContent/
+            // tooltip one, matching every other ToggleLeft call site in this
+            // codebase.
+            var newImportOnly = EditorGUILayout.ToggleLeft(
+                " Import-only map (exclude painted live terrain from export)",
+                data.ImportOnlyMode, GUILayout.Width(width), GUILayout.MaxWidth(width));
+            if (newImportOnly != data.ImportOnlyMode)
+            {
+                _terrainShell.RecordUndoCheckpoint("Toggle Import-Only Mode");
+                data.ImportOnlyMode = newImportOnly;
+                _terrainShell.MarkDirtyAndRepaint();
+                // Whether the live plane contributes to the merged model
+                // just changed.
+                _terrainShell.InvalidateLiveHeightGrid();
+            }
+            if (data.ImportOnlyMode)
+                SC2TerrainShell.DrawUnifiedNote("The live procedural plane contributes no geometry to the exported terrain.bdf/hfield.bdf/collision2.bdf — only this imported terrain.bdf ships. Fixes z-fighting and the live plane showing through gaps in the import.");
+            EditorGUILayout.Space(4);
+
+            var newSingleBsp = EditorGUILayout.ToggleLeft(
+                " Single BSP node per layer (export)",
+                data.SingleBspNodePerLayer, GUILayout.Width(width), GUILayout.MaxWidth(width));
+            if (newSingleBsp != data.SingleBspNodePerLayer)
+            {
+                _terrainShell.RecordUndoCheckpoint("Toggle Single BSP Node Per Layer");
+                data.SingleBspNodePerLayer = newSingleBsp;
+                _terrainShell.MarkDirtyAndRepaint();
+            }
+            SC2TerrainShell.DrawUnifiedNote(data.SingleBspNodePerLayer
+                ? "The exported terrain.bdf gets exactly one EDB/BSP leaf per layer instead of a subdivided tree. Confirmed in-game to remove the bright axis-aligned bands that appeared across imported terrain during the building-construction effect — the banding follows BSP split planes, which are axis-aligned. Costs some culling efficiency on large maps."
+                : "Normal subdivided BSP tree, as vanilla maps and the editor's own painted-terrain export use. Turn on only if an imported map shows bright axis-aligned bands during the building-construction effect.");
+            EditorGUILayout.Space(4);
+        }
+
+        if (_importedTerrains.Count > 1)
+        {
+            var names = new string[_importedTerrains.Count];
+            for (var i = 0; i < _importedTerrains.Count; i++) names[i] = _importedTerrains[i].DisplayName;
+            _selectedImportedTerrain = SC2TerrainShell.DrawUnifiedSegmentGrid(_selectedImportedTerrain, names, Mathf.Min(3, names.Length));
+            EditorGUILayout.Space(4);
+        }
+
+        var entry = _importedTerrains[_selectedImportedTerrain];
+        if (entry.Root == null) return;
+
+        // Per-imported-object, since one map can legitimately mix a Blender
+        // export (needs recomputation) with a genuine vanilla terrain.bdf
+        // (must keep its own authored normals).
+        var newRecompute = EditorGUILayout.ToggleLeft(
+            " Recompute normals + tangents from geometry",
+            entry.RecomputeNormals, GUILayout.Width(width), GUILayout.MaxWidth(width));
+        if (newRecompute != entry.RecomputeNormals)
+        {
+            entry.RecomputeNormals = newRecompute;
+            _terrainShell.MarkDirtyAndRepaint();
+        }
+        SC2TerrainShell.DrawUnifiedNote(entry.RecomputeNormals
+            ? "The full tangent frame (normal + tangent + binormal) is rebuilt at export from the actual triangles and this mesh's real UV1. Keep this on for Blender-exported terrain.bdf files — they typically store one constant normal AND one constant tangent for the entire mesh, which lights every normal-mapped surface through the same wrong basis and makes the game's structure tarmac decals render as bright axis-aligned bands during construction."
+            : "The source file's own normals and tangents are exported byte-for-byte. Correct for a genuine vanilla terrain.bdf (whose authored frame includes deliberate hard edges), but wrong for a Blender export that never wrote a real tangent frame.");
+        EditorGUILayout.Space(4);
+
+        // Optional custom substitute for the procedural decorative
+        // background terrain (SC2BackgroundTerrain) — see that class' own
+        // header comment. Only one entry may have this set at a time.
+        {
+            var newIsBackground = EditorGUILayout.ToggleLeft(
+                " Use as Background Terrain",
+                entry.IsBackgroundTerrain, GUILayout.Width(width), GUILayout.MaxWidth(width));
+            if (newIsBackground != entry.IsBackgroundTerrain)
+            {
+                _terrainShell.RecordUndoCheckpoint("Toggle Background Terrain Substitute");
+                if (newIsBackground)
+                    foreach (var other in _importedTerrains)
+                        if (other != entry) other.IsBackgroundTerrain = false;
+                entry.IsBackgroundTerrain = newIsBackground;
+                _terrainShell.MarkDirtyAndRepaint();
+            }
+            if (entry.IsBackgroundTerrain)
+                SC2TerrainShell.DrawUnifiedNote("Stands in for the procedural background terrain — the generator is skipped and this object's own geometry is used instead. Its own real footprint isn't checked against the core's boundary; keep it well clear of the playable area yourself.");
+        }
+        EditorGUILayout.Space(4);
+
+        EditorGUILayout.LabelField("Transform", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
+        var t = entry.Root.transform;
+        var prevPos = t.position; var prevEuler = t.eulerAngles; var prevScale = t.localScale;
+        t.position = DrawUndoableVector3Field(entry.Root, "Position", t.position, width);
+        var euler = DrawUndoableVector3Field(entry.Root, "Rotation", t.eulerAngles, width);
+        if (euler != t.eulerAngles) t.eulerAngles = euler;
+        t.localScale = DrawUndoableVector3Field(entry.Root, "Scale", t.localScale, width);
+        // The live height grid (SC2LiveHeightGrid) merges imported terrain
+        // at its CURRENT transform - repositioning it here is exactly the
+        // kind of change that has no other notification hook (unlike
+        // terrain edits/import add-remove, which already invalidate it
+        // elsewhere).
+        if (t.position != prevPos || t.eulerAngles != prevEuler || t.localScale != prevScale)
+            _terrainShell?.InvalidateLiveHeightGrid();
+        EditorGUILayout.Space(6);
+
+        // Per-material Collision2-only exclusion for decorative embedded
+        // geometry (rock/crystal clusters etc.) baked into this imported
+        // terrain.bdf as their own material — it isn't real walkable
+        // ground, and its complex/spiky shape otherwise gets rasterized
+        // like any other terrain (RasterizeTriangleHeight overwrites per
+        // grid cell, it doesn't take a max, so overlapping facets collapse
+        // to an essentially arbitrary height) and can eat a
+        // disproportionate share of Collision2's limited 2500-triangle TIN
+        // budget refining that one small area, starving the rest of the
+        // map. Deliberately Collision2-ONLY (SC2TerrainExporter.
+        // BuildCollision2Model builds its own separate heightmap projection
+        // for this) — hfield.bdf and Costs must keep seeing this material's
+        // real height; excluding a material here must not make it
+        // disappear from hfield/Costs too.
+        {
+            var data2 = _terrainShell?.Data;
+            var materialNames = entry.Model?.Materials?
+                .Select(m => m.Name)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Distinct()
+                .ToList() ?? new List<string>();
+            if (data2 != null && materialNames.Count > 0)
+            {
+                EditorGUILayout.LabelField("Exclude from Collision2", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
+                SC2TerrainShell.DrawUnifiedNote("Decorative embedded geometry (crystal/rock clusters etc.) isn't real walkable ground — exclude its material here so it doesn't eat Collision2's limited triangle budget. Still shows up normally in hfield.bdf and Costs (real height/passability unaffected).");
+                data2.Collision2ExcludedMaterialNames ??= new List<string>();
+                foreach (var matName in materialNames)
+                {
+                    var excluded = data2.Collision2ExcludedMaterialNames.Contains(matName);
+                    var nextExcluded = EditorGUILayout.ToggleLeft(" " + matName, excluded, GUILayout.Width(width), GUILayout.MaxWidth(width));
+                    if (nextExcluded != excluded)
+                    {
+                        _terrainShell.RecordUndoCheckpoint("Toggle Collision2 Material Exclusion");
+                        if (nextExcluded) data2.Collision2ExcludedMaterialNames.Add(matName);
+                        else data2.Collision2ExcludedMaterialNames.Remove(matName);
+                        _terrainShell.MarkDirtyAndRepaint();
+                    }
+                }
+                EditorGUILayout.Space(6);
+            }
+        }
+
+        // Real geometry deletion — distinct from the reversible Collision2
+        // exclusion above. Per-layer-INDEX (not per distinct name, unlike
+        // the exclusion list): two layers could in principle share a
+        // material name, and deletion must only ever remove the one the
+        // user actually clicked, not every same-named layer.
+        {
+            var materials = entry.Model?.Materials;
+            if (materials != null && materials.Count > 0)
+            {
+                EditorGUILayout.LabelField("Delete material geometry", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
+                SC2TerrainShell.DrawUnifiedNote("Permanently removes this material's triangles from the imported mesh (in memory and the live scene object) — unlike the exclusion above, this is real deletion, not a rendering/collision toggle. NOT covered by this panel's own ↩ Undo (which only tracks Transform/material-texture changes, not geometry) — confirmed before it runs.");
+                for (var mi = 0; mi < materials.Count; mi++)
+                {
+                    var mat = materials[mi];
+                    var label = string.IsNullOrEmpty(mat.Name) ? $"(unnamed material {mi})" : mat.Name;
+                    EditorGUILayout.BeginHorizontal(GUILayout.Width(width), GUILayout.MaxWidth(width));
+                    EditorGUILayout.LabelField(label, GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
+                    var doDelete = GUILayout.Button("Delete", GUILayout.Width(60));
+                    EditorGUILayout.EndHorizontal();
+                    if (doDelete)
+                    {
+                        var triCount = CountImportedLayerTriangles(entry.Model, mi);
+                        if (EditorUtility.DisplayDialog("Delete material geometry",
+                            $"Permanently remove '{label}' ({triCount} triangles) from this imported object?\n\nThis cannot be undone via this panel's ↩ Undo.",
+                            "Delete", "Cancel"))
+                        {
+                            DeleteImportedMaterialLayer(entry, mi);
+                            // The materials list this loop is iterating just
+                            // shrank - stop drawing this frame rather than
+                            // continue over now-invalid indices.
+                            return;
+                        }
+                    }
+                }
+                EditorGUILayout.Space(6);
+            }
+        }
+
+        // Debug.Log/LogWarning output (SC2TerrainMaterialFactory.LoadTexture,
+        // SC2TerrainBdfImporter's texture copy step) isn't visible in a
+        // shipped standalone player — no console there — so this is the only
+        // way to see which textures actually resolved after importing a
+        // terrain.bdf in a build. A map can reference 50-100+ textures, so
+        // this list is foldable (collapsed lists were the actual ask behind
+        // "no collapsing of long tabs") and scrolls within its own bounded
+        // height instead of stretching the whole panel — both the fold and
+        // the fixed-height inner scroll are new on top of what was here
+        // before.
+        if (entry.TextureAttempts != null)
+        {
+            var foundCount = entry.TextureAttempts.Count(a => a.Found);
+            entry.TexturesExpanded = EditorGUILayout.Foldout(entry.TexturesExpanded,
+                $"Textures: {foundCount}/{entry.TextureAttempts.Count} loaded", true, EditorStyles.foldout);
+            if (entry.TexturesExpanded)
+            {
+                SC2TerrainShell.BeginUnifiedPanelBox();
+                // Row-height assumption (18f) and the row's own Label
+                // height (16f) below both scale with SC2UiScale now — this
+                // list uses native EditorStyles.miniLabel (a real Unity
+                // Editor style, not SC2UnifiedSkin), which was previously
+                // left completely unscaled: at higher UI Scale everything
+                // ELSE in the panel got bigger while this list's rows
+                // stayed tiny AND the scroll view's own total-height
+                // estimate (still based on the old fixed 18f/row) drifted
+                // out of sync with the now-explicitly-bigger font's real
+                // per-row height, which is what visually reads as rows
+                // overlapping once scrolled.
+                var rowFontSize = SC2UiScale.F(10);
+                var rowHeight = SC2UiScale.Pxf(18f);
+                var listHeight = Mathf.Min(260f, entry.TextureAttempts.Count * rowHeight + 4f);
+                entry.TextureListScroll = GUILayout.BeginScrollView(entry.TextureListScroll, GUILayout.Height(listHeight));
+                foreach (var attempt in entry.TextureAttempts)
+                {
+                    GUILayout.BeginHorizontal(GUILayout.Width(width - 32f), GUILayout.MaxWidth(width - 32f));
+                    var prevContent = GUI.contentColor;
+                    GUI.contentColor = attempt.Found ? new Color(0.4f, 0.8f, 0.4f) : new Color(0.9f, 0.4f, 0.4f);
+                    var okStyle = new GUIStyle(EditorStyles.miniLabel) { fontSize = rowFontSize };
+                    GUILayout.Label(attempt.Found ? "OK" : "X", okStyle, GUILayout.Width(SC2UiScale.Pxf(22f)));
+                    GUI.contentColor = prevContent;
+                    // wordWrap=false + Clip: EditorStyles.miniLabel wraps by
+                    // default, so a long path used to spill onto a second
+                    // line (inflating row height) and, for paths wider than
+                    // the row, still overflow past the panel edge — clipping
+                    // alone doesn't do anything while wordWrap is still on.
+                    var pathStyle = new GUIStyle(EditorStyles.miniLabel) { wordWrap = false, clipping = TextClipping.Clip, fontSize = rowFontSize };
+                    // Show what actually got bound (ResolvedFrom), not just
+                    // the requested logical path — this project's texture
+                    // library has real leaf-name collisions across
+                    // different subfolders, so "found: yes" alone can't
+                    // confirm the RIGHT file was matched, only that SOME
+                    // file was.
+                    var label = string.IsNullOrEmpty(attempt.ResolvedFrom) || attempt.ResolvedFrom == attempt.RequestedPath
+                        ? attempt.RequestedPath
+                        : $"{attempt.RequestedPath}  ->  {attempt.ResolvedFrom}";
+                    GUILayout.Label(label, pathStyle, GUILayout.Height(rowHeight - 2f), GUILayout.MaxWidth(Mathf.Max(32f, width - 60f)));
+                    GUILayout.EndHorizontal();
+                }
+                GUILayout.EndScrollView();
+                SC2TerrainShell.EndUnifiedPanelBox();
+            }
+            EditorGUILayout.Space(6);
+        }
+
+        var meshRenderer = entry.Root.GetComponent<MeshRenderer>();
+        if (meshRenderer != null)
+        {
+            entry.MaterialsExpanded = EditorGUILayout.Foldout(entry.MaterialsExpanded, "Materials", true, EditorStyles.foldout);
+            var mats = meshRenderer.sharedMaterials;
+            for (var i = 0; entry.MaterialsExpanded && i < mats.Length; i++)
+            {
+                var mat = mats[i];
+                if (mat == null) continue;
+
+                SC2TerrainShell.BeginUnifiedPanelBox();
+                GUILayout.Label(mat.name, EditorStyles.miniBoldLabel);
+                var key = entry.DisplayName + ":" + i;
+                DrawMaterialTextureSlot(entry, i, mat, "_Diffuse1", "Diffuse1", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_Diffuse2", "Diffuse2", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_Normal1", "Normal1", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_Normal2", "Normal2", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_Mask1", "Mask1", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_Mask2", "Mask2", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_Ramp", "Ramp", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_RNMMask0", "RNM Mask 0", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_RNMMask1", "RNM Mask 1", key);
+                DrawMaterialTextureSlot(entry, i, mat, "_RNMMask2", "RNM Mask 2", key);
+
+                if (mat.HasProperty("_EnableRNM"))
+                {
+                    // Real, complete 12-flag set (56-map corpus survey) —
+                    // was only 4 of these before. REFLECT/CHROMATIC_DISPERSION
+                    // have no shader property at all (confirmed unused by
+                    // both terrain.hlsl and global_constants.hlsl), so they
+                    // aren't offered here — there'd be nothing for the toggle
+                    // to actually control.
+                    GUILayout.Label("Shader Setup", EditorStyles.miniLabel);
+
+                    // The Textured/RNM preview toolbar (top of the viewport)
+                    // and this checkbox are two genuinely independent
+                    // things — the toolbar is only a debug DISPLAY mode
+                    // (ApplyPreviewModeToImportedTerrain force-overrides the
+                    // live _EnableRNM shader property on every material for
+                    // a side-by-side comparison view), while this checkbox
+                    // is the real, persistent, EXPORTED RNM_LIGHTING value.
+                    // Reading/writing the live _EnableRNM property directly
+                    // here would make this checkbox change every time the
+                    // toolbar changes, so it would never actually be
+                    // independent, just delayed. Reads/writes
+                    // entry.OriginalEnableRnm directly instead, with
+                    // NO reference to the live material property at all —
+                    // this checkbox's own visual state (and therefore what
+                    // gets exported, via AuthoredEnableRnm/
+                    // SyncShaderSetupAndStateFromScene) no longer has any
+                    // connection whatsoever to the currently-selected
+                    // toolbar mode. It intentionally does not preview the
+                    // live 3D effect of toggling it while a forcing debug
+                    // mode (Textured/RNM) is selected — that's what the
+                    // toolbar itself is for.
+                    if (entry.OriginalEnableRnm != null && i < entry.OriginalEnableRnm.Length)
+                    {
+                        var authoredRnm = entry.OriginalEnableRnm[i] > 0.5f;
+                        var newAuthoredRnm = GUILayout.Toggle(authoredRnm, "RNM Lighting");
+                        if (newAuthoredRnm != authoredRnm)
+                        {
+                            RecordImportedTerrainsUndo();
+                            entry.OriginalEnableRnm[i] = newAuthoredRnm ? 1f : 0f;
+                        }
+                    }
+                    else
+                    {
+                        // No persistent authored value available for this
+                        // entry (shouldn't happen for anything imported
+                        // after this fix) — fall back to the old
+                        // toolbar-tied behavior rather than hiding the
+                        // control entirely.
+                        SetMaterialFlag(mat, "_EnableRNM", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableRNM"), "RNM Lighting"));
+                    }
+                    SetMaterialFlag(mat, "_EnableAmbient", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableAmbient"), "Ambient Lighting"));
+                    SetMaterialFlag(mat, "_EnableDiffuseLighting", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableDiffuseLighting"), "Diffuse Lighting"));
+                    SetMaterialFlag(mat, "_EnableSpecularLighting", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableSpecularLighting"), "Specular Lighting"));
+                    SetMaterialFlag(mat, "_EnableBlending", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableBlending"), "Blending"));
+                    SetMaterialFlag(mat, "_EnableFog", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableFog"), "Fog"));
+                    SetMaterialFlag(mat, "_EnableGlow", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableGlow"), "Glow"));
+                    SetMaterialFlag(mat, "_EnableEnvironmentMapping", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableEnvironmentMapping"), "Environment Mapping"));
+                    SetMaterialFlag(mat, "_EnableDynamicShadows", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableDynamicShadows"), "Dynamic Shadows"));
+                    SetMaterialFlag(mat, "_EnableInfiniteDistance", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableInfiniteDistance"), "Infinite Distance"));
+
+                    var alphaTestOn = GetMaterialFlag(mat, "_EnableAlphaTest");
+                    var newAlphaTestOn = GUILayout.Toggle(alphaTestOn, "Alpha Test");
+                    SetMaterialFlag(mat, "_EnableAlphaTest", newAlphaTestOn);
+                    if (newAlphaTestOn && mat.HasProperty("_AlphaTestThreshold"))
+                    {
+                        var threshold = mat.GetFloat("_AlphaTestThreshold");
+                        var newThreshold = EditorGUILayout.Slider("Alpha Test Threshold", threshold, 0f, 255f);
+                        if (!Mathf.Approximately(newThreshold, threshold))
+                        {
+                            RecordImportedTerrainsUndo();
+                            mat.SetFloat("_AlphaTestThreshold", newThreshold);
+                        }
+                    }
+
+                    if (mat.HasProperty("_TextureScroll"))
+                    {
+                        var scroll = mat.GetVector("_TextureScroll");
+                        var newScroll = EditorGUILayout.Vector2Field("Texture Scroll", new Vector2(scroll.x, scroll.y));
+                        if (newScroll.x != scroll.x || newScroll.y != scroll.y)
+                        {
+                            RecordImportedTerrainsUndo();
+                            mat.SetVector("_TextureScroll", new Vector4(newScroll.x, newScroll.y, 0, 0));
+                        }
+                    }
+
+                    if (mat.HasProperty("_SrcBlend"))
+                    {
+                        var stateOptions = new[] { "None", "TerrainAlphaBlendState", "TerrainAdditiveState", "TerrainOpaqueState" };
+                        var currentState = SC2TerrainMaterialFactory.ReverseLookupBlendState(mat) ?? "None";
+                        var stateIndex = System.Array.IndexOf(stateOptions, currentState);
+                        if (stateIndex < 0) stateIndex = 0;
+                        var newStateIndex = EditorGUILayout.Popup("State", stateIndex, stateOptions, SC2UiScale.PopupStyle());
+                        if (newStateIndex != stateIndex)
+                        {
+                            RecordImportedTerrainsUndo();
+                            SC2TerrainMaterialFactory.ApplyBlendState(mat, stateOptions[newStateIndex] == "None" ? null : stateOptions[newStateIndex]);
+                        }
+                    }
+                }
+                SC2TerrainShell.EndUnifiedPanelBox();
+            }
+        }
+
+        EditorGUILayout.Space(8);
+        if (GUILayout.Button("Remove From Scene", GUILayout.Height(26), GUILayout.Width(width), GUILayout.MaxWidth(width)))
+        {
+            // Deactivated, not destroyed — see _importedTerrainsRemoved's own
+            // doc comment: this is what makes "Remove" undoable at all,
+            // rather than requiring a fresh re-import to bring it back.
+            RecordImportedTerrainsUndo();
+            entry.Root.SetActive(false);
+            _importedTerrainsRemoved.Add(entry);
+            _importedTerrains.RemoveAt(_selectedImportedTerrain);
+            _selectedImportedTerrain = -1;
+            // The live height grid must stop including this terrain on the
+            // next paint.
+            _terrainShell?.InvalidateLiveHeightGrid();
+        }
+    }
+
+    private void OpenBatchImportDiagnostics()
+    {
+#if UNITY_EDITOR
+        InvokeEditorStaticMethod("SC2VanillaImportDiagnostics", "RunFromMenu", "Batch import diagnostics started.");
+#else
+        // In a build, "Diagnostics" and "Import" are the same runtime
+        // pipeline (the unified SC2MapImportOrchestrator, no UnityEditor
+        // dependency) — its own per-stage OK/FAIL breakdown IS the
+        // diagnostics, so just open the same panel used for a real import.
+        OpenMapDocumentImportPanel();
+#endif
+    }
+
+    private void OpenGameViewUiBootstrap() => InvokeEditorStaticMethod("SC2GameViewEditorBootstrap", "EnsureGameViewUi", "Game View UI ensured.");
+
+    private void InvokeEditorStaticMethod(string typeName, string methodName, string successStatus)
+    {
+#if UNITY_EDITOR
+        try
+        {
+            System.Type type = null;
+            foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                System.Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex) { types = ex.Types; }
+
+                foreach (var candidate in types)
+                {
+                    if (candidate != null && candidate.Name == typeName)
+                    {
+                        type = candidate;
+                        break;
+                    }
+                }
+                if (type != null) break;
+            }
+
+            if (type == null)
+            {
+                SetStatus($"Editor type not found: {typeName}");
+                return;
+            }
+
+            var method = type.GetMethod(methodName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            if (method == null)
+            {
+                SetStatus($"Editor method not found: {typeName}.{methodName}");
+                return;
+            }
+
+            method.Invoke(null, null);
+            SetStatus(successStatus);
+        }
+        catch (System.Exception ex)
+        {
+            var inner = ex is System.Reflection.TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : ex;
+            SetStatus($"Failed to invoke {typeName}.{methodName}: {inner.Message}");
+            Debug.LogError($"[SC2] Failed to invoke {typeName}.{methodName}: {inner}");
+        }
+#else
+        SetStatus($"{typeName}.{methodName} is an Editor-only tool — not available in a standalone build.");
+#endif
+    }
+
+    private void HandleGameViewNavigation()
+    {
+        if (!EnableGameViewNavigation)
+            return;
+
+        var e = Event.current;
+        if (e == null)
+            return;
+        if (e.type == EventType.Used)
+            return;
+
+        // When the mouse is over the GameView UI, consume all navigation
+        // events so they don't propagate to the SceneView OnSceneGUI.
+        if (IsMouseOverUi(e.mousePosition))
+        {
+            if (e.type == EventType.MouseDown || e.type == EventType.MouseUp || e.type == EventType.MouseDrag || e.type == EventType.ScrollWheel)
+                e.Use();
+            return;
+        }
+
+        if (e.type == EventType.ScrollWheel)
+        {
+            ZoomCamera(e.delta.y);
+            e.Use();
+            return;
+        }
+
+        if (e.type == EventType.KeyDown && e.keyCode == KeyCode.F)
+        {
+            FocusCamera();
+            e.Use();
+            return;
+        }
+
+        if (e.type == EventType.MouseDown)
+        {
+            _lastMouse = e.mousePosition;
+            var shiftPressed = e.shift || Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            _orbiting = e.button == 2 && !shiftPressed;
+            _panning = e.button == 2 && shiftPressed;
+            _flying = e.button == 1 && !e.alt;
+
+            if (!_orbiting && !_panning && !_flying && e.button == 0)
+                HandleViewportClick(e);
+        }
+
+        if (e.type == EventType.MouseUp || e.rawType == EventType.MouseUp)
+        {
+            _orbiting = false;
+            _panning = false;
+            _flying = false;
+        }
+
+        if (e.type == EventType.MouseDrag && (_orbiting || _panning))
+        {
+            var previousMouse = _lastMouse;
+            var delta = e.mousePosition - _lastMouse;
+            _lastMouse = e.mousePosition;
+            var shiftPressed = e.shift || Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
+            if (_panning || shiftPressed)
+            {
+                _orbiting = false;
+                _panning = true;
+                PanCamera(previousMouse, e.mousePosition, delta);
+            }
+            else
+            {
+                OrbitCamera(delta);
+            }
+
+            e.Use();
+        }
+
+        if (e.type == EventType.KeyDown && _flying)
+        {
+            if (FlyCamera(e.keyCode))
+                e.Use();
+        }
+    }
+
+    /// <summary>Global Undo/Redo/Save (Ctrl+Z/Y/S), checked and — if matched
+    /// — consumed BEFORE any panel draws this frame. Deliberately called
+    /// early in OnGUI (before DrawHeader/DrawMainPanel), NOT from
+    /// HandleHotkeys() below (which runs much later, after every panel this
+    /// frame has already drawn). With a Collision2
+    /// numeric field (e.g. "Polygon Budget"/"Height Offset",
+    /// SC2Numeric_-named) still holding keyboard focus — which Unity IMGUI
+    /// keeps indefinitely once clicked into, until something else
+    /// explicitly claims it — Ctrl+Z would otherwise do nothing, even if the
+    /// checks inside HandleHotkeys() were simply reordered to run before its
+    /// own text-field-focus guard, since reordering only changes the
+    /// order of checks WITHIN HandleHotkeys(); it doesn't change WHEN
+    /// HandleHotkeys() itself runs. Unity's native TextField/FloatField
+    /// controls implement their OWN internal Ctrl+Z (undo the last typed
+    /// character) whenever they hold keyboard focus, and consume the
+    /// KeyDown event — marking it EventType.Used — as part of DRAWING
+    /// themselves inside DrawMainPanel, which runs before HandleHotkeys()
+    /// is ever called. By the time HandleHotkeys() checked
+    /// e.type == EventType.KeyDown, the event was already Used and the
+    /// whole block that calls HandleHotkeys() (gated on
+    /// "Event.current.type != EventType.Used") was skipped outright.
+    /// Calling this method here, before any panel draws, gives the global
+    /// document Undo/Redo/Save first claim on the event regardless of what
+    /// currently has keyboard focus.</summary>
+    private void HandleGlobalUndoRedoSaveHotkey()
+    {
+        if (!EnableHotkeys || _flying)
+            return;
+        var e = Event.current;
+        if (e == null || e.type != EventType.KeyDown)
+            return;
+        if (e.control && !e.shift && e.keyCode == KeyCode.Z) { UndoTerrainEdit(); e.Use(); return; }
+        if (e.control && (e.keyCode == KeyCode.Y || (e.shift && e.keyCode == KeyCode.Z))) { RedoTerrainEdit(); e.Use(); return; }
+        if (e.control && e.keyCode == KeyCode.S) { SaveActiveTerrain(); e.Use(); }
+    }
+
+    private void HandleHotkeys()
+    {
+        if (!EnableHotkeys)
+            return;
+
+        var e = Event.current;
+        if (e == null || e.type != EventType.KeyDown)
+            return;
+
+        if (_flying)
+            return;
+
+        // Ctrl+Z/Y/S must be checked in HandleGlobalUndoRedoSaveHotkey(),
+        // called much earlier in OnGUI (before DrawMainPanel), not here —
+        // reordering the checks within THIS method alone would not be
+        // enough (Ctrl+Z would still be silently blocked with a Collision2
+        // numeric field focused), because Unity's native TextField/FloatField controls implement
+        // their OWN internal Ctrl+Z (undo last typed character) and consume
+        // the KeyDown event as part of DRAWING themselves — which happens
+        // in DrawMainPanel, well before this method (called later in the
+        // same OnGUI) ever sees the event. See that method's doc comment
+        // for the full explanation.
+
+        // Was #if UNITY_EDITOR-gated, so this guard was silently absent from
+        // Build compiles - typing e.g. "s" into the Map Name field also fired
+        // the Scale-tool hotkey in a real Build, but not in the Editor.
+        // UnityEditor.EditorGUIUtility.editingTextField resolves correctly in
+        // both contexts (the real UnityEditor API in-Editor, a
+        // GUIUtility.keyboardControl != 0-based Build-only shim otherwise —
+        // see UnityEditorRuntimeShim.cs), same as SC2TerrainShell.
+        // HandleKeyboardShortcut's own unconditional use of it.
+        var focusedControl = GUI.GetNameOfFocusedControl();
+        if (EditorGUIUtility.editingTextField || (!string.IsNullOrEmpty(focusedControl) && focusedControl.StartsWith("SC2Numeric_")))
+            return;
+
+#if !UNITY_EDITOR
+        // True exclusive/borderless fullscreen: no native OS window control can
+        // do this (Windows' own maximize keeps the title bar + taskbar), so it
+        // needs a keyboard shortcut rather than an in-UI button next to the
+        // native title bar. F11 is the conventional fullscreen-toggle key.
+        if (e.keyCode == KeyCode.F11) { SC2RuntimeWindow.ToggleFullscreen(); e.Use(); return; }
+#endif
+
+        // G removed entirely as a hotkey per direct instruction — moving an
+        // already-selected prop is unconditional default behavior now (see
+        // SC2ObjectsShell's canMove), no "Move tool" to switch into. R/S
+        // are no longer global tool-switch keys either — SC2ObjectsShell.
+        // OnGameViewGUI now binds them directly to an interactive rotate/
+        // scale gesture on the current Props selection (only S/R, nothing
+        // else) instead of a persistent _tool state nothing else in the
+        // codebase ever actually read (Rotate/Scale were dead tool states
+        // before this change — confirmed via full-repo search).
+        if (e.keyCode == KeyCode.M) { SetTool("Measure"); e.Use(); return; }
+        if (e.keyCode == KeyCode.F) { FocusCamera(); e.Use(); return; }
+        if (e.keyCode == KeyCode.Home) { ResetView(); e.Use(); return; }
+        if (e.keyCode == KeyCode.Tab)
+        {
+            _mainTab = (_mainTab + 1) % GameMainTabs.Length;
+            _subTab = 0;
+            SetStatus("Tab selected: " + GameMainTabs[_mainTab]);
+            e.Use();
+        }
+    }
+
+    private bool IsMouseOverUi(Vector2 mouse)
+    {
+        if (mouse.y <= HeaderHeight)
+            return true;
+        if (ShowPanel && _panelRect.Contains(mouse))
+            return true;
+        if (_statusRect.Contains(mouse))
+            return true;
+        if (_navigationGizmoRect.Contains(mouse))
+            return true;
+        if (IsMouseOverOpenMenu(mouse))
+            return true;
+
+        return false;
+    }
+
+    private bool IsMouseOverOpenMenu(Vector2 mouse)
+    {
+        // _openMenuRect is recorded by DrawMenuPanel from the rect actually drawn,
+        // so hit-testing can never drift from rendering again (the old copy-pasted
+        // hardcoded 260px rects had already diverged from the drawn cards).
+        return AnyMenuOpen() && _openMenuRect.Contains(mouse);
+    }
+
+    private void HandleViewportClick(Event e)
+    {
+        if (_tool != "Select")
+            return;
+
+        if (!_viewportRect.Contains(e.mousePosition))
+            return;
+
+        var cam = ResolveCamera();
+        if (cam == null)
+            return;
+
+        var ray = SC2TopViewMirror.ScreenPointToRay(cam, e.mousePosition);
+
+        // Imported terrain.bdf objects have a real MeshCollider (for
+        // Costs/Objects/drag height-query raycasts) - but _tool never
+        // actually changes away from its "Select" default anywhere in this
+        // file, so THIS click-to-select handler also runs on every ordinary
+        // viewport click regardless of which tab is active, and that
+        // collider would otherwise get silently selected on every Costs
+        // paint / Objects placement click. Selecting it then hijacks
+        // GetViewPivot() (used by orbit/pan) to the terrain's raw
+        // transform.position instead of the actual clicked ground point -
+        // for an imported terrain repositioned away from its
+        // mesh-authored origin, orbiting around that far-away point looks
+        // like the camera suddenly flying off. Terrain has no meaningful
+        // generic-Selection-based editing in this UI anyway (it's edited
+        // via the dedicated Terrain/Costs/Collision2 tabs, never via the
+        // Unity Inspector), so it's excluded from this raycast entirely
+        // rather than allowed to win. Imported decals.bdf meshes have the
+        // exact same real MeshRenderer/bounds and would hit this same bug —
+        // they must be included in this same exclusion check (rather than a
+        // second parallel one), or PickRendererByBounds would happily pick
+        // one and GetViewPivot() would jump orbit/pan to its raw
+        // transform.position.
+        var hits = Physics.RaycastAll(ray, 100000f);
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+        foreach (var hit in hits)
+        {
+            if (IsGenericSelectionExcluded(hit.collider.gameObject))
+                continue;
+            Selection.activeGameObject = hit.collider.gameObject;
+            SetStatus("Selected: " + hit.collider.gameObject.name);
+            e.Use();
+            return;
+        }
+
+        var picked = PickRendererByBounds(ray);
+        if (picked != null)
+        {
+            Selection.activeGameObject = picked;
+            SetStatus("Selected renderer: " + picked.name);
+            e.Use();
+        }
+        else
+        {
+            SetStatus("Nothing selected");
+        }
+    }
+
+    /// <summary>See HandleViewportClick's own comment — excludes imported
+    /// terrain.bdf AND decals.bdf roots from generic viewport
+    /// object-selection (both would otherwise hijack GetViewPivot() via
+    /// Selection.activeTransform and break orbit/pan). Same reasoning
+    /// covers the background-terrain preview's own MeshCollider — its
+    /// collider exists purely for SC2BackgroundEditMode's CPU brush
+    /// raycast, never for generic selection.</summary>
+    private bool IsGenericSelectionExcluded(GameObject go)
+    {
+        if (go != null && go.GetComponentInParent<SC2DecalAuthoredPreviewMarker>() != null) return true;
+        if (_importedDecalsRoots.Contains(go)) return true;
+        if (SC2BackgroundTerrainPreview.IsPreviewObject(go)) return true;
+        foreach (var entry in _importedTerrains)
+            if (entry?.Root == go) return true;
+        return false;
+    }
+
+    private GameObject PickRendererByBounds(Ray ray)
+    {
+        var renderers = Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        GameObject best = null;
+        var bestDistance = float.MaxValue;
+
+        for (var i = 0; i < renderers.Length; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null || !renderer.enabled || renderer.gameObject == gameObject || IsGenericSelectionExcluded(renderer.gameObject))
+                continue;
+
+            float distance;
+            if (!renderer.bounds.IntersectRay(ray, out distance))
+                continue;
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = renderer.gameObject;
+            }
+        }
+
+        return best;
+    }
+
+    private Camera ResolveCamera()
+    {
+        var cam = GetComponent<Camera>();
+        if (cam != null)
+            return cam;
+
+        cam = GetComponentInParent<Camera>();
+        if (cam != null)
+            return cam;
+
+        if (Camera.main != null)
+            return Camera.main;
+
+        return FindFirstObjectByType<Camera>();
+    }
+
+    private void OrbitCamera(Vector2 delta)
+    {
+        var cam = ResolveCamera();
+        if (cam == null)
+            return;
+
+        var pivot = GetViewPivot();
+        // Mirroring the render vertically (SC2TopViewMirror) reverses the
+        // apparent rotational sense of any on-screen circular motion (a
+        // general property of 2D reflections - worked out algebraically: a
+        // point moving as (cos t, sin t) in screen space, Y-down convention,
+        // traces clockwise; negating just Y gives (cos t, -sin t), which
+        // traces counter-clockwise) - so with the mirror active, dragging
+        // right made the view yaw the "wrong" way. Negate delta.x here to
+        // compensate, matching the un-mirrored feel. Pitch (delta.y) isn't
+        // touched: it doesn't trace the same kind of in-plane screen
+        // rotation near top-down.
+        var yawDelta = SC2TopViewMirror.Active ? -delta.x : delta.x;
+        cam.transform.RotateAround(pivot, Vector3.up, yawDelta * 0.25f);
+        cam.transform.RotateAround(pivot, cam.transform.right, -delta.y * 0.25f);
+        // Deliberately does NOT touch SC2TopViewMirror.Active. An earlier
+        // version cleared it here (even behind an orientation threshold),
+        // which meant starting to orbit away from Top un-mirrored the
+        // render mid-drag - a jump/flicker the mirror should never produce
+        // on its own. Only an explicit view switch (LookAlong's other
+        // presets) turns it off now; free orbit leaves whatever mirror
+        // state was already in effect alone, however far it rotates.
+    }
+
+    private void PanCamera(Vector2 previousMouse, Vector2 currentMouse, Vector2 delta)
+    {
+        var cam = ResolveCamera();
+        if (cam == null)
+            return;
+
+        if (cam.orthographic)
+        {
+            var scale = Mathf.Max(0.1f, _mapViewSize) * 0.0025f;
+            _mapViewCenter += (-cam.transform.right * delta.x + cam.transform.up * delta.y) * scale;
+            _mapViewCenter.y = 0f;
+            StabilizeMapCameraPosition();
+            return;
+        }
+
+        Vector3 previousGround;
+        Vector3 currentGround;
+        if (TryGetGroundPoint(cam, previousMouse, out previousGround) && TryGetGroundPoint(cam, currentMouse, out currentGround))
+        {
+            cam.transform.position += previousGround - currentGround;
+            return;
+        }
+
+        var perspectiveScale = Mathf.Max(0.1f, Vector3.Distance(cam.transform.position, GetViewPivot())) * 0.0015f;
+        cam.transform.position += (-cam.transform.right * delta.x + cam.transform.up * delta.y) * perspectiveScale;
+    }
+
+    private static bool TryGetGroundPoint(Camera cam, Vector2 guiMousePosition, out Vector3 point)
+    {
+        point = Vector3.zero;
+        if (cam == null)
+            return false;
+
+        var ray = SC2TopViewMirror.ScreenPointToRay(cam, guiMousePosition);
+        var ground = new Plane(Vector3.up, Vector3.zero);
+        float enter;
+        if (!ground.Raycast(ray, out enter))
+            return false;
+
+        point = ray.GetPoint(enter);
+        return true;
+    }
+
+    private void ZoomCamera(float delta)
+    {
+        var cam = ResolveCamera();
+        if (cam == null)
+            return;
+
+        if (cam.orthographic)
+        {
+            _mapViewSize = Mathf.Clamp(_mapViewSize * (1f + delta * 0.06f * ZoomSpeed), 16f, 8192f);
+            cam.orthographicSize = _mapViewSize;
+        }
+        else
+            cam.transform.position += cam.transform.forward * (-delta * 2f * ZoomSpeed);
+    }
+
+    private void LookAlong(Vector3 cameraForward, Vector3 up, string label)
+    {
+        var cam = ResolveCamera();
+        if (cam == null)
+            return;
+
+        var pivot = GetViewPivot();
+        var targetRotation = Quaternion.LookRotation(cameraForward.normalized, up.normalized);
+        Vector3 targetPosition;
+        if (cam.orthographic && cameraForward.normalized == Vector3.down)
+        {
+            _mapViewCenter = new Vector3(pivot.x, 0f, pivot.z);
+            targetPosition = _mapViewCenter - (targetRotation * Vector3.forward) * DefaultTopDownHeight;
+        }
+        else
+        {
+            var distance = Mathf.Max(DefaultTopDownHeight, Vector3.Distance(cam.transform.position, pivot));
+            targetPosition = pivot - (targetRotation * Vector3.forward) * distance;
+        }
+        StartViewTransition(cam, targetPosition, targetRotation);
+        // Only "Top" matches the game's own top-down screen convention (see
+        // SC2TopViewMirror) - every other preset (X/-X/Z/-Z/Bottom) must
+        // leave it off.
+        SC2TopViewMirror.Active = label == "Top";
+        SetStatus("View axis: " + label);
+    }
+
+    /// <summary>True from OnEnable until the first Update()/EditorTick() —
+    /// applies ResetView(instant: true) exactly once so the very first
+    /// rendered frame is already in the correct, mirrored top-down
+    /// orientation, not just after the animated ResetView() the button
+    /// normally triggers. Deferred out of OnEnable itself because the
+    /// resolved Camera isn't guaranteed ready that early (see ResolveCamera's
+    /// GetComponentInParent/Camera.main/FindFirstObjectByType fallbacks).</summary>
+    private bool _pendingInitialTopView;
+
+    private void ApplyPendingInitialTopView()
+    {
+        if (!_pendingInitialTopView) return;
+        if (ResolveCamera() == null) return;
+        ResetView(instant: true);
+        _pendingInitialTopView = false;
+    }
+
+    /// <summary>
+    /// Returns the camera to its starting top-down overview — pan, zoom and
+    /// rotation all reset to the same defaults used on first load. Unlike
+    /// LookAlong (used by the gizmo's axis balls), this ignores the current
+    /// selection/pivot entirely: it's a hard reset, not a "look from this
+    /// axis toward whatever I'm currently focused on".
+    /// </summary>
+    private void ResetView() => ResetView(instant: false);
+
+    /// <param name="instant">Skips the animated fly-to transition and snaps
+    /// the transform directly — used once, on the very first tick after
+    /// load (see _pendingInitialTopView), so the correct top-down
+    /// orientation AND its mirror are both already in effect on the first
+    /// rendered frame, not only after the user manually presses Reset
+    /// View.</param>
+    private void ResetView(bool instant)
+    {
+        var cam = ResolveCamera();
+        if (cam == null)
+            return;
+
+        _mapViewCenter = DefaultMapCenter;
+        _mapViewSize = 512f;
+        if (cam.orthographic)
+            cam.orthographicSize = _mapViewSize;
+
+        var targetRotation = Quaternion.LookRotation(Vector3.down, Vector3.forward);
+        var targetPosition = _mapViewCenter - (targetRotation * Vector3.forward) * DefaultTopDownHeight;
+        if (instant)
+        {
+            _viewTransitionActive = false;
+            cam.transform.SetPositionAndRotation(targetPosition, targetRotation);
+        }
+        else
+        {
+            StartViewTransition(cam, targetPosition, targetRotation);
+        }
+        SC2TopViewMirror.Active = true; // ResetView always lands on the "Top" orientation
+        SetStatus(instant ? "View ready." : "View reset.");
+    }
+
+    /// <summary>
+    /// Mirrors the camera's vertical screen axis (see SC2TopViewMirror's
+    /// doc comment) for exactly this camera's own render call — nothing
+    /// else. camera.projectionMatrix and GL.invertCulling are both reset
+    /// again in OnPostRender below, so no other rendering (other cameras,
+    /// UI, gizmos) is ever affected, and cam.ScreenPointToRay/
+    /// WorldToScreenPoint see the camera's normal, unmirrored projection at
+    /// every other point in the frame (OnGUI, input handling) — those go
+    /// through SC2TopViewMirror.ScreenPointToRay/WorldToGui instead, which
+    /// compensate without needing this matrix held mirrored.
+    /// </summary>
+    private void ApplyTopViewMirrorPreRender(Camera cam)
+    {
+        if (!SC2TopViewMirror.Active || cam != ResolveCamera()) return;
+
+        var m = cam.projectionMatrix;
+        m.m11 *= -1f; // flip the vertical (Z-on-screen) axis only — m00 (X) untouched
+        cam.projectionMatrix = m;
+        GL.invertCulling = true; // compensate winding for the mirrored projection
+    }
+
+    private void ApplyTopViewMirrorPostRender(Camera cam)
+    {
+        if (!SC2TopViewMirror.Active || cam != ResolveCamera()) return;
+
+        cam.ResetProjectionMatrix();
+        GL.invertCulling = false;
+    }
+
+    private void StartViewTransition(Camera cam, Vector3 targetPosition, Quaternion targetRotation)
+    {
+        _viewTransitionActive = true;
+        _viewTransitionStart = Time.realtimeSinceStartup;
+        _viewTransitionStartPosition = cam.transform.position;
+        _viewTransitionStartRotation = cam.transform.rotation;
+        _viewTransitionTargetPosition = targetPosition;
+        _viewTransitionTargetRotation = targetRotation;
+    }
+
+    private void TickViewTransition()
+    {
+        if (!_viewTransitionActive)
+            return;
+
+        var cam = ResolveCamera();
+        if (cam == null)
+        {
+            _viewTransitionActive = false;
+            return;
+        }
+
+        var t = Mathf.Clamp01((Time.realtimeSinceStartup - _viewTransitionStart) / ViewTransitionDuration);
+        t = t * t * (3f - 2f * t);
+        cam.transform.position = Vector3.Lerp(_viewTransitionStartPosition, _viewTransitionTargetPosition, t);
+        cam.transform.rotation = Quaternion.Slerp(_viewTransitionStartRotation, _viewTransitionTargetRotation, t);
+
+        if (t >= 1f)
+            _viewTransitionActive = false;
+
+        RepaintGameView();
+    }
+
+    private Vector3 GetViewPivot()
+    {
+        var selected = Selection.activeTransform;
+        if (selected != null)
+            return selected.position;
+
+        var cam = ResolveCamera();
+        if (cam != null)
+        {
+            var ray = cam.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+            var ground = new Plane(Vector3.up, Vector3.zero);
+            float enter;
+            if (ground.Raycast(ray, out enter))
+                return ray.GetPoint(enter);
+        }
+
+        return DefaultMapCenter;
+    }
+
+    private bool FlyCamera(KeyCode key)
+    {
+        var cam = ResolveCamera();
+        if (cam == null)
+            return false;
+
+        var direction = Vector3.zero;
+        if (key == KeyCode.W) direction += cam.transform.forward;
+        if (key == KeyCode.S) direction -= cam.transform.forward;
+        if (key == KeyCode.D) direction += cam.transform.right;
+        if (key == KeyCode.A) direction -= cam.transform.right;
+        if (key == KeyCode.E) direction += Vector3.up;
+        if (key == KeyCode.Q) direction -= Vector3.up;
+
+        if (direction == Vector3.zero)
+            return false;
+
+        cam.transform.position += direction.normalized * 2f;
+        return true;
+    }
+
+    private void StabilizeMapCameraPosition()
+    {
+        var cam = ResolveCamera();
+        if (cam == null || !cam.orthographic)
+            return;
+
+        _mapViewSize = Mathf.Clamp(_mapViewSize <= 0f ? cam.orthographicSize : _mapViewSize, 16f, 8192f);
+        cam.transform.position = _mapViewCenter - cam.transform.forward * DefaultTopDownHeight;
+        cam.orthographicSize = _mapViewSize;
+        cam.nearClipPlane = 0.1f;
+        cam.farClipPlane = 10000f;
+    }
+
+    private void FocusCamera()
+    {
+        var cam = ResolveCamera();
+        var selection = Selection.activeTransform;
+        if (cam == null || selection == null)
+            return;
+
+        var bounds = CalculateBounds(selection.gameObject);
+        if (cam.orthographic)
+        {
+            _mapViewCenter = new Vector3(bounds.center.x, 0f, bounds.center.z);
+            _mapViewSize = Mathf.Max(16f, Mathf.Max(bounds.extents.x, bounds.extents.z) * 2.5f);
+            StabilizeMapCameraPosition();
+        }
+        else
+        {
+            cam.transform.position = bounds.center - cam.transform.forward * Mathf.Max(20f, bounds.extents.magnitude * 2.5f);
+        }
+        Status = "Focused: " + selection.name;
+    }
+
+    private static Bounds CalculateBounds(GameObject go)
+    {
+        var renderers = go.GetComponentsInChildren<Renderer>();
+        if (renderers.Length == 0)
+            return new Bounds(go.transform.position, Vector3.one * 8f);
+
+        var bounds = renderers[0].bounds;
+        for (var i = 1; i < renderers.Length; i++)
+            bounds.Encapsulate(renderers[i].bounds);
+        return bounds;
+    }
+
+    private void SyncOverlayFromContext()
+    {
+        if (SharedContext == null)
+            return;
+
+        if (OverlayTerrain != SharedContext.OverlayTerrain
+         || OverlayHfield != SharedContext.OverlayHfield
+         || OverlayCosts != SharedContext.OverlayCosts
+         || OverlayCollision2 != SharedContext.OverlayCollision2
+         || OverlayProps != SharedContext.OverlayProps
+         || OverlayMarkers != SharedContext.OverlayMarkers
+         || OverlayUnits != SharedContext.OverlayUnits
+         || OverlayGraphLand != SharedContext.OverlayGraphLand
+         || OverlayGraphAir != SharedContext.OverlayGraphAir
+         || OverlayGraphNaval != SharedContext.OverlayGraphNaval
+         || OverlayGraphAmphibious != SharedContext.OverlayGraphAmphibious
+         || OverlayChains != SharedContext.OverlayChains
+         || OverlayAreas != SharedContext.OverlayAreas
+         || OverlayWater != SharedContext.OverlayWater
+         || OverlayRNM != SharedContext.OverlayRNM
+         || OverlayGrid != SharedContext.OverlayGrid
+         || OverlayWireframe != SharedContext.OverlayWireframe)
+        {
+            OverlayTerrain = SharedContext.OverlayTerrain;
+            OverlayHfield = SharedContext.OverlayHfield;
+            OverlayCosts = SharedContext.OverlayCosts;
+            OverlayCollision2 = SharedContext.OverlayCollision2;
+            OverlayProps = SharedContext.OverlayProps;
+            OverlayMarkers = SharedContext.OverlayMarkers;
+            OverlayUnits = SharedContext.OverlayUnits;
+            OverlayGraphLand = SharedContext.OverlayGraphLand;
+            OverlayGraphAir = SharedContext.OverlayGraphAir;
+            OverlayGraphNaval = SharedContext.OverlayGraphNaval;
+            OverlayGraphAmphibious = SharedContext.OverlayGraphAmphibious;
+            OverlayChains = SharedContext.OverlayChains;
+            OverlayAreas = SharedContext.OverlayAreas;
+            OverlayWater = SharedContext.OverlayWater;
+            OverlayRNM = SharedContext.OverlayRNM;
+            OverlayGrid = SharedContext.OverlayGrid;
+            OverlayWireframe = SharedContext.OverlayWireframe;
+        }
+    }
+
+    private void CommitOverlayToContext()
+    {
+        if (SharedContext == null)
+            return;
+
+        SharedContext.ApplyOverlayState(
+            OverlayTerrain, OverlayHfield, OverlayCosts, OverlayCollision2,
+            OverlayProps, OverlayMarkers, OverlayUnits,
+            OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
+            OverlayChains, OverlayAreas, OverlayWater, OverlayRNM, OverlayGrid, OverlayWireframe);
+    }
+}

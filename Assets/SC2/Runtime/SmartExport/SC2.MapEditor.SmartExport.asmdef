@@ -1,0 +1,17 @@
+{
+  "name": "SC2.MapEditor.SmartExport",
+  "rootNamespace": "",
+  "references": [
+    "BdfIO.Core",
+    "BdfIO.Formats"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": true
+}
