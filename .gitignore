@@ -98,3 +98,10 @@ UpgradeLog.htm
 Thumbs.db
 /Assets/SC2$f
 /Assets/SC2$f.meta
+
+# Vanilla game textures copied onto local disk by the map importer (from your
+# own gamedata install) so the Editor/Build can load them as loose files —
+# copyrighted content that must never be committed to this repository.
+/Assets/SC2Textures/*
+/Assets/SC2/Resources/SC2Textures/*
+/Assets/StreamingAssets/SC2Textures/
