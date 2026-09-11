@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Automated tests for the standalone Info.bdf Editor
+    (Tools~/InfoBdfEditor). Same source-sharing pattern as
+    Tests~/StandaloneCharacterization/SC2CharacterizationTests.csproj —
+    compiles the REAL app source (MainForm.cs/InfoBdfEditorUi.cs/Theme.cs)
+    plus the shared BdfIO/InfoFieldLimits/InfoBdfJsonDto files directly from
+    this repo, so tests always exercise exactly what's shipped.
+
+    Keep this project's OWN path short if `dotnet test` complains about
+    filename length (same caveat SC2CharacterizationTests.csproj's own
+    comment documents) — copy the whole Tests~/InfoBdfEditorTests folder to
+    a short path (e.g. C:\Temp\InfoBdfEditorTests) and run from there if
+    needed.
+
+    UI rendering tests in UiRenderRobustnessTests.cs need a real Direct3D
+    11 device (hardware or WARP software fallback, both handled by
+    MainForm itself) — they construct a real off-screen MainForm/ImGui
+    render pipeline, same one the shipped app uses, and drive it through
+    every one of its 16 tabs against every real vanilla info.bdf in the
+    corpus. VanillaCorpusPath below must point at a real
+    gamedata.scd/maps folder; tests requiring it are skipped (not failed)
+    if that path doesn't exist on the machine running them.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <IsPackable>false</IsPackable>
+    <!-- Absolute path to Assets/SC2 in the real repo — update if the repo moves. -->
+    <SC2Root>C:\Users\user\Documents\Codex\2026-07-02\c-users-user-documents-codex-2026\outputs\UnityEditorPackage\SC2_UnityEditorPackage_20260704_094503\Assets\SC2</SC2Root>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Hexa.NET.ImGui" Version="3.1.0-experimental" />
+    <PackageReference Include="Hexa.NET.ImGui.Backends" Version="3.1.0-experimental" />
+    <PackageReference Include="Hexa.NET.D3D11" Version="1.0.6" />
+    <PackageReference Include="Hexa.NET.DXGI" Version="1.0.6" />
+    <PackageReference Include="Hexa.NET.D3DCommon" Version="1.0.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(SC2Root)\Runtime\BdfIO\Core\**\*.cs" LinkBase="Source\BdfIO.Core" />
+    <Compile Include="$(SC2Root)\Runtime\BdfIO\Formats\Info\**\*.cs" LinkBase="Source\BdfIO.Formats.Info" />
+    <Compile Include="$(SC2Root)\Scripts\TerrainEditor\InfoFieldLimits.cs" Link="Source\InfoFieldLimits.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\InfoBdfJsonDto.cs" Link="Source\InfoBdfJsonDto.cs" />
+    <Compile Include="$(SC2Root)\Tools~\InfoBdfEditor\Theme.cs" Link="Source\Theme.cs" />
+    <Compile Include="$(SC2Root)\Tools~\InfoBdfEditor\MainForm.cs" Link="Source\MainForm.cs" />
+    <Compile Include="$(SC2Root)\Tools~\InfoBdfEditor\InfoBdfEditorUi.cs" Link="Source\InfoBdfEditorUi.cs" />
+    <Compile Include="$(SC2Root)\Tools~\InfoBdfEditor\AppSettings.cs" Link="Source\AppSettings.cs" />
+    <Compile Include="$(SC2Root)\Tools~\InfoBdfEditor\HelpDialog.cs" Link="Source\HelpDialog.cs" />
+    <Compile Include="$(SC2Root)\Tools~\InfoBdfEditor\HelpText.cs" Link="Source\HelpText.cs" />
+    <!-- Reused as-is from Tests~/StandaloneCharacterization — same
+         corpus-location/Skip-not-Fail convention, no need for a second
+         copy. -->
+    <Compile Include="$(SC2Root)\Tests~\StandaloneCharacterization\TestCorpus.cs" Link="Source\TestCorpus.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(SC2Root)\Tools~\InfoBdfEditor\FieldDescriptions.json" Link="FieldDescriptions.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

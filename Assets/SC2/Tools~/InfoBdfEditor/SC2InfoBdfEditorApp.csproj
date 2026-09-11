@@ -1,0 +1,121 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Standalone Info.bdf Editor — a genuinely independent Windows window (own
+    taskbar icon, minimizable/movable independently of the Unity Editor/Build
+    window), unlike Scripts/Unified/SC2InfoBdfEditorPanel.cs (a GUILayout
+    overlay glued to the same OS window as the rest of the game view). This
+    app owns real .bdf read/write directly; it does not talk to a running
+    Unity process at all. Values move between the two via a JSON export/
+    import round-trip (see InfoBdfJsonDto.cs) — no live IPC, by design.
+
+    Rendered with Dear ImGui (via Hexa.NET.ImGui), matching the same
+    immediate-mode paradigm Unity's own SC2EnvFieldGui.cs/
+    SC2InfoModelFieldDrawer.cs use — per explicit direction, chosen over
+    WinForms' native retained-mode controls specifically so this app's
+    widgets (sliders, foldouts, color pickers) behave and read like the
+    Unity-side panel's own, not like a generic Windows dialog. WinForms is
+    still used for exactly one thing: creating a real Win32 window/HWND and
+    running its message pump (System.Windows.Forms.Form) — no WinForms
+    Control is ever placed on it; every pixel inside the window is drawn by
+    ImGui via a Direct3D 11 device bound to that HWND.
+
+    Backend note: an earlier GLFW+OpenGL3 backend combination crashed with a
+    native access violation in this environment even after fixing every
+    type-bridging issue — root-caused to Dear ImGui's per-backend-DLL
+    context pointer (each ImGuiImplXxx native module has its own internal
+    context pointer that must be set explicitly via SetCurrentContext,
+    it does NOT propagate automatically across DLL boundaries just because
+    ImGui.CreateContext() was called once). Win32+D3D11 is used instead —
+    proven working here, and a more natural fit for a Windows-only tool
+    anyway. See MainForm.cs's render-loop setup for the exact
+    SetCurrentContext call sequence this depends on.
+
+    Compiles the REAL source files directly from the Unity package (via
+    absolute-path Compile Include below), same pattern as
+    Tests~/StandaloneCharacterization/SC2CharacterizationTests.csproj — so
+    this app always edits exactly the same byte layout Unity does, with zero
+    copy-drift risk.
+
+    Scope: only BdfIO.Core (container/reader/writer/zlib — the .bdf file
+    format itself) + BdfIO.Formats.Info (InfoModel/InfoBdf — just this one
+    format, not the whole Formats tree) + InfoFieldLimits.cs (slider ranges)
+    + InfoBdfJsonDto.cs (the shared export/import shape) are referenced —
+    every one of these is plain .NET, zero UnityEngine dependency.
+
+    Keep this project's OWN path short if `dotnet build`/`publish` complains
+    about filename length (same caveat SC2CharacterizationTests.csproj's own
+    comment documents) — copy the whole Tools~/InfoBdfEditor folder to a
+    short path (e.g. C:\Temp\InfoBdfEditor) and build from there if needed.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>SC2InfoBdfEditorApp</AssemblyName>
+    <RootNamespace>SC2InfoBdfEditorApp</RootNamespace>
+    <ApplicationIcon>AppIcon.ico</ApplicationIcon>
+    <!-- Do NOT publish with PublishSingleFile — confirmed via two real
+         crash reports from actual published+deployed runs that this breaks
+         native interop here. Without any fix, PublishSingleFile silently
+         drops the Hexa.NET.* native libraries (cimgui.dll, ImGuiImplWin32.dll,
+         etc.) from the publish output entirely, and the exe throws
+         DllNotFoundException the instant Hexa.NET.ImGui's static
+         constructor tries to load cimgui.dll. Adding
+         IncludeNativeLibrariesForSelfExtract=true does embed them, but
+         HexaGen.Runtime.LibraryLoader still failed with the same
+         DllNotFoundException afterward — it does not know to look in
+         PublishSingleFile's temp self-extraction directory, only next to
+         the exe (AppContext.BaseDirectory). The fix that actually works:
+         publish WITHOUT PublishSingleFile (folder output, not one exe) —
+         "dotnet publish -c Release -r win-x64 -&#45;self-contained". A normal
+         self-contained RID-specific publish copies every native
+         runtimes/win-x64/native/*.dll directly into the publish folder
+         root, right next to SC2InfoBdfEditorApp.exe, which is exactly
+         where HexaGen's loader looks. Deploy the WHOLE publish folder
+         (not just the exe) to InfoBdfEditor/ next to the game's own exe. -->
+    <!-- Absolute path to Assets/SC2 in the real repo — update if the repo moves. -->
+    <SC2Root>C:\Users\user\Documents\Codex\2026-07-02\c-users-user-documents-codex-2026\outputs\UnityEditorPackage\SC2_UnityEditorPackage_20260704_094503\Assets\SC2</SC2Root>
+    <!-- The "~" suffix only hides Tests~ from Unity's own asset database —
+         MSBuild's default recursive **/*.cs glob doesn't know that
+         convention at all, so without this exclude, this app project tries
+         to compile the xUnit test files (which reference Fact/Theory,
+         never referenced here) directly into itself. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);Tests~\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned to the matched "3.1.0-experimental" release line across all
+         four packages — confirmed via NU1605 that Backends' own dependency
+         requires a matching-or-newer core Hexa.NET.ImGui version; mixing
+         e.g. core 2.2.9 with Backends 1.0.18 restores fine but is a
+         genuinely different, untested native ABI pairing. -->
+    <PackageReference Include="Hexa.NET.ImGui" Version="3.1.0-experimental" />
+    <PackageReference Include="Hexa.NET.ImGui.Backends" Version="3.1.0-experimental" />
+    <PackageReference Include="Hexa.NET.D3D11" Version="1.0.6" />
+    <PackageReference Include="Hexa.NET.DXGI" Version="1.0.6" />
+    <PackageReference Include="Hexa.NET.D3DCommon" Version="1.0.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(SC2Root)\Runtime\BdfIO\Core\**\*.cs" LinkBase="Source\BdfIO.Core" />
+    <Compile Include="$(SC2Root)\Runtime\BdfIO\Formats\Info\**\*.cs" LinkBase="Source\BdfIO.Formats.Info" />
+    <Compile Include="$(SC2Root)\Scripts\TerrainEditor\InfoFieldLimits.cs" Link="Source\InfoFieldLimits.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\InfoBdfJsonDto.cs" Link="Source\InfoBdfJsonDto.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Field hover-tooltip source text, generated from
+         the reverse-engineering audit's mapping.csv — copied
+         next to the exe so InfoBdfEditorUi can load it at startup without
+         needing the whole audit folder shipped alongside the app. -->
+    <None Include="FieldDescriptions.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

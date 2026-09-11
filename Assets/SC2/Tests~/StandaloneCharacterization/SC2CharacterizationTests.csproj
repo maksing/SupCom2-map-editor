@@ -1,0 +1,116 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Characterization tests for SC2MapDocument_Implementation_Plan.md's "Этап 0"
+    (record CURRENT behavior before any migration). This project compiles the
+    REAL source files directly from the Unity package (via absolute-path
+    Compile Include below) rather than copies, so it always tests whatever is
+    actually shipped, with zero copy-drift risk.
+
+    Scope: only the genuinely UnityEngine-independent layers (BdfIO.Core,
+    BdfIO.Formats, SmartExport, and the plain-text Lua parsing helpers) are
+    covered here, because they are the only parts that can run in a bare
+    console/test process — everything else (SC2TerrainData being a
+    ScriptableObject, scene building, etc.) needs a live Unity Editor/Player
+    process and is covered separately by Unity Test Framework EditMode tests
+    (see Assets/SC2/Tests/EditMode) instead of duplicated here.
+
+    The project's OWN path is intentionally kept short (C:\Temp\SC2CharTests)
+    — dotnet build/test has repeatedly failed with "filename too long" when
+    its own working/output directory sits deep inside this repo's actual path
+    (Assets/SC2/Tests/... under the full outputs/UnityEditorPackage/... tree).
+    Run it from here, or copy this whole folder to another short path.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- Absolute path to Assets/SC2 in the real repo — update if the repo moves. -->
+    <SC2Root>C:\Users\user\Documents\Codex\2026-07-02\c-users-user-documents-codex-2026\outputs\UnityEditorPackage\SC2_UnityEditorPackage_20260704_094503\Assets\SC2</SC2Root>
+    <!-- Only needed for SC2LuaValue.cs's Vector3/Quaternion structs — plain
+         value types, usable outside a running Unity process as long as the
+         real CoreModule assembly supplies their definition. -->
+    <UnityEngineCoreModule>C:\Program Files\Unity\Hub\Editor\6000.0.77f1\Editor\Data\Managed\UnityEngine\UnityEngine.CoreModule.dll</UnityEngineCoreModule>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(UnityEngineCoreModule)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(SC2Root)\Runtime\BdfIO\Core\**\*.cs" LinkBase="Source\BdfIO.Core" />
+    <Compile Include="$(SC2Root)\Runtime\BdfIO\Formats\**\*.cs" LinkBase="Source\BdfIO.Formats" />
+    <Compile Include="$(SC2Root)\Runtime\SmartExport\**\*.cs" LinkBase="Source\SmartExport" />
+    <!-- Vendored KopiLua (Assets/SC2/Runtime/KopiLua/CHANGES_FROM_UPSTREAM.md)
+         — pure .NET, no Unity dependency, needed by SC2ScenarioLegacyBridge. -->
+    <Compile Include="$(SC2Root)\Runtime\KopiLua\**\*.cs" LinkBase="Source\KopiLua" />
+    <!-- Runtime-only model/blueprint parsing foundation for the unit/prop browser.
+         Keep it independent of UnityEditor and UnityEngine so it is usable in Player builds. -->
+    <Compile Include="$(SC2Root)\Runtime\GameAssets\**\*.cs" LinkBase="Source\GameAssets" />
+    <!-- 2026-07-17: SC2TerrainData.cs and its narrow dependency closure
+         (SC2LuaBlocks/SC2SaveLuaParser/SC2LuaValue/SC2ShaderFlag/
+         SC2TerrainMaterialModel among them) moved from Scripts/ and
+         Scripts/TerrainEditor/ into Scripts/Core/ so a Unity EditMode test
+         asmdef (SC2.Core.asmdef) could reference them without pulling in
+         Assembly-CSharp (which Unity doesn't allow a custom asmdef to
+         reference at all). This project still can't compile SC2TerrainData.cs
+         itself (ScriptableObject), so it continues to reference just the
+         plain-.NET files individually, now from their new path. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaBlocks.cs" Link="Source\SC2LuaBlocks.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2SaveLuaParser.cs" Link="Source\SC2SaveLuaParser.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaValue.cs" Link="Source\SC2LuaValue.cs" />
+    <Compile Include="$(SC2Root)\Scripts\SC2ScdEntryPointResolver.cs" Link="Source\SC2ScdEntryPointResolver.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2ShaderFlag.cs" Link="Source\SC2ShaderFlag.cs" />
+    <!-- Unified Import Map pipeline: SC2ScdEntryPointResolver's new
+         bytecode-aware resolution reuses these two KopiLua-based readers,
+         same reasoning as every other file above (plain .NET + KopiLua +
+         UnityEngine.Vector3/Quaternion value structs only). -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaBytecodeValue.cs" Link="Source\SC2LuaBytecodeValue.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2SaveLuaBytecodeReader.cs" Link="Source\SC2SaveLuaBytecodeReader.cs" />
+    <!-- SC2Material/SC2MaterialPair/SymmetryMode only: deliberately NOT a
+         Scripts\Core\**\*.cs glob, since that folder also contains
+         SC2TerrainData.cs itself, which pulls in a ScriptableObject
+         dependency tree this project can't compile against (Этап 0's own
+         finding). -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2TerrainMaterialModel.cs" Link="Source\SC2TerrainMaterialModel.cs" />
+    <!-- Needed by SC2ObjectsLegacyBridge; only Vector3/Quaternion/System
+         dependency, same reasoning as SC2LuaValue.cs above. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2ObjectsModel.cs" Link="Source\SC2ObjectsModel.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2MarkerDeduplication.cs" Link="Source\SC2MarkerDeduplication.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaField.cs" Link="Source\SC2LuaField.cs" />
+    <!-- SC2MapDocument_Implementation_Plan.md Этап 1 infrastructure. Every
+         file under here is either plain .NET or (Session/SC2WorkspaceState.cs)
+         only touches UnityEngine.Vector3 — a plain value struct, same
+         reasoning as SC2LuaValue.cs above — so the whole layer compiles and
+         runs standalone with no further shimming. -->
+    <Compile Include="$(SC2Root)\Scripts\MapDocument\**\*.cs" LinkBase="Source\MapDocument" />
+    <!-- References the SC2TerrainData ScriptableObject: can't compile
+         standalone; see that file's own header comment. -->
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\Terrain\SC2TerrainLegacyBridge.ScriptableObject.cs" />
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\Environment\SC2EnvironmentLegacyBridge.ScriptableObject.cs" />
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\Collision2\SC2CollisionLegacyBridge.ScriptableObject.cs" />
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\Costs\SC2CostsLegacyBridge.ScriptableObject.cs" />
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\Hfield\SC2HfieldLegacyBridge.ScriptableObject.cs" />
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\Objects\SC2ObjectsLegacyBridge.ScriptableObject.cs" />
+    <!-- Этап7.S4 (2026-07-19) reverse bridge — same reasoning, references
+         SC2TerrainData/Texture2D-resolving SC2TerrainMaterialFactory. -->
+    <Compile Remove="$(SC2Root)\Scripts\MapDocument\Domain\SC2MapDocumentToLegacyBridge.ScriptableObject.cs" />
+  </ItemGroup>
+
+</Project>
