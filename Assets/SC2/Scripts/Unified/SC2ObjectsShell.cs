@@ -719,7 +719,7 @@ public sealed class SC2ObjectsShell
     {
         var e = Event.current;
         var clickedIdx = visibleIdsInOrder.IndexOf(clickedId);
-        if (e != null && e.control)
+        if (SC2Hotkeys.ModifierHeld("Objects.SingleSelectAdditiveModifier", e))
         {
             if (!selection.Add(clickedId)) selection.Remove(clickedId);
             lastClickedIdx = clickedIdx;
@@ -741,7 +741,7 @@ public sealed class SC2ObjectsShell
     private void HandleViewportClick(HashSet<int> selection, int clickedId)
     {
         var e = Event.current;
-        if (e != null && e.control)
+        if (SC2Hotkeys.ModifierHeld("Objects.SingleSelectAdditiveModifier", e))
         {
             if (!selection.Add(clickedId)) selection.Remove(clickedId);
         }
@@ -4793,7 +4793,7 @@ public sealed class SC2ObjectsShell
     /// (_propsBrushErasing) never changes — this only affects what a
     /// click/drag actually does while Ctrl is held, exactly like a modifier
     /// key in any other paint tool.</summary>
-    private bool EffectivePropsErasing() => _propsBrushErasing || (Event.current != null && Event.current.control);
+    private bool EffectivePropsErasing() => _propsBrushErasing || SC2Hotkeys.ModifierHeld("Objects.PropsBrushEraseModifier", Event.current);
 
     private void DrawPropsBrushCursor(Camera camera, Rect viewportRect, Vector2 mousePosition)
     {
@@ -5138,17 +5138,17 @@ public sealed class SC2ObjectsShell
     {
         if (_placementKind == PlacementKind.None || !allowInput) { _placementRotating = false; return; }
 
-        if (Input.GetKeyDown(KeyCode.E))
+        if (SC2Hotkeys.GetKeyDown("Objects.LiveRotateWhilePlacing"))
         {
             _placementRotating = true;
             _placementRotationStartMouseX = Input.mousePosition.x;
             _placementRotationStartY = _placementRotationY;
         }
-        else if (Input.GetKeyUp(KeyCode.E))
+        else if (SC2Hotkeys.GetKeyUp("Objects.LiveRotateWhilePlacing"))
         {
             _placementRotating = false;
         }
-        else if (_placementRotating && Input.GetKey(KeyCode.E))
+        else if (_placementRotating && SC2Hotkeys.GetKey("Objects.LiveRotateWhilePlacing"))
         {
             _placementRotationY = _placementRotationStartY - (Input.mousePosition.x - _placementRotationStartMouseX) * 0.5f;
         }
@@ -5500,7 +5500,7 @@ public sealed class SC2ObjectsShell
         // "2+ selected markers, a graph is selected" precondition the
         // button itself already requires.
         if (allowInput && _lastSubTab == TabPaths && Event.current != null &&
-            Event.current.type == EventType.KeyDown && Event.current.control && Event.current.keyCode == KeyCode.R &&
+            Event.current.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.ConnectMarkers", Event.current) &&
             _selMarkers.Count >= 2)
         {
             var connectGraph = Data.ObjGraphs.FirstOrDefault(x => x.Id == _selectedGraphId);
@@ -5514,22 +5514,22 @@ public sealed class SC2ObjectsShell
             }
         }
 
-        // R/S — interactive rotate/scale gesture for the current Props
-        // selection: "R" rotates, "S" scales, nothing
-        // else bound to either key, no tool-switch/hold needed (mirrors the
-        // drag-to-move gesture's own "press, move mouse, click/Enter to
-        // confirm, Esc to cancel" shape). !e.control excludes the Ctrl+R
-        // Paths handler above; requires an existing Props selection so a
-        // stray R/S press with nothing selected does nothing. Takes over
-        // the frame entirely while active, same as the brush-radius-resize
-        // gesture below.
+        // Objects.RotateGesture/ScaleGesture (default R/S) — interactive
+        // rotate/scale gesture for the current Props selection, no
+        // tool-switch/hold needed (mirrors the drag-to-move gesture's own
+        // "press, move mouse, click/Enter to confirm, Esc to cancel" shape).
+        // SC2Hotkeys.Matches requires an exact modifier match, so this
+        // naturally doesn't also fire for the Ctrl+R Paths handler above
+        // without needing an explicit exclusion here. Requires an existing
+        // Props selection so a stray press with nothing selected does
+        // nothing. Takes over the frame entirely while active, same as the
+        // brush-radius-resize gesture below.
         if (_propsGestureKind == PropsGestureKind.None && allowInput && !_dragActive && !_boxSelectActive && _selProps.Count > 0 &&
             Event.current != null && Event.current.type == EventType.KeyDown &&
-            !Event.current.control && !Event.current.alt && !Event.current.shift &&
-            (Event.current.keyCode == KeyCode.R || Event.current.keyCode == KeyCode.S) &&
+            (SC2Hotkeys.Matches("Objects.RotateGesture", Event.current) || SC2Hotkeys.Matches("Objects.ScaleGesture", Event.current)) &&
             TryComputeGesturePivot(out var gesturePivot) && TryWorldToGui(camera, viewportRect, gesturePivot, out var gestureAnchorScreen))
         {
-            _propsGestureKind = Event.current.keyCode == KeyCode.R ? PropsGestureKind.Rotate : PropsGestureKind.Scale;
+            _propsGestureKind = SC2Hotkeys.Matches("Objects.RotateGesture", Event.current) ? PropsGestureKind.Rotate : PropsGestureKind.Scale;
             _gestureAnchorScreen = gestureAnchorScreen;
             _gestureStartMouse = mousePosition;
             _gestureStartDistance = Mathf.Max(1f, Vector2.Distance(gestureAnchorScreen, mousePosition));
@@ -5764,7 +5764,7 @@ public sealed class SC2ObjectsShell
         // DeletePropsById/DeleteUnitsById. Only falls back to "whatever's
         // under the cursor right now" (the older hover-delete behavior)
         // when nothing is actually selected.
-        if (canPick && e != null && e.type == EventType.KeyDown && (e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace))
+        if (canPick && e != null && e.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.DeleteSelection", e))
         {
             if (_selMarkers.Count > 0 || _selProps.Count > 0 || _selUnits.Count > 0)
             {
@@ -5789,14 +5789,14 @@ public sealed class SC2ObjectsShell
         // Ctrl+C / Ctrl+V — copy and paste the current Prop/Marker/Unit
         // selection, same "act on whatever's selected" convention as
         // Del/Backspace above.
-        if (canPick && e != null && e.type == EventType.KeyDown && e.control && e.keyCode == KeyCode.C)
+        if (canPick && e != null && e.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.Copy", e))
         {
             CopySelectionToClipboard();
             e.Use();
             RepaintHost?.Invoke();
             return;
         }
-        if (canPick && e != null && e.type == EventType.KeyDown && e.control && e.keyCode == KeyCode.V)
+        if (canPick && e != null && e.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.Paste", e))
         {
             PasteClipboard();
             e.Use();
@@ -5913,7 +5913,7 @@ public sealed class SC2ObjectsShell
         var rect = Rect.MinMaxRect(
             Mathf.Min(_boxSelectStartScreen.x, mousePosition.x), Mathf.Min(_boxSelectStartScreen.y, mousePosition.y),
             Mathf.Max(_boxSelectStartScreen.x, mousePosition.x), Mathf.Max(_boxSelectStartScreen.y, mousePosition.y));
-        var additive = Event.current != null && (Event.current.control || Event.current.shift);
+        var additive = SC2Hotkeys.ModifierHeld("Objects.BoxSelectAdditiveModifier", Event.current);
         var targetKind = BoxSelectTargetKind();
 
         if (rect.width < 4f && rect.height < 4f)
@@ -6696,7 +6696,7 @@ public sealed class SC2ObjectsShell
             _pathPickMode = 0;
         }
 
-        var additive = Event.current != null && Event.current.control;
+        var additive = SC2Hotkeys.ModifierHeld("Objects.SingleSelectAdditiveModifier", Event.current);
         if (!additive) { _selProps.Clear(); _selMarkers.Clear(); _selUnits.Clear(); _selectedZoneId = 0; }
         switch (pick.Kind)
         {

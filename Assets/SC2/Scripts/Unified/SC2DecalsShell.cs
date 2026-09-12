@@ -818,9 +818,11 @@ public sealed class SC2DecalsShell : IDisposable
     private void HandleEditHotkey(Camera camera, Vector2 mouse, Event evt)
     {
         if (_selectedPlacement < 0 || _selectedPlacement >= Doc.Placements.Count) return;
-        if (evt.keyCode == KeyCode.Delete) { DeletePlacement(); evt.Use(); return; }
-        if (evt.keyCode != KeyCode.G && evt.keyCode != KeyCode.R && evt.keyCode != KeyCode.S) return;
-        _transformMode = evt.keyCode == KeyCode.G ? DecalTransformMode.Move : evt.keyCode == KeyCode.R ? DecalTransformMode.Rotate : DecalTransformMode.Scale;
+        if (SC2Hotkeys.Matches("Decals.DeleteSelection", evt)) { DeletePlacement(); evt.Use(); return; }
+        if (SC2Hotkeys.Matches("Decals.MoveGesture", evt)) _transformMode = DecalTransformMode.Move;
+        else if (SC2Hotkeys.Matches("Decals.RotateGesture", evt)) _transformMode = DecalTransformMode.Rotate;
+        else if (SC2Hotkeys.Matches("Decals.ScaleGesture", evt)) _transformMode = DecalTransformMode.Scale;
+        else return;
         _transformOriginal = Doc.Placements[_selectedPlacement].Clone();
         _transformPreview = _transformOriginal.Clone();
         _transformStartMouse = mouse;

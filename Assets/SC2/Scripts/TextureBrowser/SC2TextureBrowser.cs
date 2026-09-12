@@ -588,7 +588,7 @@ public static class SC2TextureBrowser
         if (evt == null || evt.type != EventType.KeyDown) return;
         if (evt.keyCode == KeyCode.Escape) { _open = false; return; }
         if (evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter) Accept(SC2TextureCatalog.Instance.Find(_selectedId));
-        if (evt.keyCode == KeyCode.F && (evt.control || evt.command)) GUI.FocusControl("SC2TextureBrowserSearch");
+        if (SC2Hotkeys.Matches("TextureBrowser.FocusSearch", evt) || (evt.keyCode == KeyCode.F && evt.command)) GUI.FocusControl("SC2TextureBrowserSearch");
     }
 
     private static void ToggleFavorite(string id) { if (!Favorites.Add(id)) Favorites.Remove(id); SavePreferences(); InvalidateQuery(); }

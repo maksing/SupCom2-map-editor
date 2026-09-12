@@ -652,6 +652,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private GUIStyle _menuBarButtonActiveStyle;
     private GUIStyle _dropdownItemStyle;
     private GUIStyle _dropdownToggleStyle;
+    private GUIStyle _dropdownSectionLabelStyle;
     private GUIStyle _miniTextStyle;
     private GUIStyle _secondaryTextStyle;
     private GUIStyle _statusPillStyle;
@@ -1219,6 +1220,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Shared catalog browser: the same UI and selection semantics in the
         // Unity Game view and in a standalone build. Draw last so it remains modal.
         SC2TerrainShell.DrawRuntimeTexturePickerOverlay();
+        // Same reasoning — must draw last so it stays modal and on top.
+        SC2HotkeysPanel.DrawOverlay();
 #if !UNITY_EDITOR
         // Same reasoning for the runtime Popup/ColorField shims (UnityEditorRuntimeShim.cs):
         // their dropdown lists and color palettes are floating overlays that must be
@@ -1272,9 +1275,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // correct behavior anyway: a modal should block viewport
             // painting/placing/navigation underneath it, not just visually
             // cover it.
-            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false);
+            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen;
             if (!anyModalOpen)
             {
+                ReleaseStuckNumericFocusOnViewportClick();
+
                 // Same reasoning as the reset before DrawNavigationGizmo above:
                 // HandleTerrainGameViewInput below is what actually calls
                 // PaintPair/PaintBlend (Graphics.Blit into PairMapRT/BlendRT), and
@@ -1489,6 +1494,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             fontSize = SC2UiScale.F(11),
             normal = { textColor = ColorTextPrimary },
             onNormal = { textColor = ColorTextPrimary }
+        };
+        _dropdownSectionLabelStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = SC2UiScale.F(10),
+            fontStyle = FontStyle.Bold,
+            margin = new RectOffset(0, 0, 4, 2),
+            normal = { textColor = ColorAccent }
         };
 
         _miniTextStyle = new GUIStyle(GUI.skin.label)
@@ -1874,27 +1886,54 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private void DrawViewMenu()
     {
-        // reset button + 3 toggles + divider block + zoom-speed row +
-        // UI-scale row + hint lines (one extra in a build, for the
-        // fullscreen shortcut — meaningless in the Editor). The "62+40+22"
-        // budget covers rows whose real height isn't MenuItemHeight-based
-        // (auto-sized labels/sliders) — scaled by Scale too so it keeps
-        // pace with how big those rows actually render now; see
-        // MenuItemHeight's own doc comment for why this class of bug
-        // exists at all.
-        var contentHeight = 4 * MenuItemHeight + (62f + 40f + 22f) * SC2UiScale.Scale;
+        // Grouped into 4 sections (Panels / Hotkeys / Camera / Display) with
+        // a section-label row before each, instead of one flat list — the
+        // two real "go do a thing" buttons (Edit Hotkeys…, Reset View) sit
+        // right next to the toggle/setting they act on, and render with
+        // _dropdownAccentButtonStyle (a solid accent fill, same as an active
+        // toggle pill) rather than _dropdownItemStyle's fully-transparent
+        // ghost-button background — which reads as plain unclickable text
+        // next to the solid toggles right beside it.
+        //
+        // 5 MenuItemHeight-based rows (2 Panels toggles + Hotkeys toggle +
+        // Edit Hotkeys button + Reset View button) + a fixed per-scale
+        // budget for everything else whose real height isn't
+        // MenuItemHeight-based (section labels, divider blocks, hint lines,
+        // the two slider rows) — scaled by Scale too so it keeps pace with
+        // how big those rows actually render now; see MenuItemHeight's own
+        // doc comment for why this class of bug exists at all. Deliberately
+        // generous (this only sizes the background card + hit-test rect,
+        // never clips GUILayout content) rather than exactly tuned.
+        var contentHeight = 5 * MenuItemHeight + 250f * SC2UiScale.Scale;
 #if !UNITY_EDITOR
-        contentHeight += 14f * SC2UiScale.Scale;
+        contentHeight += 16f * SC2UiScale.Scale;
 #endif
         DrawMenuPanel(_viewMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
-            if (GUILayout.Button("Reset View (Home)", _dropdownItemStyle)) { ResetView(); _showViewMenu = false; }
+            GUILayout.Label("PANELS", _dropdownSectionLabelStyle);
             ShowPanel = GUILayout.Toggle(ShowPanel, "Inspector Panel", _dropdownToggleStyle);
             EnableGameViewNavigation = GUILayout.Toggle(EnableGameViewNavigation, "Game Navigation", _dropdownToggleStyle);
-            EnableHotkeys = GUILayout.Toggle(EnableHotkeys, "Hotkeys", _dropdownToggleStyle);
+
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
             GUILayout.Space(4);
+
+            GUILayout.Label("HOTKEYS", _dropdownSectionLabelStyle);
+            EnableHotkeys = GUILayout.Toggle(EnableHotkeys, "Hotkeys enabled", _dropdownToggleStyle);
+            // A real button (GUI.skin.button — the same ghost-pill style
+            // "Import/Export Heightmap..." use elsewhere), not
+            // _dropdownItemStyle's fully-transparent list-row background —
+            // this is a "go do a thing now" action, not a list row, and needs
+            // to visibly read as clickable next to the toggle above it.
+            if (GUILayout.Button("Edit Hotkeys…", GUILayout.Height(SC2UiScale.Pxf(26f)))) { SC2HotkeysPanel.Open(); _showViewMenu = false; }
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("CAMERA", _dropdownSectionLabelStyle);
+            if (GUILayout.Button("Reset View (Home)", GUILayout.Height(SC2UiScale.Pxf(26f)))) { ResetView(); _showViewMenu = false; }
+            GUILayout.Space(2);
             // _miniTextStyle (TextPrimary), not _secondaryTextStyle: this sits on
             // the dropdown card's Surface-colored background, where
             // ColorTextSecondary doesn't reach a readable contrast ratio (same
@@ -1907,9 +1946,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 #endif
             GUILayout.Label($"Zoom Speed: {ZoomSpeed:0.0}x", _miniTextStyle);
             ZoomSpeed = GUILayout.HorizontalSlider(ZoomSpeed, 0.2f, 3f);
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("DISPLAY", _dropdownSectionLabelStyle);
             // UI Scale (fonts/buttons up to ~30% bigger, left panel up to
             // ~40% wider) is a live, persisted parameter (View
-            // menu, same row shape as Zoom Speed right above) rather than a
+            // menu, same row shape as Zoom Speed above) rather than a
             // one-time hardcoded bump. Drives SC2UnifiedSkin/SC2EnvFieldGui/
             // this class's own chrome styles' font sizes and paddings, plus
             // the panel-width formula in UpdateLayoutRects — see
@@ -2672,12 +2717,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             return;
 
         var moved = false;
-        if (Input.GetKey(KeyCode.W)) moved |= FlyCamera(KeyCode.W);
-        if (Input.GetKey(KeyCode.A)) moved |= FlyCamera(KeyCode.A);
-        if (Input.GetKey(KeyCode.S)) moved |= FlyCamera(KeyCode.S);
-        if (Input.GetKey(KeyCode.D)) moved |= FlyCamera(KeyCode.D);
-        if (Input.GetKey(KeyCode.Q)) moved |= FlyCamera(KeyCode.Q);
-        if (Input.GetKey(KeyCode.E)) moved |= FlyCamera(KeyCode.E);
+        if (SC2Hotkeys.GetKey("Camera.MoveForward")) moved |= FlyCamera("Camera.MoveForward");
+        if (SC2Hotkeys.GetKey("Camera.MoveLeft")) moved |= FlyCamera("Camera.MoveLeft");
+        if (SC2Hotkeys.GetKey("Camera.MoveBack")) moved |= FlyCamera("Camera.MoveBack");
+        if (SC2Hotkeys.GetKey("Camera.MoveRight")) moved |= FlyCamera("Camera.MoveRight");
+        if (SC2Hotkeys.GetKey("Camera.MoveDown")) moved |= FlyCamera("Camera.MoveDown");
+        if (SC2Hotkeys.GetKey("Camera.MoveUp")) moved |= FlyCamera("Camera.MoveUp");
 
 #if UNITY_EDITOR
         if (moved)
@@ -5025,7 +5070,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             return;
         }
 
-        if (e.type == EventType.KeyDown && e.keyCode == KeyCode.F)
+        if (e.type == EventType.KeyDown && SC2Hotkeys.Matches("Global.FocusCamera", e))
         {
             FocusCamera();
             e.Use();
@@ -5074,7 +5119,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         if (e.type == EventType.KeyDown && _flying)
         {
-            if (FlyCamera(e.keyCode))
+            var cameraActionId = ResolveCameraMoveAction(e);
+            if (cameraActionId != null && FlyCamera(cameraActionId))
                 e.Use();
         }
     }
@@ -5110,9 +5156,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var e = Event.current;
         if (e == null || e.type != EventType.KeyDown)
             return;
-        if (e.control && !e.shift && e.keyCode == KeyCode.Z) { UndoTerrainEdit(); e.Use(); return; }
-        if (e.control && (e.keyCode == KeyCode.Y || (e.shift && e.keyCode == KeyCode.Z))) { RedoTerrainEdit(); e.Use(); return; }
-        if (e.control && e.keyCode == KeyCode.S) { SaveActiveTerrain(); e.Use(); }
+        if (SC2Hotkeys.Matches("Global.Undo", e)) { UndoTerrainEdit(); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.Redo", e)) { RedoTerrainEdit(); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.Save", e)) { SaveActiveTerrain(); e.Use(); }
     }
 
     private void HandleHotkeys()
@@ -5167,16 +5213,35 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // else) instead of a persistent _tool state nothing else in the
         // codebase ever actually read (Rotate/Scale were dead tool states
         // before this change — confirmed via full-repo search).
-        if (e.keyCode == KeyCode.M) { SetTool("Measure"); e.Use(); return; }
-        if (e.keyCode == KeyCode.F) { FocusCamera(); e.Use(); return; }
-        if (e.keyCode == KeyCode.Home) { ResetView(); e.Use(); return; }
-        if (e.keyCode == KeyCode.Tab)
+        if (SC2Hotkeys.Matches("Global.MeasureTool", e)) { SetTool("Measure"); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.FocusCamera", e)) { FocusCamera(); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.ResetView", e)) { ResetView(); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.CycleMainTab", e))
         {
             _mainTab = (_mainTab + 1) % GameMainTabs.Length;
             _subTab = 0;
             SetStatus("Tab selected: " + GameMainTabs[_mainTab]);
             e.Use();
         }
+    }
+
+    /// <summary>A numeric field (SC2Numeric_-named) can keep IMGUI keyboard
+    /// focus indefinitely once clicked into — Unity never clears
+    /// GUIUtility.keyboardControl just because the user switched tabs or
+    /// clicked elsewhere, and a raw viewport click isn't a GUI control that
+    /// could naturally steal it either. Left unhandled, HandleHotkeys()'s own
+    /// stuck-focus guard (needed so typing into that same field doesn't also
+    /// fire a tool hotkey) stays tripped forever after the FIRST numeric
+    /// field anyone ever clicks this session, silently killing M/F/Tab. A
+    /// genuine click into the viewport always means "done with that field."</summary>
+    private void ReleaseStuckNumericFocusOnViewportClick()
+    {
+        var e = Event.current;
+        if (e == null || e.type != EventType.MouseDown || IsMouseOverUi(e.mousePosition))
+            return;
+        var focusedControl = GUI.GetNameOfFocusedControl();
+        if (!string.IsNullOrEmpty(focusedControl) && focusedControl.StartsWith("SC2Numeric_"))
+            GUI.FocusControl(null);
     }
 
     private bool IsMouseOverUi(Vector2 mouse)
@@ -5575,25 +5640,63 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         return DefaultMapCenter;
     }
 
-    private bool FlyCamera(KeyCode key)
+    /// <summary>Dispatches by action id rather than a literal KeyCode so a
+    /// rebound Camera.Move* key still resolves to the right direction
+    /// instead of this table silently going stale.</summary>
+    private bool FlyCamera(string cameraActionId)
     {
         var cam = ResolveCamera();
         if (cam == null)
             return false;
 
+        // Forward/Back/Left/Right are flattened to the horizontal plane so
+        // they never drift the camera's height — only Up/Down (Vector3.up)
+        // should do that. Without this, Forward/Back along the camera's raw
+        // (downward-tilted) look direction doubled as an unintended zoom
+        // toward/away from the terrain.
         var direction = Vector3.zero;
-        if (key == KeyCode.W) direction += cam.transform.forward;
-        if (key == KeyCode.S) direction -= cam.transform.forward;
-        if (key == KeyCode.D) direction += cam.transform.right;
-        if (key == KeyCode.A) direction -= cam.transform.right;
-        if (key == KeyCode.E) direction += Vector3.up;
-        if (key == KeyCode.Q) direction -= Vector3.up;
+        switch (cameraActionId)
+        {
+            case "Camera.MoveForward": direction += HorizontalOnly(cam.transform.forward); break;
+            case "Camera.MoveBack": direction -= HorizontalOnly(cam.transform.forward); break;
+            case "Camera.MoveRight": direction += HorizontalOnly(cam.transform.right); break;
+            case "Camera.MoveLeft": direction -= HorizontalOnly(cam.transform.right); break;
+            case "Camera.MoveUp": direction += Vector3.up; break;
+            case "Camera.MoveDown": direction -= Vector3.up; break;
+        }
 
         if (direction == Vector3.zero)
             return false;
 
         cam.transform.position += direction.normalized * 2f;
         return true;
+    }
+
+    /// <summary>Projects onto the XZ plane and re-normalizes — falls back to
+    /// Vector3.zero on the near-straight-down-look degenerate case instead
+    /// of normalizing a near-zero vector into a NaN.</summary>
+    private static Vector3 HorizontalOnly(Vector3 v)
+    {
+        var flat = new Vector3(v.x, 0f, v.z);
+        return flat.sqrMagnitude > 0.0001f ? flat.normalized : Vector3.zero;
+    }
+
+    private static readonly string[] CameraMoveActionIds =
+    {
+        "Camera.MoveForward", "Camera.MoveBack", "Camera.MoveLeft",
+        "Camera.MoveRight", "Camera.MoveUp", "Camera.MoveDown",
+    };
+
+    /// <summary>Which Camera.Move* action (if any) this KeyDown event
+    /// matches — used by the single-event fly-while-RMB-held path in
+    /// HandleGameViewNavigation, as opposed to TickFlyCamera's own
+    /// per-frame GetKey polling for continuous hold.</summary>
+    private static string ResolveCameraMoveAction(Event e)
+    {
+        foreach (var actionId in CameraMoveActionIds)
+            if (SC2Hotkeys.Matches(actionId, e))
+                return actionId;
+        return null;
     }
 
     private void StabilizeMapCameraPosition()

@@ -1,19 +1,21 @@
 using UnityEngine;
 
 /// <summary>
-/// Blender-style interactive brush-radius resize gesture, bound to plain F —
-/// real Blender uses unmodified F, not Ctrl+F. This DOES share a key with
-/// SC2GameViewEditorUI.HandleHotkeys' own F -> FocusCamera binding, but
-/// that's safe by construction, not a real conflict: HandleTerrainGameView
-/// Input (which calls into whichever tool owns the active brush, and thus
-/// this gesture) runs BEFORE HandleHotkeys in the same OnGUI, and
-/// HandleHotkeys itself already guards on `e.type == EventType.KeyDown` —
-/// once this gesture calls e.Use() below, the event's type becomes Used,
-/// so HandleHotkeys' own F check is skipped automatically that frame. F
-/// only starts a resize when a brush tool is actually hovering valid
-/// terrain (hasHover) in the first place; with no brush hovering, the
-/// event reaches HandleHotkeys untouched and FocusCamera still fires
-/// exactly as before. The brush circle stays anchored at wherever it was
+/// Blender-style interactive brush-radius resize gesture, bound by default
+/// to plain F (rebindable — see SC2Hotkeys, action id "Brush.RadiusResizeGesture")
+/// — real Blender uses unmodified F, not Ctrl+F. This action's default key
+/// happens to match SC2GameViewEditorUI.HandleHotkeys' own default
+/// "Global.FocusCamera" binding, but that's safe by construction regardless
+/// of what either action is currently bound to, not a real conflict:
+/// HandleTerrainGameViewInput (which calls into whichever tool owns the
+/// active brush, and thus this gesture) runs BEFORE HandleHotkeys in the
+/// same OnGUI, and HandleHotkeys itself already guards on
+/// `e.type == EventType.KeyDown` — once this gesture calls e.Use() below,
+/// the event's type becomes Used, so HandleHotkeys' own check is skipped
+/// automatically that frame. The gesture only starts when a brush tool is
+/// actually hovering valid terrain (hasHover) in the first place; with no
+/// brush hovering, the event reaches HandleHotkeys untouched and its bound
+/// action still fires exactly as before. The brush circle stays anchored at wherever it was
 /// hovering the moment the key was pressed (it does NOT chase the cursor
 /// around during the resize, matching Blender's own "F" gesture exactly),
 /// and the distance from that anchor to the current mouse position drives
@@ -53,7 +55,7 @@ public sealed class SC2BrushRadiusGesture
 
         if (!_active)
         {
-            if (!allowInput || !hasHover || e == null || e.type != EventType.KeyDown || e.keyCode != KeyCode.F)
+            if (!allowInput || !hasHover || e == null || e.type != EventType.KeyDown || !SC2Hotkeys.Matches("Brush.RadiusResizeGesture", e))
                 return false;
             _active = true;
             _startRadius = radius;

@@ -386,8 +386,16 @@ public class SC2PaintMode
     void HandleScroll(Event e)
     {
         if (!e.isScrollWheel) return;
-        if (e.shift)   { _radius   = Mathf.Clamp(_radius   - e.delta.y * 2f,   1f, 1000f); e.Use(); _win.Repaint(); }
-        if (e.control) { _strength = Mathf.Clamp01(_strength - e.delta.y * .02f);            e.Use(); _win.Repaint(); }
+        // Radius has its own dedicated F-hold resize gesture (SC2BrushRadiusGesture)
+        // — no scroll modifier for it any more, that was a straight duplicate.
+        // Some mice/trackpads report an occasional much-larger-than-usual
+        // delta for a single tick, which made Strength jump hard instead of
+        // stepping smoothly — clamped to a single tick's worth. Windows also
+        // reports Shift+wheel as a horizontal-scroll message, delta.y coming
+        // back 0 with the tick magnitude in delta.x instead; the fallback
+        // below covers that for any modifier, not just Shift.
+        var delta = Mathf.Clamp(e.delta.y != 0f ? e.delta.y : e.delta.x, -3f, 3f);
+        if (SC2Hotkeys.ModifierHeld("Brush.StrengthScrollModifier", e)) { _strength = Mathf.Clamp01(_strength - delta * .01f); e.Use(); _win.Repaint(); }
     }
 
     void RaycastTerrain()

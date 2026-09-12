@@ -1078,7 +1078,7 @@ public sealed class SC2CostsShell
     /// toggle nor _activePreset selection itself changes — only what a
     /// click/drag actually paints, exactly like a held modifier key in any
     /// other paint tool (nothing in the panel visibly flips).</summary>
-    private static bool IsErasingHeld() => Event.current != null && Event.current.control;
+    private static bool IsErasingHeld() => SC2Hotkeys.ModifierHeld("Costs.EraseModifier", Event.current);
 
     private void PaintAt(Vector2 worldXZ)
     {
