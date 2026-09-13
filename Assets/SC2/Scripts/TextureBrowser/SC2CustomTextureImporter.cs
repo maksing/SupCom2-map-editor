@@ -965,6 +965,13 @@ public static class SC2CustomTextureImporter
                 var x = (i % cols) * tileSize;
                 var y = (i / cols) * tileSize;
                 composite.ReadPixels(new Rect(0, 0, tileSize, tileSize), x, y, false);
+                // Same D3D render-to-texture readback flip as
+                // BuildFilteredPreview/WriteThumbnail — flips only THIS
+                // tile's own footprint in place (never the whole composite,
+                // which would relocate tiles the (x,y) placement above
+                // already put in the right slot).
+                if (SystemInfo.graphicsUVStartsAtTop)
+                    FlipCompositeTileInPlace(composite, x, y, tileSize);
             }
         }
         finally
@@ -974,6 +981,20 @@ public static class SC2CustomTextureImporter
         }
         composite.Apply(false, false);
         return composite;
+    }
+
+    /// <summary>Vertically flips one tileSize x tileSize block of
+    /// `composite`, in place, at its own (x, y) position — see
+    /// ComposeGridPreview/ComposeCubeCrossPreview's own comments for why a
+    /// per-tile flip is needed instead of one flip over the whole
+    /// composite.</summary>
+    private static void FlipCompositeTileInPlace(Texture2D composite, int x, int y, int tileSize)
+    {
+        var pixels = composite.GetPixels(x, y, tileSize, tileSize);
+        var flipped = new Color[pixels.Length];
+        for (var row = 0; row < tileSize; row++)
+            Array.Copy(pixels, row * tileSize, flipped, (tileSize - 1 - row) * tileSize, tileSize);
+        composite.SetPixels(x, y, tileSize, tileSize, flipped);
     }
 
     // Cross-layout cell positions (col, row — row 0 is the visual top),
@@ -1015,6 +1036,9 @@ public static class SC2CustomTextureImporter
                 // top-relative (row 0 = visual top) — flip.
                 var y = (rows - 1 - row) * tileSize;
                 composite.ReadPixels(new Rect(0, 0, tileSize, tileSize), x, y, false);
+                // Same per-tile D3D readback flip as ComposeGridPreview.
+                if (SystemInfo.graphicsUVStartsAtTop)
+                    FlipCompositeTileInPlace(composite, x, y, tileSize);
             }
         }
         finally
@@ -1028,7 +1052,16 @@ public static class SC2CustomTextureImporter
 
     private static byte[] EncodeMaterialDds(Texture2D texture)
     {
-        var pixels = texture.GetPixels32();
+        // GetPixels32 returns Unity's native bottom-up row order;
+        // SC2DdsEncoder.BuildMaterialDds (like BuildDxt1SingleMip/BuildBgra32
+        // in SC2MapPreviewCapture) expects DDS's top-down order and never
+        // flips internally — without this, a custom texture re-encoded here
+        // (any non-DDS import, see Import above) came out vertically flipped
+        // relative to the DDS this same class's own read-side decode (which
+        // DOES flip, see FlipUncompressedRowsVertically/
+        // FlipCompressedBlocksVertically) expects, and relative to every
+        // real archive-sourced DDS.
+        var pixels = FlipPixelRows(texture.GetPixels32(), texture.width, texture.height);
         var rgb = new byte[pixels.Length * 3];
         var alpha = new byte[pixels.Length];
         for (var i = 0; i < pixels.Length; i++)
@@ -1039,6 +1072,18 @@ public static class SC2CustomTextureImporter
             alpha[i] = pixels[i].a;
         }
         return SC2DdsEncoder.BuildMaterialDds(texture.width, texture.height, rgb, alpha);
+    }
+
+    /// <summary>Row-major vertical flip for a Color32[] grid — shared by
+    /// every BuildMaterialDds/BuildDxt5 caller in this file that starts from
+    /// Unity's native (bottom-up) GetPixels32 order. See EncodeMaterialDds's
+    /// own comment for why this flip is required at all.</summary>
+    private static Color32[] FlipPixelRows(Color32[] pixels, int width, int height)
+    {
+        var flipped = new Color32[pixels.Length];
+        for (var y = 0; y < height; y++)
+            Array.Copy(pixels, y * width, flipped, (height - 1 - y) * width, width);
+        return flipped;
     }
 
     /// <summary>Renders `source` down to a small, properly GPU-filtered
@@ -1139,6 +1184,23 @@ public static class SC2CustomTextureImporter
             result = new Texture2D(size, size, TextureFormat.RGBA32, false) { hideFlags = HideFlags.DontSave };
             result.ReadPixels(new Rect(0, 0, size, size), 0, 0, false);
             result.Apply(false, false);
+
+            // Graphics.Blit into a RenderTexture, then ReadPixels, reads
+            // back vertically flipped on APIs whose texture origin is
+            // top-left (D3D/Metal/Vulkan — SystemInfo.graphicsUVStartsAtTop
+            // == true, true on Windows' default DX backend) — same root
+            // cause as SC2MapPreviewCapture.RenderOffscreen's identical fix.
+            // This is why only entries with NO baked atlas thumbnail (which
+            // fall through SC2TextureThumbnailCache.Load to this function)
+            // showed an inverted browser preview — a pre-baked
+            // ThumbnailResourcePath never goes through this Blit+ReadPixels
+            // path at all.
+            if (SystemInfo.graphicsUVStartsAtTop)
+            {
+                var flipped = FlipUncompressedRowsVertically(result.GetRawTextureData(), size, size, 4);
+                result.LoadRawTextureData(flipped);
+                result.Apply(false, false);
+            }
         }
         finally
         {
@@ -1207,6 +1269,15 @@ public static class SC2CustomTextureImporter
             thumbnail = new Texture2D(128, 128, TextureFormat.RGBA32, false, false);
             thumbnail.ReadPixels(new Rect(0, 0, 128, 128), 0, 0, false);
             thumbnail.Apply(false, false);
+            // Same D3D render-to-texture readback flip as BuildFilteredPreview
+            // — every baked custom-texture thumbnail (written here on import)
+            // came out vertically flipped on Windows without this.
+            if (SystemInfo.graphicsUVStartsAtTop)
+            {
+                var flipped = FlipUncompressedRowsVertically(thumbnail.GetRawTextureData(), 128, 128, 4);
+                thumbnail.LoadRawTextureData(flipped);
+                thumbnail.Apply(false, false);
+            }
             WriteAtomic(path, thumbnail.EncodeToPNG());
         }
         finally

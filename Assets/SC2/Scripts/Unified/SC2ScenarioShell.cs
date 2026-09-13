@@ -1,3 +1,4 @@
+using UnityEditor;
 using UnityEngine;
 using SC2.MapEditor.Document;
 
@@ -60,6 +61,22 @@ public sealed class SC2ScenarioShell
     private string _displayNameBeforeEdit;
     private bool _displayNameFieldWasFocused;
 
+    // "_PC_mapshot.dds" preview thumbnail — rebuilt only when Data.
+    // MapShotBgraPixels actually changes (_mapShotThumbnailSource caches the
+    // exact array reference last used to build it), not every OnGUI call.
+    // Moved here (Preview sub-tab) from SC2ExportPanel, which used to own
+    // this section directly above the Export button.
+    private Texture2D _mapShotThumbnail;
+    private byte[] _mapShotThumbnailSource;
+    private string _captureStatus;
+
+    // Render-on-demand only — never persisted. The minimap that actually
+    // ships still renders fresh on every real Export click (see
+    // SC2ExportPanel's Export button handler); this is purely so the user
+    // can check the framing without running a full export.
+    private Texture2D _minimapPreviewTexture;
+    private string _minimapPreviewStatus;
+
     public SC2ScenarioShell(SC2TerrainShell terrainShell, SC2MapSession session)
     {
         _terrainShell = terrainShell;
@@ -88,6 +105,7 @@ public sealed class SC2ScenarioShell
         GUILayout.Space(4);
 
         if (subTab == 1) DrawScriptsTab(w);
+        else if (subTab == 2) DrawPreviewTab(w);
         else DrawInfoTab(w);
 
         GUILayout.EndVertical();
@@ -138,6 +156,114 @@ public sealed class SC2ScenarioShell
 
         if (!string.IsNullOrEmpty(Data.PlayableAreaName) && !zones.Exists(z => z.Name == Data.PlayableAreaName))
             SC2TerrainShell.DrawUnifiedNote($"⚠ Selected Area '{Data.PlayableAreaName}' no longer exists (renamed/deleted) — pick another.");
+    }
+
+    /// <summary>Minimap + mapshot review — moved here from the Export tab so
+    /// checking/capturing them isn't tied to the Export button itself. The
+    /// minimap shown here is render-on-demand for review only (never
+    /// persisted); the real one written to disk still renders fresh from
+    /// whatever the map currently looks like on every actual Export click
+    /// (see SC2ExportPanel's Export button handler). The mapshot below is
+    /// framed by hand and stored on the map, same as before.</summary>
+    private void DrawPreviewTab(float w)
+    {
+        SC2EnvFieldGui.SectionLabel("Minimap");
+        SC2TerrainShell.DrawUnifiedNote("Orthographic top-down render (RNM + props) — written fresh into minimap.win.dds on every Export. Preview one here any time to check the framing.");
+
+        if (_minimapPreviewTexture != null)
+        {
+            var minimapRect = GUILayoutUtility.GetRect(w, w);
+            GUI.DrawTexture(minimapRect, _minimapPreviewTexture, ScaleMode.ScaleToFit);
+        }
+
+        var minimapPending = SC2MapPreviewCapture.IsCapturePending;
+        var guiEnabledBeforeMinimap = GUI.enabled;
+        GUI.enabled = guiEnabledBeforeMinimap && !minimapPending;
+        if (GUILayout.Button(minimapPending ? "Rendering..." : "Preview Minimap", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        {
+            _minimapPreviewStatus = "Rendering...";
+            var data = Data;
+            var terrainShell = _terrainShell;
+            SC2MapPreviewCapture.RequestMinimapCapture(data, tex =>
+            {
+                if (_minimapPreviewTexture != null) UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture);
+                _minimapPreviewTexture = tex;
+                terrainShell.MarkDirtyAndRepaint();
+                _minimapPreviewStatus = tex != null ? "Preview rendered." : "Render failed — no camera found.";
+            });
+        }
+        GUI.enabled = guiEnabledBeforeMinimap;
+        if (!string.IsNullOrEmpty(_minimapPreviewStatus))
+            SC2TerrainShell.DrawUnifiedNote(_minimapPreviewStatus);
+
+        GUILayout.Space(12);
+
+        SC2EnvFieldGui.SectionLabel("Map Preview");
+        SC2TerrainShell.DrawUnifiedNote("Shown in a real map-select list — framed by hand: navigate the viewport to the angle you want, then Capture. Stored on the map and reused at every export until re-captured.");
+
+        RefreshMapShotThumbnail();
+        if (_mapShotThumbnail != null)
+        {
+            var previewRect = GUILayoutUtility.GetRect(w, w * SC2MapPreviewCapture.MapShotHeight / (float)SC2MapPreviewCapture.MapShotWidth);
+            GUI.DrawTexture(previewRect, _mapShotThumbnail, ScaleMode.ScaleToFit);
+        }
+        else
+        {
+            SC2TerrainShell.DrawUnifiedNote("No preview captured yet.");
+        }
+
+        var capturePending = SC2MapPreviewCapture.IsCapturePending;
+        var guiEnabledBeforeCapture = GUI.enabled;
+        GUI.enabled = guiEnabledBeforeCapture && !capturePending;
+        if (GUILayout.Button(capturePending ? "Capturing..." : "Capture Preview from Current View", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        {
+            _captureStatus = "Capturing...";
+            var data = Data;
+            var terrainShell = _terrainShell;
+            SC2MapPreviewCapture.RequestPreviewCapture(tex =>
+            {
+                if (tex == null) { _captureStatus = "Capture failed — no camera found."; return; }
+                data.MapShotBgraPixels = SC2MapPreviewCapture.ToBgraBytes(tex);
+                UnityEngine.Object.DestroyImmediate(tex);
+                EditorUtility.SetDirty(data);
+                terrainShell.MarkDirtyAndRepaint();
+                _captureStatus = "Preview captured.";
+            });
+        }
+        GUI.enabled = guiEnabledBeforeCapture;
+        if (!string.IsNullOrEmpty(_captureStatus))
+            SC2TerrainShell.DrawUnifiedNote(_captureStatus);
+    }
+
+    /// <summary>Rebuilds the on-screen thumbnail only when Data.
+    /// MapShotBgraPixels actually changed since the last call — decoding a
+    /// fresh Texture2D from 369KB of raw pixels every single OnGUI repaint
+    /// would be wasteful for a value that only changes on an explicit
+    /// Capture click.</summary>
+    private void RefreshMapShotThumbnail()
+    {
+        var pixels = Data.MapShotBgraPixels;
+        if (ReferenceEquals(pixels, _mapShotThumbnailSource)) return;
+        _mapShotThumbnailSource = pixels;
+        if (_mapShotThumbnail != null) { UnityEngine.Object.DestroyImmediate(_mapShotThumbnail); _mapShotThumbnail = null; }
+        if (pixels == null || pixels.Length != SC2MapPreviewCapture.MapShotWidth * SC2MapPreviewCapture.MapShotHeight * 4) return;
+
+        // RGBA32 rather than BGRA32 for the swizzled copy below — BGRA32
+        // isn't guaranteed supported as a regular CPU-uploaded texture
+        // format on every platform/graphics API (it's mainly a native
+        // interop format), while RGBA32 always is.
+        var rgba = new byte[pixels.Length];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            rgba[i] = pixels[i + 2];     // R
+            rgba[i + 1] = pixels[i + 1]; // G
+            rgba[i + 2] = pixels[i];     // B
+            rgba[i + 3] = pixels[i + 3]; // A
+        }
+        var tex = new Texture2D(SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave };
+        tex.LoadRawTextureData(rgba);
+        tex.Apply(false, false);
+        _mapShotThumbnail = tex;
     }
 
     private void DrawUndoRedoRow(float w)

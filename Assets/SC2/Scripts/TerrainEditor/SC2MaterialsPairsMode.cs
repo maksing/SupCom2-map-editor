@@ -340,6 +340,40 @@ public class SC2PairsMode
         }
         EditorGUI.EndDisabledGroup();
 
+        // Only on the core terrain's own Pairs tab — this class is also
+        // reused, unchanged, for the Background tab's own single pair
+        // (Data == bg there, never == _win.Data), where a second copy of a
+        // control that already affects the background too would be a
+        // confusing duplicate rather than a second independent setting.
+        if (Data == _win.Data)
+        {
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Global UV Scale", EditorStyles.boldLabel);
+            var newGlobalUvEnabled = EditorGUILayout.ToggleLeft(" Enabled (applies to core AND background pairs)", Data.GlobalUvScaleEnabled);
+            if (newGlobalUvEnabled != Data.GlobalUvScaleEnabled)
+            {
+                _win.RecordUndoCheckpointFor(Data, "Toggle Global UV Scale");
+                Data.GlobalUvScaleEnabled = newGlobalUvEnabled;
+                EditorUtility.SetDirty(Data);
+                SC2BackgroundTerrainPreview.MarkDirty();
+                _win.ApplyPreviewModeToChunks();
+                _win.MarkDirtyAndRepaint();
+            }
+            if (Data.GlobalUvScaleEnabled)
+            {
+                var newGlobalUvScale = SC2TerrainShell.DrawCompactSlider("UV Tile Size (world units)", Data.GlobalUvScale, 0.5f, 50f,
+                    onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Global UV Scale"));
+                if (!Mathf.Approximately(newGlobalUvScale, Data.GlobalUvScale))
+                {
+                    Data.GlobalUvScale = Mathf.Max(0.0001f, newGlobalUvScale);
+                    SC2BackgroundTerrainPreview.MarkDirty();
+                    _win.ApplyPreviewModeToChunks();
+                    _win.MarkDirtyAndRepaint();
+                }
+            }
+            SC2TerrainShell.DrawUnifiedNote("One shared tiling scale for EVERY pair on both the playable core and the decorative background — supersedes each pair's own Tiling Scale below while enabled, guaranteeing the texture tiling frequency can never mismatch at the seam or between two core pairs. Off leaves per-pair tiling exactly as authored.");
+        }
+
         EditorGUILayout.Space(4);
         for (var i = 0; i < Data.Pairs.Count; i++) DrawRow(i);
         if (_sel >= 0 && _sel < Data.Pairs.Count) { EditorGUILayout.Space(6); DrawDetails(_sel); }
@@ -451,8 +485,16 @@ public class SC2PairsMode
         }
         EditorGUI.EndDisabledGroup();
         if (globalUvActive)
-            SC2TerrainShell.DrawUnifiedNote("Overridden by Global UV Scale (Background tab) — currently " +
+        {
+            // "above" only when this really is the core Pairs tab drawing
+            // both the control and this row in the same pass — the
+            // Background tab's own reused single-pair view (Data != _win.Data)
+            // never shows the Global UV Scale control at all any more, only
+            // the core Pairs tab does, so that row needs to say where to go.
+            var whereText = Data == _win.Data ? "above" : "on the Pairs tab";
+            SC2TerrainShell.DrawUnifiedNote($"Overridden by Global UV Scale {whereText} — currently " +
                 $"{_win.Data.GlobalUvScale:0.##} world units for every pair, core and background alike.");
+        }
 
         pair.SimplifyRatio = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"pair-{i}",
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Simplify Ratio"));

@@ -17,14 +17,31 @@ public sealed class SC2ExportPanel
     public SC2TerrainData Data;
 
     private readonly SC2TerrainShell _win;
+
+    // Persisted across Editor restarts (PlayerPrefs — the same pattern every
+    // other cross-session setting in this project uses, since EditorPrefs
+    // has no Build equivalent). Without this, _exportDir was only ever an
+    // in-memory field plus an undo-stack entry (SC2TerrainShell.CaptureAuxState/
+    // ApplyAuxState) — real for Ctrl+Z within one session, but reset to the
+    // hardcoded default the moment the Editor process restarted, discarding
+    // whatever folder the user had actually picked.
+    private const string ExportDirPrefKey = "SC2.ExportDir";
 #if UNITY_EDITOR
-    private string _exportDir = "Assets/Exports";
+    private const string DefaultExportDir = "Assets/Exports";
 #else
     // "Assets/" only exists inside a Unity project. In a standalone Build & Run
     // player there is no Assets folder, so default to a location that is always
     // writable next to (or under) the built game instead.
-    private string _exportDir = System.IO.Path.Combine(Application.persistentDataPath, "Exports");
+    private static readonly string DefaultExportDir = System.IO.Path.Combine(Application.persistentDataPath, "Exports");
 #endif
+    private string _exportDir = PlayerPrefs.GetString(ExportDirPrefKey, DefaultExportDir);
+
+    private void SetExportDir(string dir)
+    {
+        _exportDir = dir;
+        PlayerPrefs.SetString(ExportDirPrefKey, _exportDir ?? "");
+        PlayerPrefs.Save();
+    }
 
     // EditorUtility.DisplayDialog (which SC2TerrainExporter otherwise uses
     // for every success/error message) is a silent no-op in a standalone
@@ -48,6 +65,13 @@ public sealed class SC2ExportPanel
     // instead, matching how the real game actually ships them.
     private bool _exportAsArchives;
 
+    private GUIStyle _exportDirAreaStyle;
+    private GUIStyle ExportDirAreaStyle => _exportDirAreaStyle ??= new GUIStyle(EditorStyles.textArea)
+    {
+        wordWrap = true,
+        fixedHeight = 0f,
+    };
+
     public SC2ExportPanel(SC2TerrainShell win, SC2TerrainData data)
     {
         _win = win;
@@ -63,7 +87,7 @@ public sealed class SC2ExportPanel
 
     public void ApplyState(SC2ExportPanelState state)
     {
-        _exportDir = state.ExportDir;
+        SetExportDir(state.ExportDir);
         _debugSaveCostsImages = state.DebugSaveCostsImages;
         _exportAsArchives = state.ExportAsArchives;
     }
@@ -107,22 +131,16 @@ public sealed class SC2ExportPanel
         EditorGUILayout.EndHorizontal();
 
         EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        GUI.SetNextControlName("SC2_ExportOutputFolder");
         GUILayout.Label("Output", GUILayout.Width(SC2UiScale.Pxf(54f)));
-        var nextExportDir = GUILayout.TextField(_exportDir ?? "", GUILayout.Width(Mathf.Max(1f, w - 88f)), GUILayout.MaxWidth(Mathf.Max(1f, w - 88f)));
-        if (nextExportDir != _exportDir)
-        {
-            _win.RecordUndoCheckpoint("Change Export Folder");
-            _exportDir = nextExportDir;
-        }
-        if (GUILayout.Button("...", GUILayout.Width(SC2UiScale.Pxf(28f))))
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("Choose Folder...", GUILayout.Width(SC2UiScale.Pxf(120f))))
         {
 #if UNITY_EDITOR
             var d = EditorUtility.OpenFolderPanel("Export Folder", "Assets", "");
             if (!string.IsNullOrEmpty(d))
             {
                 _win.RecordUndoCheckpoint("Change Export Folder");
-                _exportDir = "Assets" + d[Application.dataPath.Length..];
+                SetExportDir("Assets" + d[Application.dataPath.Length..]);
             }
 #else
             // EditorUtility.OpenFolderPanel is an Editor-only dialog and does
@@ -136,11 +154,25 @@ public sealed class SC2ExportPanel
             if (!string.IsNullOrEmpty(d))
             {
                 _win.RecordUndoCheckpoint("Change Export Folder");
-                _exportDir = d;
+                SetExportDir(d);
             }
 #endif
         }
         EditorGUILayout.EndHorizontal();
+
+        // A single-line TextField clipped long paths with no way to read the
+        // rest short of clicking in and scrolling character-by-character — a
+        // wrapping, full-width TextArea instead shows the entire path,
+        // wrapping mid-path when necessary (Unity's own text layout already
+        // falls back to a character break for one "word" wider than the
+        // line, which is exactly the common case for an unbroken path).
+        GUI.SetNextControlName("SC2_ExportOutputFolder");
+        var nextExportDir = EditorGUILayout.TextArea(_exportDir ?? "", ExportDirAreaStyle, GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.MinHeight(SC2UiScale.Pxf(20f)));
+        if (nextExportDir != _exportDir)
+        {
+            _win.RecordUndoCheckpoint("Change Export Folder");
+            SetExportDir(nextExportDir);
+        }
 
         SC2TerrainShell.DrawUnifiedNote(
             "Output: one folder per map, named \"<Map Name>.scd\" (matching a real\n" +
@@ -218,14 +250,41 @@ public sealed class SC2ExportPanel
             _debugSaveCostsImages = nextDebugSaveCostsImages;
         }
 
+        EditorGUILayout.Space(8);
+        SC2TerrainShell.DrawUnifiedNote("Minimap renders fresh into minimap.win.dds below on every Export — nothing to do here. To review the minimap framing or capture the map-select preview screenshot by hand, see Scenario → Preview.");
+
         EditorGUILayout.Space(4);
         var btnStyle = new GUIStyle(GUI.skin.button){ fontSize=14, fontStyle=FontStyle.Bold };
-        if (GUILayout.Button("Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f))))
+        var exportPending = SC2MapPreviewCapture.IsCapturePending;
+        var guiEnabledBeforeExport = GUI.enabled;
+        GUI.enabled = guiEnabledBeforeExport && !exportPending;
+        if (GUILayout.Button(exportPending ? "Rendering minimap..." : "Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f))))
         {
             _win.SaveTerrainState(writeAssets: false);
             System.IO.Directory.CreateDirectory(_exportDir);
-            _lastExportResult = SC2TerrainExporter.ExportCorrect(Data, _exportDir, importedTerrains, _debugSaveCostsImages, _win.Session, _exportAsArchives);
+            _lastExportResult = "Rendering minimap...";
+            var data = Data;
+            var exportDir = _exportDir;
+            var debugSaveCostsImages = _debugSaveCostsImages;
+            var session = _win.Session;
+            var exportAsArchives = _exportAsArchives;
+            // Minimap must be rendered fresh (see SC2MapPreviewCapture's own
+            // doc comment for why this can't be a synchronous call right
+            // here) before the real, otherwise-unchanged ExportCorrect call
+            // below — everything captured into this closure is a plain
+            // local, unaffected by DrawPanelContent running again next frame.
+            SC2MapPreviewCapture.RequestMinimapCapture(data, tex =>
+            {
+                byte[] minimapDds = null;
+                if (tex != null)
+                {
+                    minimapDds = SC2DdsEncoder.BuildDxt1SingleMip(SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.ToRgbBytes(tex));
+                    UnityEngine.Object.DestroyImmediate(tex);
+                }
+                _lastExportResult = SC2TerrainExporter.ExportCorrect(data, exportDir, importedTerrains, debugSaveCostsImages, session, exportAsArchives, minimapDds);
+            });
         }
+        GUI.enabled = guiEnabledBeforeExport;
 
         // An additive path sitting beside Export above,
         // never replacing it — routes through SC2SmartExportPlanner/

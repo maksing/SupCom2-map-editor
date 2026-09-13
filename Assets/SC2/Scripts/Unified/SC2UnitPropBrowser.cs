@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
+using SC2.MapEditor.Document;
 
 /// <summary>
 /// Runtime-compatible unit/prop picker. It deliberately indexes BP files off
@@ -26,7 +27,6 @@ public sealed class SC2UnitPropBrowser
         }
     }
 
-    private const string RootPreference = "SC2.UnitPropBrowser.GameDataRoot";
     private const int WindowId = 184207;
     private const int MaxCachedPreviews = 72;
     private const int ThumbnailLoadsPerRepaint = 2;
@@ -35,7 +35,6 @@ public sealed class SC2UnitPropBrowser
     private const string AllPropFolders = "All folders";
     private static readonly Dictionary<string, SC2GameAssetDiscoveryResult> SharedIndexes = new Dictionary<string, SC2GameAssetDiscoveryResult>(StringComparer.OrdinalIgnoreCase);
 
-    private string _gameDataRoot;
     private string _search = string.Empty;
     private bool _showUnavailable;
     private AssetKind _kind;
@@ -88,14 +87,15 @@ public sealed class SC2UnitPropBrowser
     private Dictionary<string, SC2GameAsset> _unitAssetsById;
 
     public bool IsOpen => _onPick != null;
-    public string GameDataRoot => _gameDataRoot;
+    // Shared with the startup screen and every other archive-aware system in
+    // the editor (SC2GameInstallSettings.RootPath) — this browser used to
+    // keep its own separate PlayerPrefs root, requiring the user to
+    // configure the same gamedata folder twice. RootPath itself carries a
+    // one-time migration fallback from this class's old key, so an existing
+    // configured root isn't lost by this change.
+    public string GameDataRoot => SC2GameInstallSettings.RootPath;
     public bool IsIndexing => _loadTask != null;
     public Action RepaintHost;
-
-    public SC2UnitPropBrowser()
-    {
-        _gameDataRoot = PlayerPrefs.GetString(RootPreference, string.Empty);
-    }
 
     public void Open(AssetKind kind, Action<SC2UnitPropBrowserSelection> onPick)
     {
@@ -107,8 +107,9 @@ public sealed class SC2UnitPropBrowser
         _selectedUnitCategories.Clear();
         _unitCategoriesExpanded = false;
         _scroll = Vector2.zero;
-        bool rootChanged = string.IsNullOrWhiteSpace(_gameDataRoot) || !string.Equals(_loadedRoot, Path.GetFullPath(_gameDataRoot), StringComparison.OrdinalIgnoreCase);
-        if ((_result == null || rootChanged) && _loadTask == null && !string.IsNullOrWhiteSpace(_gameDataRoot)) StartLoad(false);
+        var root = GameDataRoot;
+        bool rootChanged = string.IsNullOrWhiteSpace(root) || !string.Equals(_loadedRoot, root, StringComparison.OrdinalIgnoreCase);
+        if ((_result == null || rootChanged) && _loadTask == null && !string.IsNullOrWhiteSpace(root)) StartLoad(false);
     }
 
     public void DrawModal()
@@ -136,13 +137,16 @@ public sealed class SC2UnitPropBrowser
             : "Blueprint -> SCM -> DDS. Prop cards use their resolved diffuse texture as a lightweight thumbnail.");
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Game data root", GUILayout.Width(SC2UiScale.Pxf(105f)));
-        _gameDataRoot = GUILayout.TextField(_gameDataRoot ?? string.Empty, GUILayout.ExpandWidth(true));
+        // Read-only: the gamedata root is configured once, on the startup
+        // screen (SC2GameInstallSettings.RootPath) — every archive-aware
+        // system in the editor shares it, this browser included, instead of
+        // asking the user to paste the same path again here.
+        GUILayout.Label("Game data root: " + (string.IsNullOrWhiteSpace(GameDataRoot) ? "(not configured — set on the startup screen)" : GameDataRoot), GUILayout.ExpandWidth(true));
         // Restores whatever GUI.enabled was BEFORE this button (not
         // hardcode true) — see SC2ObjectsShell.DrawUndoRedoRow's own
         // comment for why.
         var guiEnabledBeforeIndexButton = GUI.enabled;
-        GUI.enabled = guiEnabledBeforeIndexButton && _loadTask == null;
+        GUI.enabled = guiEnabledBeforeIndexButton && _loadTask == null && !string.IsNullOrWhiteSpace(GameDataRoot);
         if (GUILayout.Button(_result == null ? "Index" : "Reindex", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
         GUI.enabled = guiEnabledBeforeIndexButton;
         if (GUILayout.Button("Close", GUILayout.Width(SC2UiScale.Pxf(66f)))) { Close(); GUIUtility.ExitGUI(); }
@@ -151,7 +155,7 @@ public sealed class SC2UnitPropBrowser
         if (_loadTask != null)
         {
             GUILayout.FlexibleSpace();
-            GUILayout.Label("Indexing blueprints and resolving SCM/DDS...", GUI.skin.box, GUILayout.Height(SC2UiScale.Pxf(42f)));
+            GUILayout.Label("Indexing blueprints and resolving SCM/DDS from the game archives...", GUI.skin.box, GUILayout.Height(SC2UiScale.Pxf(42f)));
             GUILayout.FlexibleSpace();
             GUILayout.EndVertical();
             return;
@@ -160,7 +164,7 @@ public sealed class SC2UnitPropBrowser
         if (_result == null)
         {
             GUILayout.FlexibleSpace();
-            GUILayout.Label("Paste the extracted gamedata.scd directory and press Index.", GUI.skin.box, GUILayout.Height(SC2UiScale.Pxf(42f)));
+            GUILayout.Label("Set the gamedata root on the startup screen, then press Index.", GUI.skin.box, GUILayout.Height(SC2UiScale.Pxf(42f)));
             GUILayout.FlexibleSpace();
             GUILayout.EndVertical();
             return;
@@ -185,15 +189,13 @@ public sealed class SC2UnitPropBrowser
     private void StartLoad(bool forceReindex)
     {
         _loadError = null;
-        if (string.IsNullOrWhiteSpace(_gameDataRoot) || !Directory.Exists(_gameDataRoot))
+        string root = GameDataRoot;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
         {
-            _loadError = "Game data root does not exist.";
+            _loadError = "Game data root is not configured — set it on the startup screen.";
             return;
         }
 
-        string root = Path.GetFullPath(_gameDataRoot);
-        PlayerPrefs.SetString(RootPreference, root);
-        PlayerPrefs.Save();
         _unitIconPaths.Clear();
         _failedPreviewPaths.Clear();
         InvalidateVisibleEntries();
@@ -205,7 +207,53 @@ public sealed class SC2UnitPropBrowser
         }
         _result = null;
         _loadedRoot = null;
-        _loadTask = Task.Run(() => SC2GameAssetDiscovery.Build(FindBlueprintRoots(root), new[] { root }));
+        // A dedicated reader, independent of SC2GameArchiveRegistry's shared
+        // one — this runs on a background Task.Run, and System.IO.
+        // Compression.ZipArchive/ZipArchiveEntry give no thread-safety
+        // guarantee for concurrent access from another thread while the main
+        // thread might simultaneously use the shared reader for texture
+        // loading elsewhere in the app (SC2TerrainMaterialFactory,
+        // SC2TextureBrowser, ...). Opening a .scd's central-directory
+        // listing a second time is cheap (confirmed elsewhere in this
+        // codebase); disposed once indexing finishes, in PollLoadTask.
+        _loadTask = Task.Run(() =>
+        {
+            using var reader = OpenIndependentArchiveReader(root);
+            if (reader == null) throw new InvalidOperationException("No .scd archives found under the configured gamedata root.");
+            var entryPaths = reader.Entries.Select(e => e.NormalizedPath).ToList();
+            return SC2GameAssetDiscovery.BuildFromArchive(entryPaths, path => ReadArchiveEntryBytes(reader, path));
+        });
+    }
+
+    /// <summary>Reads one archive entry fully into memory — ZipArchiveEntry.
+    /// Open() (the real backing stream for a packed .scd) is forward-only/
+    /// non-seekable, so callers that need to seek (SC2ScmModelReader.Read)
+    /// buffer through this first.</summary>
+    private static byte[] ReadArchiveEntryBytes(ISC2SourceContainerReader reader, string normalizedPath)
+    {
+        using var stream = reader.OpenEntry(normalizedPath);
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>Opens a fresh, caller-owned reader over the same archives
+    /// SC2GameArchiveRegistry discovers under `root` — see StartLoad's own
+    /// comment for why this is deliberately NOT the shared registry
+    /// instance.</summary>
+    private static ISC2SourceContainerReader OpenIndependentArchiveReader(string root)
+    {
+        var archives = SC2GameInstallArchives.DiscoverArchives(root);
+        if (archives.Count == 0) return null;
+        var factory = new SC2SourceContainerReaderFactory();
+        var readers = new List<ISC2SourceContainerReader>();
+        foreach (var archive in archives)
+        {
+            try { readers.Add(factory.Open(archive.Path)); }
+            catch (Exception ex) { Debug.LogWarning($"[SC2 Unit/Prop Browser] Skipping archive '{archive.Path}': {ex.Message}"); }
+        }
+        if (readers.Count == 0) return null;
+        return readers.Count == 1 ? readers[0] : new SC2MultiSourceContainerReader(readers);
     }
 
     /// <summary>Kicks off indexing if a game data root is configured but
@@ -216,7 +264,7 @@ public sealed class SC2UnitPropBrowser
     public void EnsureIndexed()
     {
         if (_result != null || _loadTask != null) return;
-        if (string.IsNullOrWhiteSpace(_gameDataRoot) || !Directory.Exists(_gameDataRoot)) return;
+        if (string.IsNullOrWhiteSpace(GameDataRoot) || !Directory.Exists(GameDataRoot)) return;
         StartLoad(false);
     }
 
@@ -230,7 +278,7 @@ public sealed class SC2UnitPropBrowser
         try
         {
             _result = _loadTask.GetAwaiter().GetResult();
-            _loadedRoot = Path.GetFullPath(_gameDataRoot);
+            _loadedRoot = GameDataRoot;
             SharedIndexes[_loadedRoot] = _result;
             InvalidateVisibleEntries();
             BuildLookupIndexes();
@@ -584,13 +632,12 @@ public sealed class SC2UnitPropBrowser
         callback?.Invoke(new SC2UnitPropBrowserSelection(entry.Asset, ToGamePath(entry.Asset.SourcePath), entry.IsReady));
     }
 
-    private string ToGamePath(string absolutePath)
-    {
-        string root = Path.GetFullPath(_gameDataRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (absolutePath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-            return "/" + absolutePath.Substring(root.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Replace('\\', '/');
-        return absolutePath.Replace('\\', '/');
-    }
+    /// <summary>entry.Asset.SourcePath is now always a normalized
+    /// archive-relative path already (see SC2GameAssetDiscovery.
+    /// BuildFromArchive) — no absolute gamedata-root prefix left to strip,
+    /// just the leading "/" SC2ObjProp.BlueprintPath's own contract expects
+    /// (see FindPropAsset's doc comment).</summary>
+    private static string ToGamePath(string sourcePath) => "/" + (sourcePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
 
     private Texture2D GetPreview(SC2GameAssetDiscoveryEntry entry)
     {
@@ -599,8 +646,8 @@ public sealed class SC2UnitPropBrowser
         Texture2D texture;
         if (_previewCache.TryGetValue(path, out texture)) { TouchPreview(path); return texture; }
         if (Event.current.type != EventType.Repaint || _thumbnailLoadsThisRepaint >= ThumbnailLoadsPerRepaint) return null;
-        string error;
-        if (!SC2CustomTextureImporter.TryLoad(path, out texture, out error) || texture == null)
+        if (!SC2GameArchiveRegistry.TryGetReader(out var reader) ||
+            !SC2CustomTextureImporter.TryLoadPreviewFromArchive(reader, path, out texture, out _) || texture == null)
         {
             _failedPreviewPaths.Add(path);
             return null;
@@ -634,7 +681,8 @@ public sealed class SC2UnitPropBrowser
     {
         string cached;
         if (_unitIconPaths.TryGetValue(id, out cached)) return string.IsNullOrEmpty(cached) ? null : cached;
-        string icons = Path.Combine(_gameDataRoot, "textures", "ui", "common", "icons");
+        if (!SC2GameArchiveRegistry.TryGetReader(out var reader)) return null;
+        const string icons = "textures/ui/common/icons";
         // Some units (e.g. UUX0101/UUS0105) render as flat white silhouettes
         // instead of a real colored portrait. Traced against the real game
         // data on disk: icons/units/
@@ -648,12 +696,13 @@ public sealed class SC2UnitPropBrowser
         // instead of the real portrait; try hud/pc_units first now.
         string[] candidates =
         {
-            Path.Combine(icons, "hud", "pc_units", id + ".dds"),
-            Path.Combine(icons, "hud", "pc_units", id + ".win.dds"),
-            Path.Combine(icons, "units", id + "_icon.dds"),
-            Path.Combine(icons, "units", id + "_icon.win.dds"),
+            icons + "/hud/pc_units/" + id + ".dds",
+            icons + "/hud/pc_units/" + id + ".win.dds",
+            icons + "/units/" + id + "_icon.dds",
+            icons + "/units/" + id + "_icon.win.dds",
         };
-        string result = candidates.FirstOrDefault(File.Exists) ?? string.Empty;
+        string result = candidates.FirstOrDefault(candidate =>
+            reader.Entries.Any(e => string.Equals(e.NormalizedPath, candidate, StringComparison.OrdinalIgnoreCase))) ?? string.Empty;
         _unitIconPaths[id] = result;
         return string.IsNullOrEmpty(result) ? null : result;
     }
@@ -690,13 +739,6 @@ public sealed class SC2UnitPropBrowser
         }
     }
 
-    private static IEnumerable<string> FindBlueprintRoots(string root)
-    {
-        // Scan the extracted archive once. Catalog filtering excludes
-        // uncompiled sources and non-unit/prop declarations, while this also
-        // catches valid compiled prop BPs outside the conventional props root.
-        return Directory.Exists(root) ? new[] { root } : Array.Empty<string>();
-    }
 }
 
 public sealed class SC2UnitPropBrowserSelection

@@ -363,6 +363,24 @@ public class SC2TerrainRuntime : IDisposable
             _sharedChunkMat.SetTexture("_CostsOverlayTex", overlayTex);
     }
 
+    /// <summary>View menu's "Load Reference Image" — see SC2Terrain.shader's
+    /// own _ReferenceOverlayEnabled comment for why this REPLACES the whole
+    /// terrain render (an early-return in frag(), not a blended overlay
+    /// like SetCostsOverlayTexture above) whenever enabled, and why it's
+    /// sampled from world-space XZ rather than the mesh's own uv2. worldSize
+    /// is the real world extent (GridWidth*CellSize, GridHeight*CellSize) to
+    /// normalize by — passed by the caller rather than assumed like Costs'
+    /// own hardcoded 1024 default, so this stays correct on a differently-
+    /// sized map.</summary>
+    public void SetReferenceOverlay(Texture overlayTex, bool enabled, Vector2 worldSize)
+    {
+        if (_sharedChunkMat == null) return;
+        if (overlayTex != null)
+            _sharedChunkMat.SetTexture("_ReferenceOverlayTex", overlayTex);
+        _sharedChunkMat.SetVector("_ReferenceOverlaySize", new Vector4(Mathf.Max(1f, worldSize.x), Mathf.Max(1f, worldSize.y), 0f, 0f));
+        _sharedChunkMat.SetInt("_ReferenceOverlayEnabled", enabled && overlayTex != null ? 1 : 0);
+    }
+
     /// <summary>Reported directly: "show the 1-cell heightmap grid across
     /// the map" — same persistent-shader-parameter approach as
     /// SetCostsOverlayTexture above (procedural in the shader, no texture
@@ -587,7 +605,11 @@ public class SC2TerrainRuntime : IDisposable
                              float brushRotationRad = 0f)
     {
         var r2 = radius * radius;
-        var dt = strength * 0.016f * 30f;
+        // 2x the effect the raw Strength value produces (i.e. at Strength's
+        // max of 1, the brush now moves twice as much height per tick as
+        // before) — the 0-1 Strength slider range itself is unchanged, only
+        // its actual power.
+        var dt = strength * 0.016f * 60f;
         var x0 = Mathf.Max(0,          Mathf.FloorToInt((worldPos.x - radius) / CellSize));
         var x1 = Mathf.Min(GridWidth,  Mathf.CeilToInt ((worldPos.x + radius) / CellSize));
         var z0 = Mathf.Max(0,          Mathf.FloorToInt((worldPos.z - radius) / CellSize));

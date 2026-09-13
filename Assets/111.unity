@@ -131,6 +131,7 @@ GameObject:
   - component: {fileID: 922222094}
   - component: {fileID: 922222093}
   - component: {fileID: 922222098}
+  - component: {fileID: 922222099}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -224,6 +225,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5dffe36750b53804ab6aadd70f30908e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  StartupComplete: 0
   ShowUI: 1
   ShowPanel: 1
   EnableGameViewNavigation: 1
@@ -245,12 +247,19 @@ MonoBehaviour:
     OverlayHfield: 0
     OverlayCosts: 0
     OverlayCollision2: 0
-    OverlayObjects: 1
+    OverlayProps: 1
     OverlayMarkers: 1
-    OverlayGraphs: 1
+    OverlayUnits: 1
+    OverlayGraphLand: 1
+    OverlayGraphAir: 1
+    OverlayGraphNaval: 1
+    OverlayGraphAmphibious: 1
+    OverlayChains: 1
     OverlayAreas: 1
     OverlayWater: 1
     OverlayRNM: 0
+    OverlayGrid: 0
+    OverlayWireframe: 0
     SceneBridgeEnabled: 1
     CustomNavigationEnabled: 1
     DrawViewportHud: 1
@@ -272,12 +281,33 @@ MonoBehaviour:
   OverlayHfield: 0
   OverlayCosts: 0
   OverlayCollision2: 0
-  OverlayObjects: 1
+  OverlayProps: 1
   OverlayMarkers: 1
-  OverlayGraphs: 1
+  OverlayUnits: 1
+  OverlayGraphLand: 1
+  OverlayGraphAir: 1
+  OverlayGraphNaval: 1
+  OverlayGraphAmphibious: 1
+  OverlayChains: 1
   OverlayAreas: 1
   OverlayWater: 1
   OverlayRNM: 0
+  OverlayGrid: 0
+  OverlayWireframe: 0
+--- !u!114 &922222099
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 922222092}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 890148ce7ea2928469da62ad587e4081, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  waterActive: 1
+  waterElevation: 0
 --- !u!1 &1680004499
 GameObject:
   m_ObjectHideFlags: 0

@@ -123,7 +123,8 @@ public class SC2BackgroundEditMode
         // active resize draws its own preview circle and keeps responding
         // to mouse movement/Escape/click-to-confirm instead of this tool's
         // own brush cursor/sculpt-or-paint input firing underneath it.
-        if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 4f, 4096f))
+        if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 4f, 4096f,
+            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(Data, x, z)))
             return;
         DrawGizmo(camera, viewportRect);
         HandleInput(e);
@@ -147,7 +148,15 @@ public class SC2BackgroundEditMode
         if (_tool == Tool.PaintPair) { accent = new Color(0.35f, 0.65f, 1f, 0.95f); accentSoft = new Color(0.25f, 0.5f, 0.9f, 0.7f); }
         else if (_tool == Tool.PaintBlend) { accent = new Color(1f, 0.55f, 0.9f, 0.95f); accentSoft = new Color(0.9f, 0.4f, 0.8f, 0.7f); }
         else { accent = new Color(0.3f, 1f, 0.4f, 0.95f); accentSoft = new Color(0.2f, 0.8f, 0.3f, 0.7f); }
-        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _brushPos, _radius, accent, accentSoft, _radius * _hardness);
+        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _brushPos, _radius, accent, accentSoft, _radius * _hardness,
+            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(Data, x, z));
+
+        // Symmetry here follows the CORE terrain's own setting (_win.Data),
+        // same as the brush-apply code below — background painting has no
+        // separate symmetry setting of its own.
+        if (_win.Data.Symmetry != SymmetryMode.None)
+            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, _win.Data.GetSymmetricPositions(_brushPos),
+                accentSoft, sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(Data, x, z));
     }
 
     private void HandleInput(Event e)

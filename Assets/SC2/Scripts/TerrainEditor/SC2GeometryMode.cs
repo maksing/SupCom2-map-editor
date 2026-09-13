@@ -11,6 +11,7 @@ public struct SC2GeometryToolState
 {
     public int Tool;
     public float Radius, Strength, Hardness, FlattenH, SetHeight;
+    public bool StrengthScalesWithRadius;
 }
 
 public class SC2GeometryMode
@@ -26,6 +27,20 @@ public class SC2GeometryMode
     private float _hardness  = 0.5f; // 0=soft cosine, 1=hard step
     private float _flattenH  = SC2TerrainData.DefaultFlatHeight;
     private float _setHeight = SC2TerrainData.DefaultFlatHeight;  // target height for SetHeight tool
+
+    // Off by default (unchanged behavior): Raise/Lower/Smooth apply the same
+    // per-cell height delta regardless of Radius (SculptBrush's own dt is a
+    // function of Strength alone), which can make a wide brush feel "weaker"
+    // per stroke than a small one at the same Strength since a single drag
+    // re-stamps a small brush's own footprint far more densely. When on,
+    // effective strength scales linearly with Radius relative to
+    // StrengthRadiusReference (the slider's own default radius, so a fresh
+    // brush at its default Radius/Strength behaves identically either way) —
+    // Raise/Lower/Smooth only, per direct instruction; Flatten/SetHeight
+    // target an absolute height rather than adding a delta, and Noise's own
+    // amplitude wasn't asked for.
+    private bool _strengthScalesWithRadius;
+    private const float StrengthRadiusReference = 20f;
 
     private Vector3 _brushPos;
     private bool    _brushVis, _isPainting;
@@ -72,6 +87,7 @@ public class SC2GeometryMode
         Hardness = _hardness,
         FlattenH = _flattenH,
         SetHeight = _setHeight,
+        StrengthScalesWithRadius = _strengthScalesWithRadius,
     };
 
     public void ApplyState(SC2GeometryToolState state)
@@ -82,6 +98,7 @@ public class SC2GeometryMode
         _hardness = state.Hardness;
         _flattenH = state.FlattenH;
         _setHeight = state.SetHeight;
+        _strengthScalesWithRadius = state.StrengthScalesWithRadius;
     }
 
     // ── Panel ─────────────────────────────────────────────────────────────────
@@ -104,6 +121,12 @@ public class SC2GeometryMode
             onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Brush Radius"));
         _strength = SC2TerrainShell.DrawCompactSlider("Strength", _strength, 0.01f, 1f,
             onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Brush Strength"));
+        var newScalesWithRadius = EditorGUILayout.ToggleLeft(" Scale strength with radius (Raise/Lower/Smooth)", _strengthScalesWithRadius);
+        if (newScalesWithRadius != _strengthScalesWithRadius)
+        {
+            _win.RecordUndoCheckpoint("Toggle Strength Scales With Radius");
+            _strengthScalesWithRadius = newScalesWithRadius;
+        }
         _hardness = SC2TerrainShell.DrawCompactSlider("Hardness", _hardness, 0f, 1f,
             onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Brush Hardness"));
 
@@ -310,7 +333,25 @@ public class SC2GeometryMode
         EditorUtility.SetDirty(Data);
         SC2TerrainShell.BumpTerrainGeometryVersion();
         _win.InvalidateLiveHeightGrid();
+        NotifyWholeMapHeightChanged();
         _lastImportError = null;
+    }
+
+    /// <summary>Same SC2TerrainShell.HeightBrushApplied notification live
+    /// brush strokes fire (see its own doc comment), for a whole-map height
+    /// rewrite instead of one brush stamp — a heightmap import or an Apply
+    /// Height Scale/Raise/Lower can move every vertex on the map at once,
+    /// so every anchored Prop/Marker/Unit/AlignToSurface decal needs
+    /// reprojecting, not just a local circle. Reuses the same (center,
+    /// radius) event shape with a radius spanning the map's whole diagonal
+    /// rather than adding a second event type.</summary>
+    private void NotifyWholeMapHeightChanged()
+    {
+        var worldWidth = Data.GridWidth * Data.CellSize;
+        var worldHeight = Data.GridHeight * Data.CellSize;
+        var center = new Vector3(worldWidth * 0.5f, 0f, worldHeight * 0.5f);
+        var radius = 0.5f * Mathf.Sqrt(worldWidth * worldWidth + worldHeight * worldHeight) + 1f;
+        _win.HeightBrushApplied?.Invoke(center, radius);
     }
 
     /// <summary>Rewrites every height in the terrain via <paramref name="transform"/>
@@ -330,6 +371,7 @@ public class SC2GeometryMode
         EditorUtility.SetDirty(Data);
         SC2TerrainShell.BumpTerrainGeometryVersion();
         _win.InvalidateLiveHeightGrid();
+        NotifyWholeMapHeightChanged();
     }
 
     // ── SceneView ─────────────────────────────────────────────────────────────
@@ -359,7 +401,8 @@ public class SC2GeometryMode
         // already-active resize draws its own preview circle and keeps
         // responding to mouse movement/Escape/click-to-confirm instead of
         // this tool's own brush cursor/sculpt input firing underneath it.
-        if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 1f, 1000f))
+        if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 1f, 1000f,
+            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z)))
             return;
         DrawGameViewGizmo(camera, viewportRect);
         HandleInput(e);
@@ -471,7 +514,8 @@ public class SC2GeometryMode
             _radius,
             new Color(1f, 1f, 0.1f, 0.95f),
             new Color(1f, 0.65f, 0f, 0.75f),
-            _radius * _hardness);
+            _radius * _hardness,
+            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
 
         if (_tool == Tool.SetHeight)
         {
@@ -483,6 +527,11 @@ public class SC2GeometryMode
                 new Color(0f, 1f, 1f, 0.9f),
                 Color.clear);
         }
+
+        if (Data.Symmetry != SymmetryMode.None)
+            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, Data.GetSymmetricPositions(_brushPos),
+                new Color(0.3f, 0.8f, 1f, 0.9f),
+                sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
     }
 
     /// <summary>Editable path + thumbnail for Data.CustomGeometryBrushTexturePath
@@ -645,22 +694,41 @@ public class SC2GeometryMode
         if (Data.UseCustomGeometryBrush && Data.RandomizeGeometryBrushRotation && Data.RandomizeGeometryBrushRotationContinuous)
             _geoBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
 
+        // A little wider than the nominal brush radius when notifying
+        // Objects/Decals below — the brush's own falloff/hardness shaping
+        // and (for Smooth) its neighbor-sampling both reach very slightly
+        // past _radius, and it's far cheaper to reproject a couple of
+        // harmless extra objects at the edge than to miss one that's now
+        // sitting at a stale height.
+        var notifyRadius = _radius + Mathf.Max(2f, Data.CellSize * 2f);
+
         var brushMask = Data.UseCustomGeometryBrush ? _geoBrushPixels : null;
         if (_tool == Tool.SetHeight)
         {
             // SetHeight: directly set vertices within radius to _setHeight,
             // with hardness-controlled falloff
             foreach (var pos in Data.GetSymmetricPositions(_brushPos))
+            {
                 _win.Runtime.SculptSetHeight(pos, _radius, _strength, _hardness, _setHeight,
                     brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
+                _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
+            }
         }
         else
         {
             var mode = (int)_tool;
             var target = _tool == Tool.Flatten ? _flattenH : 0f;
+            var appliesRadiusCompensation = _strengthScalesWithRadius &&
+                (_tool == Tool.Raise || _tool == Tool.Lower || _tool == Tool.Smooth);
+            var effectiveStrength = appliesRadiusCompensation
+                ? _strength * (_radius / StrengthRadiusReference)
+                : _strength;
             foreach (var pos in Data.GetSymmetricPositions(_brushPos))
-                _win.Runtime.SculptBrush(pos, _radius, _strength, _hardness, mode, target,
+            {
+                _win.Runtime.SculptBrush(pos, _radius, effectiveStrength, _hardness, mode, target,
                     brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
+                _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
+            }
         }
 
         e.Use();

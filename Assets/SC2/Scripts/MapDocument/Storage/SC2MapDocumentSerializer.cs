@@ -286,6 +286,8 @@ namespace SC2.MapEditor.Document
             o.Set("waterDepthFalloffPower", SC2JsonValue.Of(e.WaterDepthFalloffPower));
             o.Set("waterDepthMinAlpha", SC2JsonValue.Of(e.WaterDepthMinAlpha));
             o.Set("waterDepthPaintBorder", SC2JsonValue.Of(e.WaterDepthPaintBorder));
+            o.Set("waterDepthShoreOutline", SC2JsonValue.Of(e.WaterDepthShoreOutline));
+            o.Set("waterDepthImageBorderOutline", SC2JsonValue.Of(e.WaterDepthImageBorderOutline));
             var unknowns = SC2JsonValue.NewArray();
             foreach (var f in e.UnknownFields)
             {
@@ -317,6 +319,8 @@ namespace SC2.MapEditor.Document
                 WaterDepthFalloffPower = (float)o.Get("waterDepthFalloffPower").AsDouble(2f),
                 WaterDepthMinAlpha = (float)o.Get("waterDepthMinAlpha").AsDouble(0.04f),
                 WaterDepthPaintBorder = o.Get("waterDepthPaintBorder").AsBool(true),
+                WaterDepthShoreOutline = o.Get("waterDepthShoreOutline").AsBool(false),
+                WaterDepthImageBorderOutline = o.Get("waterDepthImageBorderOutline").AsBool(false),
             };
             var waterTexturePaths = new List<string>();
             foreach (var v in o.Get("waterTexturePaths").Items()) waterTexturePaths.Add(v.AsString(""));

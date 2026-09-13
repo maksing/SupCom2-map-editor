@@ -32,6 +32,19 @@ Shader "Hidden/SC2/TerrainView"
         // (Mats/Pairs/unassigned-Textured) — 0=Standard, 1=Steel, 2=Zebra,
         // 3=Tan, 4=Dark, 5=Normal. See MatCapLit's own doc comment.
         _MatCapPreset ("MatCap Preset", Int) = 0
+        // Reference image overlay (View menu) — deliberately REPLACES the
+        // entire terrain rendering rather than blending on top of it like
+        // the overlays above, so it overrides every other preview mode by
+        // construction (see frag()'s own early-return). Sampled from uv1 —
+        // safe here (unlike SC2Terrain.shader's own copy of this feature,
+        // which must use world-space XZ instead) because THIS shader is
+        // only ever used for the live procedural terrain's own chunk mesh,
+        // where uv1 (see this file's own top-of-file comment) is always a
+        // genuine map-wide [0..1] square — never rendered against an
+        // imported terrain.bdf object, which is the only case where uv1/uv2
+        // means something else (a per-material/per-layer local UV).
+        _ReferenceOverlayTex ("Reference Image Overlay", 2D) = "black" {}
+        _ReferenceOverlayEnabled ("Reference Overlay Enabled", Int) = 0
     }
 
     SubShader
@@ -68,6 +81,8 @@ Shader "Hidden/SC2/TerrainView"
             float _WireframeCellSize;
             float4 _WireframeColor;
             int _MatCapPreset;
+            sampler2D _ReferenceOverlayTex;
+            int _ReferenceOverlayEnabled;
 
             struct a2v
             {
@@ -415,6 +430,14 @@ Shader "Hidden/SC2/TerrainView"
 
             float4 frag(v2f i) : SV_Target
             {
+                // Reference image overlay (View menu) — returns immediately,
+                // before any other sampling/lighting below, so it always
+                // overrides every other preview mode as requested. See this
+                // property's own Properties-block comment for why uv1 is
+                // safe to use directly here.
+                if (_ReferenceOverlayEnabled != 0)
+                    return tex2D(_ReferenceOverlayTex, saturate(i.uv1));
+
                 if (_PreviewMode == 3)
                 {
                     float3 n = normalize(i.nrm);

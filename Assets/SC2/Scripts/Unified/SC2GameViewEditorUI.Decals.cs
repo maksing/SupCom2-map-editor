@@ -16,6 +16,10 @@ public sealed partial class SC2GameViewEditorUI
         {
             RepaintHost = RepaintGameView
         };
+        // See SC2TerrainShell.HeightBrushApplied's own doc comment — keeps
+        // AlignToSurface decals following live Geometry-mode sculpting
+        // instead of only ever aligning once at placement/edit time.
+        _terrainShell.HeightBrushApplied += (center, radius) => _decalsShell?.ReprojectAlignedDecalsInRadius(center, radius);
     }
 
     private void DrawDecalsInspector()

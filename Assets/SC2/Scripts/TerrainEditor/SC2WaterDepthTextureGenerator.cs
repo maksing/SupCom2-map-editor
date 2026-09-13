@@ -25,6 +25,12 @@ using UnityEngine;
 /// </summary>
 public static class SC2WaterDepthTextureGenerator
 {
+    // 5 texels — see SC2TerrainData.WaterDepthShoreOutline's own doc
+    // comment for what this width means and why it's fixed, not exposed as
+    // its own slider.
+    private const float ShoreOutlineWidthTexels = 5f;
+
+
     /// <summary>Land/water classification + shoreline distance grid, shared
     /// by <see cref="Generate"/> and anything that wants to inspect the
     /// intermediate result (kept internal-only for now — no external caller
@@ -144,10 +150,48 @@ public static class SC2WaterDepthTextureGenerator
             rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b;
 
             if (!isWater[i]) { alpha[i] = 0; continue; }
-            var distWorld = distTexels[i] * worldPerTexel;
+            // See SC2TerrainData.WaterDepthShoreOutline's own doc comment —
+            // a hard flat-255 override here (an earlier version of this)
+            // created a visible jagged seam right where the override band
+            // ended and the normal gradient resumed, since distTexels is a
+            // discretized per-texel distance field (a circle/diagonal
+            // approximated in axis-aligned texel steps) — a solid block of
+            // one constant value butting up against it stood out sharply.
+            // Instead, shift the EFFECTIVE distance every water texel
+            // computes its alpha from by the outline width: the exact same
+            // continuous Lerp/Pow curve below just starts ShoreOutlineWidthTexels
+            // texels further along, so the shore itself lands on whatever
+            // alpha the curve would naturally reach at that distance
+            // (visibly higher than WaterDepthMinAlpha, never a flat/solid
+            // block) and everything past it is a seamless continuation of
+            // the same fade — never dropping back down to the bare
+            // WaterDepthMinAlpha floor right at the coastline.
+            var effectiveDistTexels = data.WaterDepthShoreOutline ? distTexels[i] + ShoreOutlineWidthTexels : distTexels[i];
+            var distWorld = effectiveDistTexels * worldPerTexel;
             var t = Mathf.Clamp01(distWorld / margin);
             var a = Mathf.Lerp(minAlpha, 1f, Mathf.Pow(t, falloffPower));
             alpha[i] = (byte)Mathf.RoundToInt(Mathf.Clamp01(a) * 255f);
+        }
+
+        // See SC2TerrainData.WaterDepthImageBorderOutline's own doc comment —
+        // applied last, as a hard override over everything above (including
+        // WaterDepthPaintBorder). A visible solid stroke of fully-opaque
+        // water color (RGB is already the flat water fill above) around the
+        // texture's own outer edge, not a zero-alpha cutout — alpha 0 there
+        // would just read as "not water" and disappear instead of showing
+        // as an outline.
+        if (data.WaterDepthImageBorderOutline)
+        {
+            for (var x = 0; x < texSize; x++)
+            {
+                alpha[x] = 255;                                  // z = 0
+                alpha[(texSize - 1) * texSize + x] = 255;         // z = texSize-1
+            }
+            for (var z = 0; z < texSize; z++)
+            {
+                alpha[z * texSize] = 255;                         // x = 0
+                alpha[z * texSize + (texSize - 1)] = 255;         // x = texSize-1
+            }
         }
     }
 

@@ -18,6 +18,7 @@ MonoBehaviour:
   GridHeight: 256
   CellSize: 4
   IsInitialized: 1
+  MapShotBgraPixels: 
   ImportOnlyMode: 0
   SingleBspNodePerLayer: 0
   VanillaCandidateBspSplit: 1
@@ -66171,6 +66172,8 @@ MonoBehaviour:
   WaterDepthFalloffPower: 2
   WaterDepthMinAlpha: 0.04
   WaterDepthPaintBorder: 1
+  WaterDepthShoreOutline: 0
+  WaterDepthImageBorderOutline: 0
   BackgroundTerrainEnabled: 0
   BackgroundTerrainData: {fileID: 0}
   BackgroundTerrainSize: 4096

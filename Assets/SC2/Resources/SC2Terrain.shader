@@ -148,6 +148,21 @@ Shader "SC2/Terrain"
         // procedural terrain, same reasoning as the Costs overlay above.
         [Toggle] _HeightGridEnabled ("Heightmap Grid Enabled", Float) = 0
         _HeightGridCellSize ("Heightmap Grid Cell Size", Float) = 1
+
+        // Reference image overlay (View menu) — deliberately REPLACES the
+        // entire terrain rendering rather than blending on top of it like
+        // the overlays above, so it overrides every other display mode by
+        // construction (see frag()'s own early-return). Sampled from
+        // world-space XZ normalized by _ReferenceOverlaySize, NOT i.uv2 —
+        // same reasoning as _CostsOverlayGridSize's comment above: i.uv2 is
+        // a genuine map-wide [0..1] square only for the live procedural
+        // terrain's own chunk mesh; on an imported terrain.bdf object
+        // (which shares this same shader), it's a per-material/per-layer
+        // LOCAL UV instead and would sample essentially arbitrary
+        // locations.
+        _ReferenceOverlayTex ("Reference Image Overlay", 2D) = "black" {}
+        [Toggle] _ReferenceOverlayEnabled ("Reference Overlay Enabled", Float) = 0
+        _ReferenceOverlaySize ("Reference Overlay World Size (X,Z)", Vector) = (1024, 1024, 0, 0)
     }
 
     SubShader
@@ -206,6 +221,9 @@ Shader "SC2/Terrain"
             float   _CostsOverlayGridSize;
             float   _HeightGridEnabled;
             float   _HeightGridCellSize;
+            sampler2D _ReferenceOverlayTex;
+            float   _ReferenceOverlayEnabled;
+            float4  _ReferenceOverlaySize;
 
             // RNM базис: azimuth 0/120/240 deg, elevation 35.26 deg
             static const float3 RNM_BASIS_0 = float3( 0.8165,  0.0000,  0.5774);
@@ -398,6 +416,17 @@ Shader "SC2/Terrain"
 
             fixed4 frag(Varyings i) : SV_Target
             {
+                // Reference image overlay (View menu) — returns immediately,
+                // before any other sampling/lighting below, so it always
+                // overrides every other display mode as requested. See
+                // this property's own Properties-block comment for why
+                // world-space XZ is used here instead of i.uv2.
+                if (_ReferenceOverlayEnabled > 0.5)
+                {
+                    float2 refUv = saturate(i.worldPos.xz / max(_ReferenceOverlaySize.xy, 1.0));
+                    return tex2D(_ReferenceOverlayTex, refUv);
+                }
+
                 // Blend factor из alpha _RNMMask1
                 half blend = (_EnableBlending > 0.5) ? tex2D(_RNMMask1, i.uv2).a : 0.0h;
 

@@ -18,6 +18,7 @@ namespace UnityEditor
     {
         private static GUIStyle FallbackLabel => GUI.skin != null && GUI.skin.label != null ? GUI.skin.label : GUIStyle.none;
         private static GUIStyle FallbackTextField => GUI.skin != null && GUI.skin.textField != null ? GUI.skin.textField : FallbackLabel;
+        private static GUIStyle FallbackTextArea => GUI.skin != null && GUI.skin.textArea != null ? GUI.skin.textArea : FallbackTextField;
         private static GUIStyle FallbackBox => GUI.skin != null && GUI.skin.box != null ? GUI.skin.box : FallbackLabel;
         private static GUIStyle FallbackButton => GUI.skin != null && GUI.skin.button != null ? GUI.skin.button : FallbackLabel;
 
@@ -27,6 +28,7 @@ namespace UnityEditor
         public static GUIStyle centeredGreyMiniLabel => FallbackLabel;
         public static GUIStyle largeLabel => FallbackLabel;
         public static GUIStyle textField => FallbackTextField;
+        public static GUIStyle textArea => FallbackTextArea;
         public static GUIStyle toolbar => FallbackBox;
         public static GUIStyle toolbarButton => FallbackButton;
         public static GUIStyle foldout => FallbackLabel;
@@ -108,6 +110,8 @@ namespace UnityEditor
             return result;
         }
         public static string TextField(string text, params GUILayoutOption[] options) => GUILayout.TextField(text ?? "", options);
+        public static string TextArea(string text, params GUILayoutOption[] options) => GUILayout.TextArea(text ?? "", options);
+        public static string TextArea(string text, GUIStyle style, params GUILayoutOption[] options) => GUILayout.TextArea(text ?? "", style, options);
         public static float FloatField(string label, float value, params GUILayoutOption[] options)
         {
             BeginHorizontal();
@@ -489,6 +493,7 @@ public static class EditorStyles
     public static GUIStyle centeredGreyMiniLabel => UnityEditor.EditorStyles.centeredGreyMiniLabel;
     public static GUIStyle largeLabel => UnityEditor.EditorStyles.largeLabel;
     public static GUIStyle textField => UnityEditor.EditorStyles.textField;
+    public static GUIStyle textArea => UnityEditor.EditorStyles.textArea;
     public static GUIStyle toolbar => UnityEditor.EditorStyles.toolbar;
     public static GUIStyle toolbarButton => UnityEditor.EditorStyles.toolbarButton;
     public static GUIStyle foldout => UnityEditor.EditorStyles.foldout;
@@ -526,6 +531,8 @@ public static class EditorGUILayout
     public static void LabelField(string label, string label2, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.LabelField(label, label2, options);
     public static string TextField(string label, string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextField(label, text, options);
     public static string TextField(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextField(text, options);
+    public static string TextArea(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextArea(text, options);
+    public static string TextArea(string text, GUIStyle style, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextArea(text, style, options);
     public static float FloatField(string label, float value, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.FloatField(label, value, options);
     public static bool Toggle(string label, bool value, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.Toggle(label, value, options);
     public static bool Toggle(bool value, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.Toggle(value, options);

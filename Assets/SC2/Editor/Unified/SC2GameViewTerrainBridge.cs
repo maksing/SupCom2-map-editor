@@ -9,7 +9,6 @@ public static class SC2GameViewTerrainBridge
     private static bool _sceneSubscribed;
     private static bool _terrainActive;
     private static int _lastSubtab = -1;
-    private static bool? _lastPaintRnmSubMode;
 
     public static void SetTerrainActive(bool active)
     {
@@ -35,31 +34,10 @@ public static class SC2GameViewTerrainBridge
             _shell.SetMode(mode);
             _lastSubtab = subtabIndex;
         }
-        if (mode == SC2TerrainShell.EditorMode.Paint)
-        {
-            var rnmSubMode = subtabIndex == 4;
-            if (_lastPaintRnmSubMode != rnmSubMode)
-            {
-                _shell.SetPaintRnmSubMode(rnmSubMode);
-                _lastPaintRnmSubMode = rnmSubMode;
-            }
-        }
-        else
-        {
-            _lastPaintRnmSubMode = null;
-        }
 
         using (new EditorGUILayout.VerticalScope())
         {
             _shell.OnEmbeddedGUI(host.PanelContentWidth);
-
-            if (subtabIndex == 4)
-            {
-                EditorGUILayout.Space(6f);
-                EditorGUILayout.HelpBox(
-                    "Paint Blend uses the existing terrain editor paint/runtime data. Blend alpha, shadow factor and RNM lighting bake are tracked as separate work items.",
-                    MessageType.Info);
-            }
         }
 
         return true;
@@ -137,7 +115,6 @@ public static class SC2GameViewTerrainBridge
         _host = null;
         _terrainActive = false;
         _lastSubtab = -1;
-        _lastPaintRnmSubMode = null;
     }
 
     private static void OnSceneGUI(SceneView sceneView)
@@ -178,10 +155,8 @@ public static class SC2GameViewTerrainBridge
             case 3:
                 return SC2TerrainShell.EditorMode.Paint;
             case 4:
-                return SC2TerrainShell.EditorMode.Paint;
-            case 5:
                 return SC2TerrainShell.EditorMode.Simplified;
-            case 6:
+            case 5:
                 return SC2TerrainShell.EditorMode.Export;
             default:
                 return SC2TerrainShell.EditorMode.Geometry;

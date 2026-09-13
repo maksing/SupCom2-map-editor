@@ -774,14 +774,25 @@ public sealed class SC2ObjectsShell
         if (TryRaycastImportedTerrain(new Vector3(x, 100000f, z), Vector3.down, out var importedHit))
             return importedHit.y;
 
-        if (Data.Heights == null || Data.Heights.Length == 0 || Data.CellSize <= 0f) return 0f;
+        if (Data.CellSize <= 0f || Data.GridWidth <= 0 || Data.GridHeight <= 0) return 0f;
+        var runtime = _terrainShell?.Runtime;
+        if (runtime == null && (Data.Heights == null || Data.Heights.Length == 0)) return 0f;
         var stride = Data.GridWidth + 1;
         var fx = Mathf.Clamp(x / Data.CellSize, 0f, Data.GridWidth);
         var fz = Mathf.Clamp(z / Data.CellSize, 0f, Data.GridHeight);
         var x0 = Mathf.FloorToInt(fx); var z0 = Mathf.FloorToInt(fz);
         var x1 = Mathf.Min(x0 + 1, Data.GridWidth); var z1 = Mathf.Min(z0 + 1, Data.GridHeight);
         var tx = fx - x0; var tz = fz - z0;
-        float H(int gx, int gz) => Data.Heights[gz * stride + gx];
+        // Reads the LIVE runtime heightfield (Runtime.GetHeight) when
+        // available, not Data.Heights — during an in-progress Geometry-mode
+        // brush drag, Data.Heights only re-syncs from the runtime on
+        // mouse-up (see SC2GeometryMode's own "Heights[] is only re-synced
+        // from the runtime on MouseUp" comment), so reprojecting off it
+        // mid-drag (SC2TerrainShell.HeightBrushApplied fires on every
+        // stamp, not just stroke-end) read one full stroke stale — props/
+        // markers/units looked like they were following the brush, but
+        // always one stroke behind the terrain actually visible.
+        float H(int gx, int gz) => runtime != null ? runtime.GetHeight(gx, gz) : Data.Heights[gz * stride + gx];
         var h00 = H(x0, z0); var h10 = H(x1, z0); var h01 = H(x0, z1); var h11 = H(x1, z1);
         var hx0 = Mathf.Lerp(h00, h10, tx); var hx1 = Mathf.Lerp(h01, h11, tx);
         return Mathf.Lerp(hx0, hx1, tz);
@@ -863,6 +874,49 @@ public sealed class SC2ObjectsShell
             m.Position = projected;
     }
     private void ReprojectUnit(SC2ObjUnitNode u) => u.Position = new Vector3(u.Position.x, SampleUnitHeight(u.Position.x, u.Position.z, u.Type) + u.HeightOffset, u.Position.z);
+
+    /// <summary>Wired to SC2TerrainShell.HeightBrushApplied (see its own doc
+    /// comment) — re-samples every anchored Prop/Marker/(non-group) Unit
+    /// whose X/Z falls within `radius` of `center` against the terrain's
+    /// CURRENT height, so live Geometry-mode sculpting keeps anchored
+    /// objects following the surface instead of only ever re-snapping once
+    /// at import time (see ImportObjectsFromPath's own doc comment on the
+    /// exact same gap for the one-time post-import case).
+    ///
+    /// Deliberately does not push an undo checkpoint: this runs on every
+    /// single brush stamp during a drag (far too often to record one each
+    /// time). An anchored object's position is a derived value (SampleHeight
+    /// + HeightOffset) that self-corrects on the next reprojection
+    /// regardless, so an Undo of the terrain edit not also reverting these
+    /// is an accepted trade-off — the same one already made for the
+    /// once-after-import reprojection above.</summary>
+    public void ReprojectAnchoredObjectsInRadius(Vector3 center, float radius)
+    {
+        if (Data == null) return;
+        var r2 = radius * radius;
+        var touched = false;
+        bool InRadius(Vector3 pos)
+        {
+            var dx = pos.x - center.x; var dz = pos.z - center.z;
+            return dx * dx + dz * dz <= r2;
+        }
+        foreach (var p in Data.ObjProps)
+        {
+            if (!p.AnchorToTerrain || !InRadius(p.Position)) continue;
+            ReprojectProp(p); touched = true;
+        }
+        foreach (var m in Data.ObjMarkers)
+        {
+            if (!m.AnchorToTerrain || !InRadius(m.Position)) continue;
+            ReprojectMarker(m); touched = true;
+        }
+        foreach (var u in Data.ObjUnits)
+        {
+            if (!u.AnchorToTerrain || u.IsGroup || !InRadius(u.Position)) continue;
+            ReprojectUnit(u); touched = true;
+        }
+        if (touched) MarkObjectsDirty();
+    }
 
     /// <summary>Name-based heuristic for "this unit type should float on the
     /// water surface over submerged terrain rather than sink to the seabed
@@ -4810,14 +4864,23 @@ public sealed class SC2ObjectsShell
         // matches what actually gets removed. Scatter mode only mirrors
         // once at stroke-end (MirrorBrushStroke), so its cursor stays
         // single-ring to match what a single paint tick actually places.
+        Func<float, float, float> sampleHeight = _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null;
         if (erasingPreview && Data.Symmetry != SymmetryMode.None)
         {
             foreach (var slot in Data.GetSymmetricPositions(hit))
-                SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, slot, _propsBrushRadius, color, Color.clear);
+                SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, slot, _propsBrushRadius, color, Color.clear, sampleHeight: sampleHeight);
         }
         else
         {
-            SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, hit, _propsBrushRadius, color, Color.clear);
+            SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, hit, _propsBrushRadius, color, Color.clear, sampleHeight: sampleHeight);
+            // Scatter mode only mirrors the WHOLE stroke once at stroke-end
+            // (see this method's own comment above), so a full duplicate
+            // ring per slot here would misleadingly suggest each paint tick
+            // places symmetrically in real time — a small point marker at
+            // each slot instead just calls out where the mirrored copies
+            // will actually land.
+            if (Data.Symmetry != SymmetryMode.None)
+                SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, hit, Data.GetSymmetricPositions(hit), color, sampleHeight: sampleHeight);
         }
     }
 
@@ -4833,7 +4896,8 @@ public sealed class SC2ObjectsShell
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
         var hasHit = TryRaycastImportedTerrain(ray.origin, ray.direction, out var hit) ||
             SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit);
-        return _propsBrushRadiusGesture.HandleInput(camera, viewportRect, mousePosition, hasHit, hit, allowInput, ref _propsBrushRadius, 1f, 60f);
+        return _propsBrushRadiusGesture.HandleInput(camera, viewportRect, mousePosition, hasHit, hit, allowInput, ref _propsBrushRadius, 1f, 60f,
+            sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null);
     }
 
     /// <summary>Shows what will actually be placed BEFORE the click, for

@@ -609,6 +609,14 @@ public static class SC2ObjectsExport
     public static string RegenerateScriptLua(SC2TerrainData data)
     {
         var playableArea = ResolvePlayableAreaName(data);
+        // Emitted verbatim (SetPlayableArea('')) regardless of whether a
+        // real Area was ever assigned — an empty-string argument isn't a
+        // real vanilla convention (every real vanilla _script.lua either
+        // names a real Area or has no such call at all), so leave the
+        // whole line out rather than calling it with nothing to clip to.
+        var setPlayableAreaLine = string.IsNullOrEmpty(playableArea)
+            ? ""
+            : $"\timport('/lua/sim/ScenarioFramework.lua').SetPlayableArea('{playableArea}')\r\n";
         return
             "function OnPopulate()\r\n" +
             "\timport('/lua/sim/ScenarioUtilities.lua').InitializeArmies()\r\n" +
@@ -618,7 +626,7 @@ public static class SC2ObjectsExport
             "\t\tFarZoom\t\t\t= -1,\t\t-- -1 = default\t\tFarthest mouse can zoom out from terrain, measured in LOD units, -1 to ignore.\r\n" +
             "\t}\r\n" +
             "\timport('/lua/sim/SimCamera.lua').SimCamera('WorldCamera'):UpdateDefaults(camData)\r\n" +
-           $"\timport('/lua/sim/ScenarioFramework.lua').SetPlayableArea('{playableArea}')\r\n" +
+            setPlayableAreaLine +
             "end\r\n" +
             "\r\n" +
             "function OnStart(self)\r\n" +

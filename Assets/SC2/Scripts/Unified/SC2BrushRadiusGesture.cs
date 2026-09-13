@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -49,7 +50,7 @@ public sealed class SC2BrushRadiusGesture
     /// gesture consumed this frame (caller should skip its own handling for
     /// this frame entirely); radius is updated in place.</summary>
     public bool HandleInput(Camera camera, Rect viewportRect, Vector2 mousePosition, bool hasHover, Vector3 hoverWorld,
-        bool allowInput, ref float radius, float min, float max)
+        bool allowInput, ref float radius, float min, float max, Func<float, float, float> sampleHeight = null)
     {
         var e = Event.current;
 
@@ -74,7 +75,7 @@ public sealed class SC2BrushRadiusGesture
         var pixelsPerWorldUnit = Mathf.Max(0.0001f, Vector2.Distance(anchorGui, unitGui));
         radius = Mathf.Clamp(Vector2.Distance(anchorGui, mousePosition) / pixelsPerWorldUnit, min, max);
 
-        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _anchorWorld, radius, new Color(1f, .95f, .25f, .95f), Color.clear);
+        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _anchorWorld, radius, new Color(1f, .95f, .25f, .95f), Color.clear, sampleHeight: sampleHeight);
 
         if (e != null && e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
         {

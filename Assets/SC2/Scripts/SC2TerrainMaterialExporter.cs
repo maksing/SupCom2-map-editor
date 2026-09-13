@@ -24,7 +24,7 @@ using BdfIO.Formats.Terrain;
 
 public static class SC2TerrainMaterialExporter
 {
-    public static void ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null)
+    public static void ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null, System.Func<string, Texture2D, string> resolveRawResourcePath = null)
     {
         for (var i = 0; i < materials.Count && i < sharedMaterials.Length; i++)
         {
@@ -34,7 +34,26 @@ public static class SC2TerrainMaterialExporter
             var unityMat = sharedMaterials[i];
             if (unityMat == null || unityMat.shader == null || unityMat.shader.name != "SC2/Terrain") continue;
 
-            string Override(string prop) => texturePathOverrides != null && texturePathOverrides.TryGetValue(i + ":" + prop, out var p) && !string.IsNullOrEmpty(p) ? p : null;
+            // A "file:"/"archive:" override (the Texture Browser's own
+            // internal marker syntax for a Custom/archive-sourced pick — see
+            // SC2GameViewEditorUI.DrawMaterialTextureSlot) used to leak
+            // straight into TexturePaths verbatim, exactly the bug
+            // SC2TerrainExporter.RegTex's own "file:"/"archive:" handling
+            // already fixed for the regular Materials/Pairs export path —
+            // resolve it the same way here: copy the real file into this
+            // export's Textures folder and swap in the real, in-game path.
+            // resolveRawResourcePath is null for BuildPreviewGeometryModel's
+            // geometry-only preview (no texture paths read there at all),
+            // in which case a raw override just passes through unchanged,
+            // same as before this fix.
+            string Override(string prop)
+            {
+                if (texturePathOverrides == null || !texturePathOverrides.TryGetValue(i + ":" + prop, out var p) || string.IsNullOrEmpty(p))
+                    return null;
+                if (resolveRawResourcePath == null) return p;
+                var tex = unityMat.HasProperty(prop) ? unityMat.GetTexture(prop) as Texture2D : null;
+                return resolveRawResourcePath(p, tex) ?? p;
+            }
 
             // Real slots per the MaterialData structure.
             TryUpdateSlot(mat, 0, unityMat, "_Diffuse1", Override("_Diffuse1"));

@@ -1248,6 +1248,52 @@ public sealed class SC2DecalsShell : IDisposable
         _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         _renderedRevision = -1; RepaintHost?.Invoke();
     }
+
+    /// <summary>Wired to SC2TerrainShell.HeightBrushApplied (see its own doc
+    /// comment) — re-samples every AlignToSurface decal's stored Position/
+    /// SurfaceNormal against the terrain's CURRENT height/normal, for every
+    /// placement whose X/Z falls within `radius` of `center`, so live
+    /// Geometry-mode sculpting keeps decals following the surface instead
+    /// of only aligning once at placement/edit time.
+    ///
+    /// Mutates SC2DecalPlacement fields directly rather than going through
+    /// Commit/SC2ReplaceDecalsStateCommand — same reasoning as
+    /// SC2ObjectsShell.ReprojectAnchoredObjectsInRadius's own doc comment:
+    /// this runs on every single brush stamp during a drag, far too often
+    /// to push a real undo command each time, and Position[1]/SurfaceNormal
+    /// here are derived values that self-correct on the next reprojection
+    /// regardless.</summary>
+    public void ReprojectAlignedDecalsInRadius(Vector3 center, float radius)
+    {
+        if (Doc?.Placements == null || _terrainShell == null) return;
+        var r2 = radius * radius;
+        var touched = false;
+        const float eps = 0.5f;
+        foreach (var p in Doc.Placements)
+        {
+            if (p == null || !p.AlignToSurface || p.Position == null || p.Position.Length < 3) continue;
+            var dx = p.Position[0] - center.x; var dz = p.Position[2] - center.z;
+            if (dx * dx + dz * dz > r2) continue;
+
+            // SampleLiveRuntimeHeight, not SampleLiveHeightGrid — the latter
+            // is a debounced cache that only rebuilds from Data.Heights,
+            // itself only re-synced from the runtime at stroke MouseUp (see
+            // SC2TerrainShell.SampleLiveRuntimeHeight's own doc comment), so
+            // it read one whole stroke stale during a live drag.
+            var x = p.Position[0]; var z = p.Position[2];
+            p.Position[1] = _terrainShell.SampleLiveRuntimeHeight(x, z) + p.HeightOffset;
+
+            var hL = _terrainShell.SampleLiveRuntimeHeight(x - eps, z);
+            var hR = _terrainShell.SampleLiveRuntimeHeight(x + eps, z);
+            var hD = _terrainShell.SampleLiveRuntimeHeight(x, z - eps);
+            var hU = _terrainShell.SampleLiveRuntimeHeight(x, z + eps);
+            var normal = new Vector3(hL - hR, 2f * eps, hD - hU).normalized;
+            if (p.SurfaceNormal == null || p.SurfaceNormal.Length < 3) p.SurfaceNormal = new float[3];
+            p.SurfaceNormal[0] = normal.x; p.SurfaceNormal[1] = normal.y; p.SurfaceNormal[2] = normal.z;
+            touched = true;
+        }
+        if (touched) { _renderedRevision = -1; RepaintHost?.Invoke(); }
+    }
     private bool TryEntry(out SC2DecalAtlasEntry e) { e = null; if (_selectedEntry < 0 || _selectedEntry >= Doc.Entries.Count) return false; e = Doc.Entries[_selectedEntry]; return true; }
     private Rect AtlasUv(SC2DecalAtlasEntry e) => Doc.AtlasWidth > 0 && Doc.AtlasHeight > 0 ? new Rect(e.X / (float)Doc.AtlasWidth, 1f - (e.Y + e.Height) / (float)Doc.AtlasHeight, e.Width / (float)Doc.AtlasWidth, e.Height / (float)Doc.AtlasHeight) : new Rect(0, 0, 1, 1);
     private void ClampRect(SC2DecalAtlasEntry e) { e.X = Mathf.Clamp(e.X, 0, Mathf.Max(0, Doc.AtlasWidth - 1)); e.Y = Mathf.Clamp(e.Y, 0, Mathf.Max(0, Doc.AtlasHeight - 1)); e.Width = Mathf.Clamp(e.Width, 1, Mathf.Max(1, Doc.AtlasWidth - e.X)); e.Height = Mathf.Clamp(e.Height, 1, Mathf.Max(1, Doc.AtlasHeight - e.Y)); }
@@ -1267,7 +1313,16 @@ public sealed class SC2DecalsShell : IDisposable
     private SC2BlobReference PutTexture(Texture2D texture)
     {
         if (_session.BlobStore == null || texture == null) return SC2BlobReference.Empty;
-        var pixels = texture.GetPixels32(); var rgb = new byte[pixels.Length * 3]; var alpha = new byte[pixels.Length];
+        // GetPixels32 returns Unity's native bottom-up row order;
+        // SC2DdsEncoder.BuildMaterialDds expects DDS's top-down order and
+        // never flips internally — same fix as SC2CustomTextureImporter.
+        // EncodeMaterialDds/SC2RuntimeTextureExporter.TryExportAsDds.
+        var rawPixels = texture.GetPixels32();
+        var w = texture.width; var h = texture.height;
+        var pixels = new Color32[rawPixels.Length];
+        for (var y = 0; y < h; y++)
+            Array.Copy(rawPixels, y * w, pixels, (h - 1 - y) * w, w);
+        var rgb = new byte[pixels.Length * 3]; var alpha = new byte[pixels.Length];
         for (var i = 0; i < pixels.Length; i++) { rgb[i * 3] = pixels[i].r; rgb[i * 3 + 1] = pixels[i].g; rgb[i * 3 + 2] = pixels[i].b; alpha[i] = pixels[i].a; }
         using var stream = new MemoryStream(SC2DdsEncoder.BuildMaterialDds(texture.width, texture.height, rgb, alpha), false);
         return _session.BlobStore.Put(stream);

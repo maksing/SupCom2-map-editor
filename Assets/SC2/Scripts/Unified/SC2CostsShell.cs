@@ -973,7 +973,8 @@ public sealed class SC2CostsShell
         // frame where the cursor briefly strays off the raycastable surface;
         // HandleInput itself only needs hasHit/hit to START a new resize,
         // not to continue one already in progress.
-        if (_brushRadiusGesture.HandleInput(camera, viewportRect, mousePosition, hasHit, hit, allowInput, ref _brushRadius, 1f, 128f))
+        if (_brushRadiusGesture.HandleInput(camera, viewportRect, mousePosition, hasHit, hit, allowInput, ref _brushRadius, 1f, 128f,
+            sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null))
             return;
 
         if (!hasHit)
@@ -1001,7 +1002,18 @@ public sealed class SC2CostsShell
             var previewPreset = erasingPreview ? _presets[0] : _presets[_activePreset];
             brushColor = new Color(previewPreset.Color.r, previewPreset.Color.g, previewPreset.Color.b, 0.9f);
         }
-        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, hit, _brushRadius, brushColor, Color.clear);
+        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, hit, _brushRadius, brushColor, Color.clear,
+            sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null);
+
+        // Costs painting mirrors symmetry per-cell at paint time
+        // (ToGridSymmetry/SC2Symmetry.GetSymmetricCells below), not by
+        // painting a second full brush circle at a mirrored world position
+        // — but a point at GetSymmetricPositions(hit) still calls out where
+        // that per-cell mirroring is centered, using the same Symmetry/
+        // SymmetryCenter/RadialCount config both mechanisms share.
+        if (Data.Symmetry != SymmetryMode.None)
+            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, hit, Data.GetSymmetricPositions(hit), brushColor,
+                sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null);
 
         if (e.type == EventType.MouseDown && e.button == 0)
         {

@@ -170,6 +170,36 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // re-arms itself the moment the user comes back to the same sub-tab.
     private bool _wasObjectsTabActive;
     private string _tool = "Select";
+
+    // ── Measure tool (Edit menu / "M") ──────────────────────────────────────
+    // XZ tape-measure: click sets the start point, a live line+distance
+    // follows the cursor until a second click locks the end point; a third
+    // click starts a fresh measurement from that point. See
+    // HandleMeasureToolGameViewInput's own doc comment.
+    private bool _measureHasStart;
+    private Vector3 _measureStart;
+    private bool _measureHasEnd;
+    private Vector3 _measureEnd;
+
+    // ── Map frame overlay (View menu) ───────────────────────────────────────
+    // Configurable rectangle, centered on the map's own playable footprint
+    // (CostsGridSize/2, CostsGridSize/2 — the same "the map" convention
+    // Costs/hfield/decals/water-depth already use), width/height in world
+    // (XZ) units. Session-only, like every other View menu toggle here
+    // (Inspector Panel/Game Navigation/Hotkeys enabled/Measure) — not saved
+    // into SC2TerrainData.
+    private bool _showMapFrame;
+    private float _mapFrameWidth = 1024f;
+    private float _mapFrameHeight = 1024f;
+
+    // ── Reference image overlay (View menu) ─────────────────────────────────
+    // Loaded on demand (not a project asset), shown/hidden via
+    // SC2Terrain.shader's own _ReferenceOverlayEnabled early-return — see
+    // that shader's Properties comment for why it REPLACES the whole
+    // terrain render rather than blending, and why world-space (not uv2)
+    // is used to sample it. Session-only, not saved into SC2TerrainData.
+    private Texture2D _referenceOverlayTex;
+    private bool _showReferenceOverlay;
     private bool _showFileMenu;
     private bool _showEditMenu;
     private bool _showViewMenu;
@@ -640,7 +670,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// existing public-getter pattern below.</summary>
     public SC2TerrainShell TerrainShell => _terrainShell;
     private int _terrainShellLastSubtab = -1;
-    private bool? _terrainShellPaintBlendSubMode;
     private GUIStyle _panelStyle;
     private GUIStyle _headerStyle;
     private GUIStyle _titleStyle;
@@ -882,6 +911,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private void LateUpdate()
     {
+        // Must run before anything else below queues a single
+        // Graphics.DrawMesh(camera:null) this frame — see
+        // SC2MapPreviewCapture's own doc comment for why a pending
+        // minimap/preview capture has to render before this method's own
+        // prop/marker/pick-dot draw calls, not after.
+        SC2MapPreviewCapture.ProcessPendingCapture();
+
         // THE fix for the editor-UI-baked-into-the-blend-mask bug. IMGUI
         // (OnGUI) captures the "current" render target ONCE at the start of the
         // frame's Repaint and renders the entire UI into it. If
@@ -1288,6 +1324,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 // cursor it draws first (DrawGameViewGizmo, before the paint call
                 // itself) can't inherit a leaked render target from anything above.
                 RenderTexture.active = null;
+                // Runs first and consumes its own clicks (e.Use()) so the
+                // active tab's own paint/place/select handlers below never
+                // also fire on the same click while Measure is active.
+                HandleMeasureToolGameViewInput();
+                DrawMapFrameOverlay();
                 HandleTerrainGameViewInput();
                 SyncTerrainOverlayFlags();
                 HandleCostsGameViewInput();
@@ -1880,7 +1921,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             if (GUILayout.Button("Undo (Ctrl+Z)", _dropdownItemStyle)) { UndoTerrainEdit(); _showEditMenu = false; }
             if (GUILayout.Button("Redo (Ctrl+Y)", _dropdownItemStyle)) { RedoTerrainEdit(); _showEditMenu = false; }
             if (GUILayout.Button("Select (LMB)", _dropdownItemStyle)) { SetTool("Select"); _showEditMenu = false; }
-            if (GUILayout.Button("Measure (M)", _dropdownItemStyle)) { SetTool("Measure"); _showEditMenu = false; }
+            if (GUILayout.Button("Measure (M)", _dropdownItemStyle)) { ToggleMeasureTool(); _showEditMenu = false; }
         });
     }
 
@@ -1904,7 +1945,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // doc comment for why this class of bug exists at all. Deliberately
         // generous (this only sizes the background card + hit-test rect,
         // never clips GUILayout content) rather than exactly tuned.
-        var contentHeight = 5 * MenuItemHeight + 250f * SC2UiScale.Scale;
+        var contentHeight = 8 * MenuItemHeight + 340f * SC2UiScale.Scale;
 #if !UNITY_EDITOR
         contentHeight += 16f * SC2UiScale.Scale;
 #endif
@@ -1913,6 +1954,41 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             GUILayout.Label("PANELS", _dropdownSectionLabelStyle);
             ShowPanel = GUILayout.Toggle(ShowPanel, "Inspector Panel", _dropdownToggleStyle);
             EnableGameViewNavigation = GUILayout.Toggle(EnableGameViewNavigation, "Game Navigation", _dropdownToggleStyle);
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("TOOLS", _dropdownSectionLabelStyle);
+            // A real Toggle (not a plain button) so its own pressed/
+            // unpressed state IS the "is Measure active" indicator — matches
+            // how every other on/off setting in this menu (Inspector Panel,
+            // Game Navigation, Hotkeys enabled) already shows its state.
+            var measureActive = GUILayout.Toggle(_tool == "Measure", "Measure Tool (M)", _dropdownToggleStyle);
+            if (measureActive != (_tool == "Measure")) ToggleMeasureTool();
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("MAP FRAME", _dropdownSectionLabelStyle);
+            _showMapFrame = GUILayout.Toggle(_showMapFrame, "Show Map Border", _dropdownToggleStyle);
+            _mapFrameWidth = Mathf.Max(0.01f, SC2EnvFieldGui.FloatField("Width", _mapFrameWidth, "MapFrameWidth"));
+            _mapFrameHeight = Mathf.Max(0.01f, SC2EnvFieldGui.FloatField("Height", _mapFrameHeight, "MapFrameHeight"));
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("REFERENCE IMAGE", _dropdownSectionLabelStyle);
+            if (GUILayout.Button(_referenceOverlayTex != null ? "Change Reference Image..." : "Load Reference Image...", GUILayout.Height(SC2UiScale.Pxf(26f))))
+                LoadReferenceImage();
+            var nextShowReference = GUILayout.Toggle(_showReferenceOverlay, "Show Reference (overrides view)", _dropdownToggleStyle);
+            if (nextShowReference != _showReferenceOverlay)
+            {
+                _showReferenceOverlay = nextShowReference;
+                ApplyReferenceOverlayState();
+            }
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -2462,6 +2538,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // reference to this _terrainShell, not to this class) can raycast
         // the real imported surface too.
         _terrainShell.GetImportedTerrainColliders = BuildImportedTerrainColliders;
+        // A map load/switch rebuilds Runtime's own shared chunk material
+        // from scratch, resetting the reference-overlay shader properties
+        // to their defaults — re-push whatever this class's own fields
+        // currently say right after, so the overlay survives switching maps
+        // instead of silently reverting to off.
+        _terrainShell.DataChanged += _ => ApplyReferenceOverlayState();
         // Prop/unit blueprint indexing (and the Objects document sync just
         // below it) must not depend on the Objects tab having been opened
         // first — EnsureObjectsShell is otherwise only called from Objects-
@@ -2509,35 +2591,29 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             _terrainShell.SetMode(mode);
             _terrainShellLastSubtab = _subTab;
         }
-
-        if (mode == SC2TerrainShell.EditorMode.Paint)
-        {
-            var blendSubMode = _subTab == 4;
-            if (_terrainShellPaintBlendSubMode != blendSubMode)
-            {
-                _terrainShell.SetPaintRnmSubMode(blendSubMode);
-                _terrainShellPaintBlendSubMode = blendSubMode;
-            }
-        }
-        else
-        {
-            _terrainShellPaintBlendSubMode = null;
-        }
     }
 
+    /// <summary>Paint Pairs/Paint Blend used to be two separate top-level
+    /// tabs (subtab 3 and 4) mapping to the same EditorMode.Paint, with this
+    /// caller forcing SC2PaintMode's own Assign/RNM sub-mode based on which
+    /// one was selected — genuinely redundant with SC2PaintMode.DrawPanel's
+    /// own in-panel Assign/Blend segmented toggle, which already let the
+    /// user flip between the exact same two sub-modes from either tab. Now
+    /// merged into one "Paint Materials" tab (SC2EditorTabs.TerrainTabs);
+    /// the in-panel toggle is the only way to switch sub-modes, so there is
+    /// nothing left here to force from the subtab index.</summary>
     private static SC2TerrainShell.EditorMode TerrainModeFromSubtab(int subtabIndex)
     {
         switch (subtabIndex)
         {
             case 1: return SC2TerrainShell.EditorMode.Materials;
             case 2: return SC2TerrainShell.EditorMode.Pairs;
-            case 3:
-            case 4: return SC2TerrainShell.EditorMode.Paint;
-            case 5: return SC2TerrainShell.EditorMode.Simplified;
-            case 6: return SC2TerrainShell.EditorMode.Imported;
-            case 7: return SC2TerrainShell.EditorMode.Water;
-            case 8: return SC2TerrainShell.EditorMode.LightingBake;
-            case 9: return SC2TerrainShell.EditorMode.Background;
+            case 3: return SC2TerrainShell.EditorMode.Paint;
+            case 4: return SC2TerrainShell.EditorMode.Simplified;
+            case 5: return SC2TerrainShell.EditorMode.Imported;
+            case 6: return SC2TerrainShell.EditorMode.Water;
+            case 7: return SC2TerrainShell.EditorMode.LightingBake;
+            case 8: return SC2TerrainShell.EditorMode.Background;
             default: return SC2TerrainShell.EditorMode.Geometry;
         }
     }
@@ -3013,6 +3089,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // off at the same load/create moment instead, regardless of
             // which tab is active.
             _terrainShell.DataChanged += _ => _objectsShell?.EnsureAssetsIndexed();
+            // See SC2TerrainShell.HeightBrushApplied's own doc comment —
+            // keeps anchored Props/Markers/Units following live
+            // Geometry-mode sculpting instead of only ever re-snapping once
+            // at import time.
+            _terrainShell.HeightBrushApplied += (center, radius) => _objectsShell?.ReprojectAnchoredObjectsInRadius(center, radius);
         }
     }
 
@@ -3464,6 +3545,215 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         _tool = toolName;
         SetStatus("Tool selected: " + toolName);
+    }
+
+    /// <summary>Shared by the Edit menu item, the View menu's own Toggle
+    /// (see DrawViewMenu — its pressed state IS "is Measure active"), and
+    /// the "M" hotkey, so all three agree on the exact same on/off
+    /// semantics: activating clears any stale start/end from a previous
+    /// session; deactivating just switches back to Select without also
+    /// forcing a reset, so re-activating later resumes wherever the user
+    /// left off instead of always starting fresh.</summary>
+    private void ToggleMeasureTool()
+    {
+        if (_tool == "Measure")
+        {
+            SetTool("Select");
+            return;
+        }
+        SetTool("Measure");
+        _measureHasStart = false;
+        _measureHasEnd = false;
+        SetStatus("Measure: click to set start point.");
+    }
+
+    /// <summary>The Measure tool's entire input+draw loop — a "Global" tool
+    /// (Edit menu / View menu / "M" hotkey), not tied to whichever main
+    /// tab/shell is otherwise active, so it lives here rather than inside
+    /// any one shell. Click 1 sets the start point; while no end point is
+    /// locked yet, a live line + distance follows the cursor; click 2 locks
+    /// the end point; click 3 starts a fresh measurement from that new
+    /// point. Distance is XZ-only (world height/Y deliberately excluded,
+    /// per the feature request this implements) — matches how map
+    /// distances/placement grids are reasoned about everywhere else in this
+    /// editor (SnapXZ, GetSymmetricPositions' own "Y untouched" convention).
+    /// Escape cancels an in-progress measurement first, then exits the tool
+    /// entirely (back to Select) on a second press. Consumes (e.Use()) any
+    /// click/Escape it handles so the active tab's own paint/place/select
+    /// handlers never also fire on the same input — see this method's call
+    /// site's own comment for why it must run first, before those.</summary>
+    private void HandleMeasureToolGameViewInput()
+    {
+        if (_tool != "Measure") return;
+        var camera = ResolveCamera();
+        if (camera == null) return;
+
+        var e = Event.current;
+        if (e != null && e.type != EventType.Used && _viewportRect.Contains(e.mousePosition))
+        {
+            if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
+            {
+                if (_measureHasStart) { _measureHasStart = false; _measureHasEnd = false; SetStatus("Measure: click to set start point."); }
+                else SetTool("Select");
+                e.Use();
+            }
+            else if (e.type == EventType.MouseDown && e.button == 0 && !e.alt && TryGetMeasureHit(camera, e.mousePosition, out var clicked))
+            {
+                if (!_measureHasStart || _measureHasEnd)
+                {
+                    _measureStart = clicked;
+                    _measureHasStart = true;
+                    _measureHasEnd = false;
+                    SetStatus("Measure: click to set end point (Esc to cancel).");
+                }
+                else
+                {
+                    _measureEnd = clicked;
+                    _measureHasEnd = true;
+                    var lockedDistance = Vector2.Distance(new Vector2(_measureStart.x, _measureStart.z), new Vector2(_measureEnd.x, _measureEnd.z));
+                    SetStatus($"Measure: {lockedDistance:0.00} units (XZ). Click to start a new measurement.");
+                }
+                e.Use();
+            }
+        }
+
+        if (!_measureHasStart) return;
+
+        var endPoint = _measureEnd;
+        if (!_measureHasEnd)
+        {
+            if (e == null || !_viewportRect.Contains(e.mousePosition) || !TryGetMeasureHit(camera, e.mousePosition, out endPoint))
+                endPoint = _measureStart;
+        }
+        DrawMeasureOverlay(camera, _measureStart, endPoint, !_measureHasEnd);
+    }
+
+    /// <summary>Same imported-terrain-first, live-procedural-fallback
+    /// raycast order every other placement/painting tool in this file
+    /// already uses (see e.g. EnsureObjectsShell's GetCameraFocusPoint).</summary>
+    private bool TryGetMeasureHit(Camera camera, Vector2 guiMousePosition, out Vector3 hit)
+    {
+        var ray = SC2TerrainShell.GameGuiPointToRay(camera, _viewportRect, guiMousePosition);
+        if (SC2TerrainShell.TryRaycastImportedTerrain(BuildImportedTerrainColliders(), ray, out hit))
+            return true;
+        if (_terrainShell != null && SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+            return true;
+        hit = default;
+        return false;
+    }
+
+    private void DrawMeasureOverlay(Camera camera, Vector3 start, Vector3 end, bool isLive)
+    {
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
+        var startGui = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, start);
+        var endGui = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, end);
+        var lineColor = isLive ? new Color(1f, 0.85f, 0.2f, 0.9f) : new Color(0.3f, 1f, 0.55f, 0.95f);
+
+        SC2TerrainShell.DrawGuiLineSegment(startGui, endGui, lineColor, 2f);
+        SC2TerrainShell.DrawSymmetryPointMarker(camera, _viewportRect, start, Color.white, pixelSize: 8f);
+        SC2TerrainShell.DrawSymmetryPointMarker(camera, _viewportRect, end, Color.white, pixelSize: 8f);
+
+        var distanceXz = Vector2.Distance(new Vector2(start.x, start.z), new Vector2(end.x, end.z));
+        var midGui = (startGui + endGui) * 0.5f;
+        SC2TerrainShell.DrawFloatingLabel(midGui, $"{distanceXz:0.00} u", lineColor);
+    }
+
+    /// <summary>View menu's "Show Map Border" — a configurable Width x
+    /// Height rectangle (world/XZ units) centered on the map's own playable
+    /// footprint, drawn as a terrain-hugging polyline (subdivided per edge,
+    /// each point's Y re-sampled from the live terrain — same technique
+    /// SC2TerrainShell.DrawGameViewBrush's sampleHeight path already uses
+    /// for the brush ring) so it reads as a real ground-level boundary
+    /// marker rather than a flat plane floating over hills/sinking into
+    /// valleys. A pure IMGUI overlay drawn after the 3D camera render (like
+    /// every other cursor/marker in this file), so it's always on top of
+    /// the terrain by construction — no depth test to fight.</summary>
+    private void DrawMapFrameOverlay()
+    {
+        if (!_showMapFrame) return;
+        var e = Event.current;
+        if (e == null || e.type != EventType.Repaint) return;
+        var camera = ResolveCamera();
+        if (camera == null || _terrainShell == null) return;
+        var data = _terrainShell.Data;
+        if (data == null) return;
+
+        var halfW = Mathf.Max(0.01f, _mapFrameWidth) * 0.5f;
+        var halfH = Mathf.Max(0.01f, _mapFrameHeight) * 0.5f;
+        var centerX = data.CostsGridSize * 0.5f;
+        var centerZ = data.CostsGridSize * 0.5f;
+
+        var corners = new[]
+        {
+            new Vector2(centerX - halfW, centerZ - halfH),
+            new Vector2(centerX + halfW, centerZ - halfH),
+            new Vector2(centerX + halfW, centerZ + halfH),
+            new Vector2(centerX - halfW, centerZ + halfH),
+        };
+
+        const int segmentsPerEdge = 24;
+        var color = new Color(1f, 0.2f, 0.85f, 0.95f);
+        Vector2? previousGui = null;
+        for (var edge = 0; edge < 4; edge++)
+        {
+            var a = corners[edge];
+            var b = corners[(edge + 1) % 4];
+            var startIndex = edge == 0 ? 0 : 1; // corner 0 of this edge == last corner of the previous one, already placed
+            for (var i = startIndex; i <= segmentsPerEdge; i++)
+            {
+                var t = i / (float)segmentsPerEdge;
+                var worldX = Mathf.Lerp(a.x, b.x, t);
+                var worldZ = Mathf.Lerp(a.y, b.y, t);
+                var worldY = _terrainShell.SampleLiveRuntimeHeight(worldX, worldZ);
+                var guiPoint = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, new Vector3(worldX, worldY, worldZ));
+                if (previousGui.HasValue)
+                    SC2TerrainShell.DrawGuiLineSegment(previousGui.Value, guiPoint, color, 3f);
+                previousGui = guiPoint;
+            }
+        }
+    }
+
+    /// <summary>View menu's "Load Reference Image...". Reuses
+    /// SC2CustomTextureImporter.TryLoad — the same general-purpose "load any
+    /// image format off disk" helper the custom brush/decal pickers already
+    /// use, so PNG/JPG/DDS all work here too, not just one format.</summary>
+    private void LoadReferenceImage()
+    {
+#if UNITY_EDITOR
+        var path = EditorUtility.OpenFilePanel("Load Reference Image", "", "png,jpg,jpeg,dds");
+#else
+        var path = SC2RuntimeFileDialog.OpenFile("Load Reference Image", "Image (*.png;*.jpg;*.jpeg;*.dds)", "png;*.jpg;*.jpeg;*.dds");
+#endif
+        if (string.IsNullOrEmpty(path)) return;
+        if (!SC2CustomTextureImporter.TryLoad(path, out var tex, out var error))
+        {
+            SetStatus("Reference image failed to load: " + error);
+            return;
+        }
+        if (_referenceOverlayTex != null) UnityEngine.Object.Destroy(_referenceOverlayTex);
+        _referenceOverlayTex = tex;
+        _showReferenceOverlay = true;
+        ApplyReferenceOverlayState();
+        SetStatus("Reference image loaded: " + System.IO.Path.GetFileName(path));
+    }
+
+    /// <summary>Pushes the current _referenceOverlayTex/_showReferenceOverlay
+    /// state onto the live SC2TerrainRuntime — called right after loading/
+    /// toggling, and again on SC2TerrainShell.DataChanged (see
+    /// EnsureTerrainShell's subscription), since a map load/switch rebuilds
+    /// Runtime's own shared chunk material from scratch, resetting its
+    /// shader properties back to defaults regardless of what this class's
+    /// own fields still say.</summary>
+    private void ApplyReferenceOverlayState()
+    {
+        var runtime = _terrainShell?.Runtime;
+        if (runtime == null) return;
+        var data = _terrainShell.Data;
+        var worldSize = data != null
+            ? new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize))
+            : new Vector2(1024f, 1024f);
+        runtime.SetReferenceOverlay(_referenceOverlayTex, _showReferenceOverlay, worldSize);
     }
 
 #if !UNITY_EDITOR
@@ -4513,10 +4803,24 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             RecordImportedTerrainsUndo();
             mat.SetTexture(shaderProp, picked);
         }
-        // A browser pick clears any manual override (matches
-        // SC2MaterialsPairsMode.DrawTextureField's clear-only-on-browser-pick
-        // rule); a typed path is kept even once it resolves a texture.
-        if (pickedViaBrowser) pathDraft = "";
+        // A Custom- or archive-sourced browser pick resolves to an in-memory
+        // Texture2D with no real project asset/GUID — Unity cannot
+        // serialize a reference to that object at all, so clearing the
+        // override here (as this used to do unconditionally) silently lost
+        // the texture the moment the map was reopened or re-exported, since
+        // nothing else records where it actually came from. Same fix as
+        // SC2MaterialsPairsMode.DrawTextureField: keep the override (set to
+        // the just-picked texture's own resolved "file:"/"archive:" path)
+        // for anything that isn't a plain Resources-backed real asset; only
+        // clear it for a real asset pick, where it would just be redundant.
+        if (pickedViaBrowser)
+        {
+            var resolvedPath = picked != null ? SC2TerrainMaterialFactory.TryGetResourcePath(picked) : null;
+            var isRealAsset = string.IsNullOrEmpty(resolvedPath) ||
+                (!resolvedPath.StartsWith("file:", System.StringComparison.Ordinal) &&
+                 !resolvedPath.StartsWith("archive:", System.StringComparison.Ordinal));
+            pathDraft = isRealAsset ? "" : resolvedPath;
+        }
         if (!string.IsNullOrEmpty(pathDraft)) entry.TexturePathOverrides[overrideKey] = pathDraft;
         else entry.TexturePathOverrides.Remove(overrideKey);
     }
@@ -5213,7 +5517,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // else) instead of a persistent _tool state nothing else in the
         // codebase ever actually read (Rotate/Scale were dead tool states
         // before this change — confirmed via full-repo search).
-        if (SC2Hotkeys.Matches("Global.MeasureTool", e)) { SetTool("Measure"); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.MeasureTool", e)) { ToggleMeasureTool(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.FocusCamera", e)) { FocusCamera(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.ResetView", e)) { ResetView(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.CycleMainTab", e))

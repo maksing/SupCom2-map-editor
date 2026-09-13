@@ -31,7 +31,9 @@ namespace SC2.MapEditor.Document
                 data.WaterDepthMargin,
                 data.WaterDepthFalloffPower,
                 data.WaterDepthMinAlpha,
-                data.WaterDepthPaintBorder);
+                data.WaterDepthPaintBorder,
+                data.WaterDepthShoreOutline,
+                data.WaterDepthImageBorderOutline);
         }
     }
 }

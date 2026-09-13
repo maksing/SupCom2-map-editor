@@ -22,6 +22,32 @@ public static class SC2GameAssetDiscovery
         var roots = gameDataRoots.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var catalog = SC2GameAssetCatalog.Build(blueprintRoots, roots);
         var resolver = new SC2GameAssetFileResolver(roots);
+        return BuildResult(catalog, resolver, (lod, modelPath, entry) => EnsureMaterialSetFromDisk(lod, modelPath, entry));
+    }
+
+    /// <summary>Archive-native counterpart, reading units/props straight out
+    /// of the game's own .scd archives (see SC2GameArchiveRegistry) instead
+    /// of a pre-extracted loose-file copy — see SC2GameAssetCatalog.
+    /// BuildFromArchive's own doc comment for why this takes plain entry
+    /// paths + a byte-reader delegate rather than ISC2SourceContainerReader
+    /// directly (an assembly-layering constraint, not a design preference),
+    /// and for why the rest of this pipeline needs no separate archive-mode
+    /// variant beyond the two loose-file touchpoints this class owns (SCM
+    /// stream open, and SC2GameAssetFileResolver's texture index/sibling
+    /// lookup).</summary>
+    public static SC2GameAssetDiscoveryResult BuildFromArchive(IEnumerable<string> entryPaths, Func<string, byte[]> readEntryBytes)
+    {
+        if (entryPaths == null) throw new ArgumentNullException(nameof(entryPaths));
+        if (readEntryBytes == null) throw new ArgumentNullException(nameof(readEntryBytes));
+        var allPaths = entryPaths as IReadOnlyList<string> ?? entryPaths.ToList();
+        var catalog = SC2GameAssetCatalog.BuildFromArchive(allPaths, readEntryBytes);
+        var resolver = SC2GameAssetFileResolver.FromArchiveEntries(allPaths);
+        return BuildResult(catalog, resolver, (lod, modelPath, entry) => EnsureMaterialSetFromArchive(readEntryBytes, lod, modelPath, entry));
+    }
+
+    private static SC2GameAssetDiscoveryResult BuildResult(SC2GameAssetCatalogResult catalog, SC2GameAssetFileResolver resolver,
+        Action<SC2GameAssetLod, string, SC2GameAssetDiscoveryEntry> ensureMaterialSet)
+    {
         var result = new SC2GameAssetDiscoveryResult(catalog);
         result.Warnings.AddRange(catalog.Warnings);
 
@@ -44,7 +70,7 @@ public static class SC2GameAssetDiscovery
 
                 foreach (var modelPath in lod.ModelPaths) entry.Models.Add(modelPath);
                 string fallbackModelPath = lod.ModelPaths[0];
-                EnsureMaterialSet(lod, fallbackModelPath, entry);
+                ensureMaterialSet(lod, fallbackModelPath, entry);
                 foreach (var set in lod.MaterialSets)
                 foreach (var material in set.Materials)
                     ResolveMaterialTextures(material, fallbackModelPath, resolver, entry);
@@ -101,7 +127,17 @@ public static class SC2GameAssetDiscovery
         }
     }
 
-    private static void EnsureMaterialSet(SC2GameAssetLod lod, string modelPath, SC2GameAssetDiscoveryEntry entry)
+    private static void EnsureMaterialSetFromDisk(SC2GameAssetLod lod, string modelPath, SC2GameAssetDiscoveryEntry entry) =>
+        EnsureMaterialSetCore(lod, modelPath, entry, () => File.OpenRead(modelPath));
+
+    /// <summary>ZipArchiveEntry.Open() (the real backing stream for a packed
+    /// .scd) is forward-only/non-seekable, but SC2ScmModelReader.Read seeks —
+    /// buffer the whole entry into a MemoryStream first (same pattern
+    /// SC2CustomTextureImporter's own archive loaders already use).</summary>
+    private static void EnsureMaterialSetFromArchive(Func<string, byte[]> readEntryBytes, SC2GameAssetLod lod, string modelPath, SC2GameAssetDiscoveryEntry entry) =>
+        EnsureMaterialSetCore(lod, modelPath, entry, () => new MemoryStream(readEntryBytes(modelPath)));
+
+    private static void EnsureMaterialSetCore(SC2GameAssetLod lod, string modelPath, SC2GameAssetDiscoveryEntry entry, Func<Stream> openStream)
     {
         if (lod.MaterialSets.Any(set => set.Materials.Count != 0)) return;
 
@@ -109,7 +145,7 @@ public static class SC2GameAssetDiscovery
         try
         {
             SC2ScmModel model;
-            using (var stream = File.OpenRead(modelPath)) model = SC2ScmModelReader.Read(stream, modelPath);
+            using (var stream = openStream()) model = SC2ScmModelReader.Read(stream, modelPath);
             if (model.Materials.Count != 0)
             {
                 foreach (SC2ScmMaterialRange range in model.Materials)
@@ -155,6 +191,11 @@ public static class SC2GameAssetDiscovery
 public sealed class SC2GameAssetFileResolver
 {
     private readonly string[] _roots;
+    // True in archive mode — ResolveSiblingTexture's two loose-file-only
+    // probes (File.Exists candidate check, Directory.EnumerateFiles atlas
+    // scan) branch on this instead of touching disk (both dictionaries below
+    // already hold everything needed for the archive-mode equivalents).
+    private readonly bool _isArchiveMode;
     private readonly Dictionary<string, string> _texturesByRelativePath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _uniqueTexturesByFileName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _siblingTextureCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -163,6 +204,35 @@ public sealed class SC2GameAssetFileResolver
     {
         _roots = roots == null ? new string[0] : roots.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (string root in _roots) IndexTextures(root);
+    }
+
+    /// <summary>Archive-native counterpart — same two lookup dictionaries,
+    /// populated from a flat list of normalized archive entry paths instead
+    /// of Directory.EnumerateFiles. A static factory rather than a second
+    /// constructor overload: both take IEnumerable&lt;string&gt;, which C#
+    /// can't disambiguate as separate constructors.</summary>
+    public static SC2GameAssetFileResolver FromArchiveEntries(IEnumerable<string> entryPaths)
+    {
+        var resolver = new SC2GameAssetFileResolver(entryPaths, isArchiveMode: true);
+        return resolver;
+    }
+
+    private SC2GameAssetFileResolver(IEnumerable<string> entryPaths, bool isArchiveMode)
+    {
+        _roots = new string[0];
+        _isArchiveMode = isArchiveMode;
+        foreach (var path in entryPaths ?? Enumerable.Empty<string>())
+        {
+            if (!path.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)) continue;
+            var key = NormalizeRelativePath(path);
+            if (!_texturesByRelativePath.ContainsKey(key)) _texturesByRelativePath.Add(key, path);
+
+            var fileName = Path.GetFileName(path);
+            if (!_uniqueTexturesByFileName.TryGetValue(fileName, out var existing))
+                _uniqueTexturesByFileName.Add(fileName, path);
+            else if (!string.Equals(existing, path, StringComparison.OrdinalIgnoreCase))
+                _uniqueTexturesByFileName[fileName] = null;
+        }
     }
 
     public string ResolveBlueprintPath(string blueprintPath)
@@ -208,8 +278,17 @@ public sealed class SC2GameAssetFileResolver
         string baseStem = Regex.Replace(lodStem, "_lod[0-9]+$", string.Empty, RegexOptions.IgnoreCase); // Foo
         foreach (string prefix in new[] { baseStem, lodStem }.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            string candidate = Path.Combine(directory, prefix + "_" + slot + ".win.dds");
-            if (File.Exists(candidate)) return _siblingTextureCache[cacheKey] = candidate;
+            // Archive mode: directory came from Path.GetDirectoryName on a
+            // forward-slash-normalized entry path, so it's still forward-slash
+            // — Path.Combine below would inject a backslash and silently
+            // mismatch every dictionary key (all normalized to '/').
+            string candidate = _isArchiveMode
+                ? directory + "/" + prefix + "_" + slot + ".win.dds"
+                : Path.Combine(directory, prefix + "_" + slot + ".win.dds");
+            bool exists = _isArchiveMode
+                ? _texturesByRelativePath.ContainsKey(NormalizeRelativePath(candidate))
+                : File.Exists(candidate);
+            if (exists) return _siblingTextureCache[cacheKey] = candidate;
         }
 
         // SpeedTree-derived props use compact atlas suffixes (Foo_B_Atlas_D
@@ -221,7 +300,16 @@ public sealed class SC2GameAssetFileResolver
         if (compactSuffix != null)
         {
             string prefix = baseStem + "_";
-            string compact = Directory.EnumerateFiles(directory, "*.dds", SearchOption.TopDirectoryOnly)
+            // Top-directory-only equivalent for the archive case: every
+            // indexed .dds path that sits directly under `directory` (no
+            // further '/' after the prefix) — same scope Directory.
+            // EnumerateFiles(..., TopDirectoryOnly) gives on disk.
+            IEnumerable<string> candidatePaths = _isArchiveMode
+                ? _texturesByRelativePath.Keys.Where(path =>
+                    path.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase) &&
+                    path.IndexOf('/', directory.Length + 1) < 0)
+                : Directory.EnumerateFiles(directory, "*.dds", SearchOption.TopDirectoryOnly);
+            string compact = candidatePaths
                 .Where(path => Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(path))
                     .StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 .Where(path => Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(path))

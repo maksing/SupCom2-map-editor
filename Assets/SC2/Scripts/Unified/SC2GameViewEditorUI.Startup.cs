@@ -42,6 +42,18 @@ public sealed partial class SC2GameViewEditorUI
     private float _startupNewMapSizeWu = 1024f;
     private Vector2 _startupScroll;
 
+    // Collapsed by default — a real game install's own archives commonly
+    // hold 50+ vanilla/community maps, which used to push "Your custom
+    // maps" and everything else in this list far down the scroll view on
+    // every single visit to this screen, even for someone who only ever
+    // opens their own maps here.
+    private bool _startupArchiveMapsExpanded;
+
+    // Session-only (not persisted) — defaults to the previous fixed
+    // alphabetical-by-name behavior so this is purely additive.
+    private enum MapSortMode { Name, DateCreated, DateModified }
+    private MapSortMode _customMapSortMode = MapSortMode.Name;
+
     // Loaded from Resources so both the Editor and a real Build & Run find
     // the same asset (matching SharedTerrainDataResourceName's own
     // convention) - the actual image is added later as a real Resources
@@ -78,8 +90,8 @@ public sealed partial class SC2GameViewEditorUI
         var innerRect = new Rect(rect.x + 14f, rect.y + 12f, rect.width - 28f, rect.height - 24f);
         GUILayout.BeginArea(innerRect);
 
-        GUILayout.Label("SC2 Map Editor");
-        GUILayout.Space(6);
+        GUILayout.Label("SC2 Map Editor", StartupTitleStyle());
+        GUILayout.Space(8);
 
         // An unwanted horizontal scrollbar can show up across the whole
         // panel if none of this screen's Labels (the game-install path in
@@ -146,6 +158,32 @@ public sealed partial class SC2GameViewEditorUI
         return _startupWrapLabelStyle;
     }
 
+    // The screen's own title used to share the exact same plain GUI.skin.
+    // label style as every other line on it (a full OS path, a section
+    // header, a map name) — nothing set it apart as the page's heading.
+    private static GUIStyle _startupTitleStyle;
+    private static GUIStyle StartupTitleStyle()
+    {
+        if (_startupTitleStyle == null)
+            _startupTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2UiScale.F(18), fontStyle = FontStyle.Bold };
+        return _startupTitleStyle;
+    }
+
+    // Secondary/de-emphasized info (the game-install path, an archive
+    // candidate's "from: <file>" line) — dimmer than normal body text so
+    // it reads as supporting detail, not on par with the section headers
+    // and map names it sits next to.
+    private static GUIStyle _startupDimLabelStyle;
+    private static GUIStyle StartupDimLabelStyle()
+    {
+        if (_startupDimLabelStyle == null)
+        {
+            _startupDimLabelStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
+            _startupDimLabelStyle.normal.textColor = new Color(0.62f, 0.62f, 0.66f);
+        }
+        return _startupDimLabelStyle;
+    }
+
     private void DrawStartupRootPicker()
     {
         GUILayout.Label("Point this at your SupCom2 game installation folder (containing maps.scd, " +
@@ -199,7 +237,7 @@ public sealed partial class SC2GameViewEditorUI
 
     private void DrawStartupMapPicker()
     {
-        GUILayout.Label("Game install: " + SC2GameInstallSettings.RootPath, StartupWrapLabelStyle());
+        GUILayout.Label("Game install: " + SC2GameInstallSettings.RootPath, StartupDimLabelStyle());
         if (GUILayout.Button("Change game path...", GUILayout.Width(SC2UiScale.Pxf(160f))))
         {
             _startupRootPathInput = SC2GameInstallSettings.RootPath;
@@ -207,7 +245,7 @@ public sealed partial class SC2GameViewEditorUI
             SC2GameArchiveRegistry.Close();
             return;
         }
-        GUILayout.Space(6);
+        GUILayout.Space(10);
 
         _startupScroll = GUILayout.BeginScrollView(_startupScroll);
 
@@ -218,7 +256,8 @@ public sealed partial class SC2GameViewEditorUI
             ScanStartupArchiveCandidates();
         DrawArchiveOpenFailures();
 
-        GUILayout.Label("Your custom maps");
+        SC2EnvFieldGui.SectionLabel("Your custom maps");
+        DrawMapSortModeSelector();
 #if UNITY_EDITOR
         var customAssets = new List<SC2TerrainData>();
         foreach (var guid in AssetDatabase.FindAssets("t:SC2TerrainData"))
@@ -226,7 +265,7 @@ public sealed partial class SC2GameViewEditorUI
             var asset = AssetDatabase.LoadAssetAtPath<SC2TerrainData>(AssetDatabase.GUIDToAssetPath(guid));
             if (asset != null) customAssets.Add(asset);
         }
-        customAssets.Sort((a, b) => string.Compare(CustomMapDisplayName(a), CustomMapDisplayName(b), StringComparison.OrdinalIgnoreCase));
+        SortCustomMaps(customAssets, a => CustomMapDisplayName(a), a => AssetDatabase.GetAssetPath(a));
         if (customAssets.Count == 0)
         {
             GUILayout.Label("No saved maps found in this project yet.");
@@ -244,7 +283,7 @@ public sealed partial class SC2GameViewEditorUI
         }
 #else
         var saved = SC2TerrainShell.ListSavedTerrains();
-        saved.Sort(StringComparer.OrdinalIgnoreCase);
+        SortCustomMaps(saved, name => name, name => SC2RuntimeTerrainPersistence.GetSavePath(name));
         if (saved.Count == 0)
         {
             GUILayout.Label("No saved maps found yet.");
@@ -262,37 +301,37 @@ public sealed partial class SC2GameViewEditorUI
         }
 #endif
 
-        GUILayout.Space(10);
-        GUILayout.Label("Vanilla / archive maps");
-        if (_startupArchiveCandidates == null || _startupArchiveCandidates.Count(c => c.CanImport) == 0)
+        GUILayout.Space(14);
+        var archiveCount = _startupArchiveCandidates?.Count(c => c.CanImport) ?? 0;
+        var archiveLabel = "Vanilla / archive maps" + (archiveCount > 0 ? $" ({archiveCount})" : "");
+        if (SC2EnvFieldGui.Foldout(ref _startupArchiveMapsExpanded, archiveLabel))
         {
-            GUILayout.Label("No maps found in the configured game install.");
-        }
-        else
-        {
-            var sorted = _startupArchiveCandidates
-                .Where(c => c.CanImport)
-                .OrderBy(c => c.DisplayName ?? c.BdfStem ?? "", StringComparer.OrdinalIgnoreCase);
-            foreach (var candidate in sorted)
+            GUILayout.Space(4);
+            if (archiveCount == 0)
             {
-                GUILayout.BeginVertical(GUI.skin.box);
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", GUILayout.ExpandWidth(true));
-                if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-                    OpenArchiveMap(candidate);
-                GUILayout.EndHorizontal();
-                if (!string.IsNullOrEmpty(candidate.SourceArchivePath))
+                GUILayout.Label("No maps found in the configured game install.");
+            }
+            else
+            {
+                var sorted = _startupArchiveCandidates
+                    .Where(c => c.CanImport)
+                    .OrderBy(c => c.DisplayName ?? c.BdfStem ?? "", StringComparer.OrdinalIgnoreCase);
+                foreach (var candidate in sorted)
                 {
-                    var prevContentColor = GUI.contentColor;
-                    GUI.contentColor = new Color(0.65f, 0.65f, 0.65f);
-                    GUILayout.Label("from: " + Path.GetFileName(candidate.SourceArchivePath.TrimEnd('\\', '/')), StartupWrapLabelStyle());
-                    GUI.contentColor = prevContentColor;
+                    GUILayout.BeginVertical(GUI.skin.box);
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", GUILayout.ExpandWidth(true));
+                    if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
+                        OpenArchiveMap(candidate);
+                    GUILayout.EndHorizontal();
+                    if (!string.IsNullOrEmpty(candidate.SourceArchivePath))
+                        GUILayout.Label("from: " + Path.GetFileName(candidate.SourceArchivePath.TrimEnd('\\', '/')), StartupDimLabelStyle());
+                    GUILayout.EndVertical();
                 }
-                GUILayout.EndVertical();
             }
         }
 
-        GUILayout.Space(10);
+        GUILayout.Space(14);
         if (GUILayout.Button("Browse .scd file/folder...", GUILayout.Height(SC2UiScale.Pxf(26f))))
             BeginBrowseArbitraryMap();
 
@@ -305,7 +344,7 @@ public sealed partial class SC2GameViewEditorUI
     /// map lists rather than at the very bottom of the scroll view.</summary>
     private void DrawCreateNewMapSection()
     {
-        GUILayout.Label("Create new map");
+        SC2EnvFieldGui.SectionLabel("Create new map");
         GUILayout.BeginHorizontal();
         GUILayout.Label("Name", GUILayout.Width(SC2UiScale.Pxf(50f)));
         _startupNewMapName = GUILayout.TextField(_startupNewMapName ?? "New Map", GUILayout.ExpandWidth(true));
@@ -318,7 +357,7 @@ public sealed partial class SC2GameViewEditorUI
         GUILayout.EndHorizontal();
         if (GUILayout.Button("Create New Map", GUILayout.Height(SC2UiScale.Pxf(28f))))
             CreateAndOpenNewMap(_startupNewMapName, _startupNewMapSizeWu);
-        GUILayout.Space(10);
+        GUILayout.Space(14);
     }
 
 #if UNITY_EDITOR
@@ -336,7 +375,7 @@ public sealed partial class SC2GameViewEditorUI
         if (string.IsNullOrEmpty(path)) return;
         var asset = AssetDatabase.LoadAssetAtPath<SC2TerrainData>(path);
         if (asset == null) return; // moved/deleted since last time
-        GUILayout.Label("Last opened");
+        SC2EnvFieldGui.SectionLabel("Last opened");
         GUILayout.BeginHorizontal(GUI.skin.box);
         GUILayout.Label(CustomMapDisplayName(asset), GUILayout.ExpandWidth(true));
         if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
@@ -345,14 +384,14 @@ public sealed partial class SC2GameViewEditorUI
 #else
         var name = PlayerPrefs.GetString(LastOpenedMapNameKey, "");
         if (string.IsNullOrEmpty(name) || !SC2TerrainShell.ListSavedTerrains().Contains(name)) return;
-        GUILayout.Label("Last opened");
+        SC2EnvFieldGui.SectionLabel("Last opened");
         GUILayout.BeginHorizontal(GUI.skin.box);
         GUILayout.Label(name, GUILayout.ExpandWidth(true));
         if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
             OpenSavedTerrainByName(name);
         GUILayout.EndHorizontal();
 #endif
-        GUILayout.Space(10);
+        GUILayout.Space(14);
     }
 
     private void DrawArchiveOpenFailures()
@@ -364,7 +403,7 @@ public sealed partial class SC2GameViewEditorUI
         foreach (var failure in failures)
             GUILayout.Label($"Couldn't open '{Path.GetFileName(failure.Path)}': {failure.Error}", StartupWrapLabelStyle());
         GUI.contentColor = prevContentColor;
-        GUILayout.Space(6);
+        GUILayout.Space(10);
     }
 
     private void StartupSizeButton(float wu)
@@ -374,6 +413,60 @@ public sealed partial class SC2GameViewEditorUI
         if (active) GUI.color = new Color(0.6f, 1f, 0.7f);
         if (GUILayout.Button($"{wu:F0}", GUILayout.Height(SC2UiScale.Pxf(24f)))) _startupNewMapSizeWu = wu;
         GUI.color = c;
+    }
+
+    private void DrawMapSortModeSelector()
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Sort by", GUILayout.Width(SC2UiScale.Pxf(50f)));
+        MapSortModeButton(MapSortMode.Name, "Name");
+        MapSortModeButton(MapSortMode.DateCreated, "Date Created");
+        MapSortModeButton(MapSortMode.DateModified, "Date Modified");
+        GUILayout.EndHorizontal();
+        GUILayout.Space(4);
+    }
+
+    private void MapSortModeButton(MapSortMode mode, string label)
+    {
+        var active = _customMapSortMode == mode;
+        var c = GUI.color;
+        if (active) GUI.color = new Color(0.6f, 1f, 0.7f);
+        if (GUILayout.Button(label, GUILayout.Height(SC2UiScale.Pxf(20f)))) _customMapSortMode = mode;
+        GUI.color = c;
+    }
+
+    /// <summary>Shared by both the Editor (SC2TerrainData asset) and Build
+    /// (saved-terrain name) "Your custom maps" listings — Name sorts
+    /// alphabetically (the original, only-ever behavior before this sort
+    /// picker existed); DateCreated/DateModified read the underlying file's
+    /// own OS timestamps (the .asset file in the Editor, the .sc2terrain.json
+    /// save file in a Build) and sort newest-first, since "which map did I
+    /// touch most recently" is what someone picking a sort-by-date view is
+    /// almost always looking for.</summary>
+    private void SortCustomMaps<T>(List<T> items, Func<T, string> nameSelector, Func<T, string> pathSelector)
+    {
+        switch (_customMapSortMode)
+        {
+            case MapSortMode.DateCreated:
+                items.Sort((a, b) => GetFileTimeSafe(pathSelector(b), created: true).CompareTo(GetFileTimeSafe(pathSelector(a), created: true)));
+                break;
+            case MapSortMode.DateModified:
+                items.Sort((a, b) => GetFileTimeSafe(pathSelector(b), created: false).CompareTo(GetFileTimeSafe(pathSelector(a), created: false)));
+                break;
+            default:
+                items.Sort((a, b) => string.Compare(nameSelector(a), nameSelector(b), StringComparison.OrdinalIgnoreCase));
+                break;
+        }
+    }
+
+    private static DateTime GetFileTimeSafe(string path, bool created)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return DateTime.MinValue;
+            return created ? File.GetCreationTime(path) : File.GetLastWriteTime(path);
+        }
+        catch { return DateTime.MinValue; }
     }
 
     private void ScanStartupArchiveCandidates()

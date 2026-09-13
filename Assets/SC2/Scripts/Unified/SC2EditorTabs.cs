@@ -44,8 +44,7 @@ public static class SC2EditorTabs
         "Geometry",
         "Materials",
         "Pairs",
-        "Paint Pairs",
-        "Paint Blend",
+        "Paint Materials",
         "Simplified",
         "Imported",
         "Water",
@@ -145,7 +144,8 @@ public static class SC2EditorTabs
     public static readonly string[] ScenarioTabs =
     {
         "Info",
-        "Scripts"
+        "Scripts",
+        "Preview"
     };
 
     public static string[] GetSubtabs(SC2EditorMainTab tab)

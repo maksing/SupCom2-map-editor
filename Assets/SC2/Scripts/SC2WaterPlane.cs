@@ -152,7 +152,20 @@ public static class SC2WaterPlane
         }
         if (string.IsNullOrEmpty(paths.Length > 6 ? paths[6] : null))
         {
-            var mapName = string.IsNullOrEmpty(data.MapName) ? "NewMap" : data.MapName;
+            // Must match SC2TerrainExporter.BuildExportArtifacts' own
+            // "maps/<mapName>/" folder name exactly (SanitizeMapName —
+            // spaces and other non-filename characters become '_') — this
+            // used to build the raw, unsanitized MapName directly, so a map
+            // named e.g. "New Map111" got a default reference to
+            // "/maps/New Map111/New Map111.waterDepth.dds" while the real
+            // exported folder was "New_Map111". BuildExportArtifacts itself
+            // overwrites this slot with the correctly-sanitized path when
+            // WaterDepthAutoGenerate is on (see its own waterMaterial.
+            // TexturePaths[6] assignment) — but with it off, or for the
+            // live in-editor water preview (this method's other caller),
+            // this unsanitized default was the actual value used, and the
+            // game logged "Can't find texture ... trying fallback" for it.
+            var mapName = SC2TerrainExporter.SanitizeMapName(string.IsNullOrEmpty(data.MapName) ? "NewMap" : data.MapName);
             mat.TexturePaths[6] = $"/maps/{mapName}/{mapName}.waterDepth.dds";
         }
 

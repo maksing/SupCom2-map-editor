@@ -328,6 +328,78 @@ public static class SC2DdsEncoder
         return data;
     }
 
+    /// <summary>Single-level DXT1 (BC1, color block only, no alpha block),
+    /// no mip chain — the exact convention a real vanilla &lt;MapName&gt;.
+    /// minimap.win.dds uses, confirmed by inspecting several real files
+    /// (1024x1024, fourCC "DXT1", dwMipMapCount=1, dwCaps=TEXTURE|MIPMAP|
+    /// COMPLEX even though there's only the one level — a real encoder's
+    /// leftover habit, matched here byte-for-byte rather than "corrected").
+    /// Reuses EncodeLevel's existing color-block compression (its own alpha
+    /// array is unused when dxt5=false, so a dummy one is fine here).</summary>
+    public static byte[] BuildDxt1SingleMip(int w, int h, byte[] rgb)
+    {
+        var level = new MipLevel { W = w, H = h, Rgb = rgb, Alpha = new byte[w * h] };
+        var body = EncodeLevel(level, dxt5: false);
+
+        const uint DDSD_CAPS_HEIGHT_WIDTH_PIXELFORMAT_LINEARSIZE_MIPMAPCOUNT = 0x000A1007;
+        const uint DDSCAPS_COMPLEX = 0x8;
+        const uint DDSCAPS_TEXTURE = 0x1000;
+        const uint DDSCAPS_MIPMAP = 0x400000;
+
+        var result = new byte[128 + body.Length];
+        result[0] = (byte)'D'; result[1] = (byte)'D'; result[2] = (byte)'S'; result[3] = (byte)' ';
+        W4(result, 4, 124);
+        W4(result, 8, DDSD_CAPS_HEIGHT_WIDTH_PIXELFORMAT_LINEARSIZE_MIPMAPCOUNT);
+        W4(result, 12, (uint)h);
+        W4(result, 16, (uint)w);
+        W4(result, 20, (uint)body.Length);
+        W4(result, 24, 0); // dwDepth — real vanilla files leave this 0, not 1
+        W4(result, 28, 1); // dwMipMapCount
+        W4(result, 76, 32); // ddspf.dwSize
+        W4(result, 80, 0x5); // DDPF_ALPHAPIXELS|DDPF_FOURCC — matches real files exactly (DXT1's own block encoding ignores this either way)
+        result[84] = (byte)'D'; result[85] = (byte)'X'; result[86] = (byte)'T'; result[87] = (byte)'1';
+        W4(result, 108, DDSCAPS_TEXTURE | DDSCAPS_COMPLEX | DDSCAPS_MIPMAP);
+        Buffer.BlockCopy(body, 0, result, 128, body.Length);
+        return result;
+    }
+
+    /// <summary>Uncompressed 32-bit BGRA, no mips — the exact convention a
+    /// real vanilla &lt;MapName&gt;_PC_mapshot.dds uses (confirmed against
+    /// several real files: no FourCC, ddspf.dwFlags=DDPF_RGB|
+    /// DDPF_ALPHAPIXELS, dwRGBBitCount=32, R=0x00ff0000 G=0x0000ff00
+    /// B=0x000000ff A=0xff000000 — exactly Unity's own byte order for a
+    /// texture read back as RGBA32 with R/B swapped, i.e. plain B,G,R,A
+    /// bytes per pixel, row-major, no padding). `bgra` must be exactly
+    /// w*h*4 bytes.</summary>
+    public static byte[] BuildBgra32(int w, int h, byte[] bgra)
+    {
+        if (bgra == null) throw new ArgumentNullException(nameof(bgra));
+        if (bgra.Length != w * h * 4) throw new ArgumentException("bgra must be exactly w*h*4 bytes.", nameof(bgra));
+
+        const uint DDSD_CAPS_HEIGHT_WIDTH_PIXELFORMAT_LINEARSIZE = 0x00081007;
+        const uint DDSCAPS_TEXTURE = 0x1000;
+
+        var result = new byte[128 + bgra.Length];
+        result[0] = (byte)'D'; result[1] = (byte)'D'; result[2] = (byte)'S'; result[3] = (byte)' ';
+        W4(result, 4, 124);
+        W4(result, 8, DDSD_CAPS_HEIGHT_WIDTH_PIXELFORMAT_LINEARSIZE);
+        W4(result, 12, (uint)h);
+        W4(result, 16, (uint)w);
+        W4(result, 20, (uint)bgra.Length); // dwPitchOrLinearSize: total pixel-data size (real files use the "linear size" reading here, not a per-row pitch)
+        W4(result, 24, 0); // dwDepth
+        W4(result, 28, 0); // dwMipMapCount — real files leave this 0 (not even 1) for a single-level uncompressed image
+        W4(result, 76, 32); // ddspf.dwSize
+        W4(result, 80, 0x41); // DDPF_ALPHAPIXELS|DDPF_RGB
+        W4(result, 88, 32); // dwRGBBitCount
+        W4(result, 92, 0x00FF0000); // R mask
+        W4(result, 96, 0x0000FF00); // G mask
+        W4(result, 100, 0x000000FF); // B mask
+        W4(result, 104, 0xFF000000); // A mask
+        W4(result, 108, DDSCAPS_TEXTURE);
+        Buffer.BlockCopy(bgra, 0, result, 128, bgra.Length);
+        return result;
+    }
+
     private static void EncodeAlphaBlock(byte[] r, int off, byte[] ba)
     {
         int aMax = 0, aMin = 255;

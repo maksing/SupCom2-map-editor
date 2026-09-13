@@ -67,11 +67,19 @@ public static class SC2RuntimeTextureExporter
             error = $"'{tex.name}' has unexpected pixel data ({pixels.Length} pixels for {w}x{h})";
             return false;
         }
+        // GetPixels32 (and the ReadPixels fallback below) return Unity's
+        // native bottom-up row order; SC2DdsEncoder.BuildMaterialDds expects
+        // DDS's top-down order and never flips internally — without this,
+        // every re-exported material texture came out vertically flipped.
+        var flipped = new Color32[pixels.Length];
+        for (var y = 0; y < h; y++)
+            Array.Copy(pixels, y * w, flipped, (h - 1 - y) * w, w);
+
         var rgb = new byte[w * h * 3];
         var alpha = new byte[w * h];
-        for (var i = 0; i < pixels.Length; i++)
+        for (var i = 0; i < flipped.Length; i++)
         {
-            var c = pixels[i];
+            var c = flipped[i];
             rgb[i * 3] = c.r;
             rgb[i * 3 + 1] = c.g;
             rgb[i * 3 + 2] = c.b;

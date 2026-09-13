@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
@@ -359,17 +360,6 @@ public class SC2TerrainShell : ScriptableObject
 
     // ── Init / Cleanup ───────────────────────────────────────────────────────
 
-    public void SetPaintRnmSubMode(bool enabled)
-    {
-        if (_data == null || !_data.IsInitialized)
-            return;
-
-        EnsureSubEditors();
-        var method = _paintMode?.GetType().GetMethod("SetRnmSubMode", new[] { typeof(bool) });
-        method?.Invoke(_paintMode, new object[] { enabled });
-        Repaint();
-    }
-
     // Shown next to "Terrain Data" so a mismatch between what the Editor is
     // editing and what a standalone build actually starts with is visible
     // instead of silent. Both the Editor and a build now load the shared
@@ -518,6 +508,19 @@ public class SC2TerrainShell : ScriptableObject
 
     /// <summary>See SetData's own doc comment on why this exists.</summary>
     public System.Action<SC2TerrainData> DataChanged;
+
+    /// <summary>Fired once per brush stamp application in Geometry mode
+    /// (Raise/Lower/Smooth/Flatten/SetHeight — one call per SculptBrush/
+    /// SculptSetHeight, including once per symmetry mirror), not once per
+    /// whole stroke — hands (world center, radius) of the area whose
+    /// heights just changed. SC2ObjectsShell/SC2DecalsShell subscribe to
+    /// live-reproject their own AnchorToTerrain/AlignToSurface objects
+    /// sitting in that circle, closing the same "floating/clipping until
+    /// manually moved" gap ImportObjectsFromPath's own doc comment already
+    /// describes and fixes for the one-time post-import case — this is the
+    /// same fix, applied continuously during live sculpting instead of only
+    /// once right after an import.</summary>
+    public System.Action<Vector3, float> HeightBrushApplied;
 
     // ── Undo / Redo ──────────────────────────────────────────────────────────
     // Custom stack instead of UnityEditor.Undo: see SC2TerrainUndoStack for why
@@ -1081,6 +1084,26 @@ public class SC2TerrainShell : ScriptableObject
         }
         DrawUnifiedNote("Forces the outer ring of the texture to read as water — for a water body that runs off the edge of the map's own footprint.");
 
+        var nextOutline = EditorGUILayout.Toggle("Outline Water Edge (5px)", _data.WaterDepthShoreOutline);
+        if (nextOutline != _data.WaterDepthShoreOutline)
+        {
+            RecordUndoCheckpoint("Toggle Water Depth Shore Outline");
+            _data.WaterDepthShoreOutline = nextOutline;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote("Shifts the fade above outward by 5 pixels, so every shoreline starts at a visibly higher alpha instead of the bare floor — a smooth continuation of the same gradient, not a flat band, so the coast doesn't fade out as close to fully transparent.");
+
+        var nextImageBorderOutline = EditorGUILayout.Toggle("Outline Image Border (1px)", _data.WaterDepthImageBorderOutline);
+        if (nextImageBorderOutline != _data.WaterDepthImageBorderOutline)
+        {
+            RecordUndoCheckpoint("Toggle Water Depth Image Border Outline");
+            _data.WaterDepthImageBorderOutline = nextImageBorderOutline;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote("Paints a hard 1-pixel ring of solid, fully-opaque water color around the texture's own outer edge — a visible frame around the whole texture, applied last so it always wins over the other options above.");
+
         EditorGUILayout.Space(4);
         if (GUILayout.Button("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(22f))))
             RegenerateWaterDepthPreview();
@@ -1183,32 +1206,6 @@ public class SC2TerrainShell : ScriptableObject
             SC2BackgroundTerrainPreview.MarkDirty();
         }
         DrawUnifiedNote("World-space outer size (X and Z), centered on the core. Clamped internally on a fine-CellSize map so generation always stays fast — a very large request may end up smaller than asked.");
-
-        EditorGUILayout.Space(8);
-        DrawUnifiedSectionLabel("Global UV Scale");
-        var newGlobalUvEnabled = EditorGUILayout.ToggleLeft(" Enabled (applies to core AND background pairs)", _data.GlobalUvScaleEnabled);
-        if (newGlobalUvEnabled != _data.GlobalUvScaleEnabled)
-        {
-            RecordUndoCheckpoint("Toggle Global UV Scale");
-            _data.GlobalUvScaleEnabled = newGlobalUvEnabled;
-            EditorUtility.SetDirty(_data);
-            SC2BackgroundTerrainPreview.MarkDirty();
-            ApplyPreviewModeToChunks();
-            MarkDirtyAndRepaint();
-        }
-        if (_data.GlobalUvScaleEnabled)
-        {
-            var newGlobalUvScale = DrawCompactSlider("UV Tile Size (world units)", _data.GlobalUvScale, 0.5f, 4096f,
-                onValueChangeStart: () => RecordUndoCheckpoint("Change Global UV Scale"));
-            if (!Mathf.Approximately(newGlobalUvScale, _data.GlobalUvScale))
-            {
-                _data.GlobalUvScale = Mathf.Max(0.0001f, newGlobalUvScale);
-                SC2BackgroundTerrainPreview.MarkDirty();
-                ApplyPreviewModeToChunks();
-                MarkDirtyAndRepaint();
-            }
-        }
-        DrawUnifiedNote("One shared tiling scale for EVERY pair on both the playable core and the decorative background — supersedes each pair's own Tiling Scale (Pairs tab) while enabled, guaranteeing the texture tiling frequency can never mismatch at the seam or between two core pairs. Off leaves per-pair tiling exactly as authored.");
 
         EditorGUILayout.Space(6);
 
@@ -2045,12 +2042,24 @@ public class SC2TerrainShell : ScriptableObject
         // fixed 168px ceiling regardless of Scale even though
         // GetUnifiedContentWidth() (the value being clamped) already scales
         // correctly.
-        var size = Mathf.Clamp(GetUnifiedContentWidth() - SC2UiScale.Pxf(72f), SC2UiScale.Pxf(112f), SC2UiScale.Pxf(168f));
-        EditorGUILayout.BeginHorizontal();
-        GUILayout.FlexibleSpace();
-        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
-        GUILayout.FlexibleSpace();
-        EditorGUILayout.EndHorizontal();
+        var fullWidth = GetUnifiedContentWidth();
+        var size = Mathf.Clamp(fullWidth - SC2UiScale.Pxf(72f), SC2UiScale.Pxf(112f), SC2UiScale.Pxf(168f));
+        // Long-standing bug fixed here: centering the box via
+        // BeginHorizontal()+two FlexibleSpace() calls (the previous
+        // approach) relies on that horizontal group correctly inheriting
+        // the caller's own content width from the ambient layout stack.
+        // Reachable through some callers' deeper nesting (e.g. Paint
+        // Materials' Custom brush picker: DrawPanel -> DrawRnm ->
+        // DrawCustomBrushPicker -> DrawTexturePickerWithPath -> here), that
+        // inference drifted wider than the actual visible panel, rendering
+        // the box mostly outside the left panel's right edge instead of
+        // centered in it. Allocating the FULL available width directly and
+        // centering via an explicit sub-rect sidesteps that layout-
+        // inheritance question entirely — this box's own footprint is never
+        // wider than fullWidth, which every caller already constrains its
+        // own container to.
+        var rowRect = GUILayoutUtility.GetRect(fullWidth, size, GUILayout.Width(fullWidth), GUILayout.MaxWidth(fullWidth));
+        var rect = new Rect(rowRect.x + (rowRect.width - size) * 0.5f, rowRect.y, size, size);
 
         EditorGUI.DrawRect(rect, new Color(0.16f, 0.16f, 0.16f, 1f));
         GUI.Box(rect, GUIContent.none);
@@ -2202,7 +2211,37 @@ public class SC2TerrainShell : ScriptableObject
         GUI.Label(rect, text, label);
     }
 
-    public static void DrawGameViewBrush(Camera camera, Rect viewportRect, Vector3 worldPosition, float radius, Color outer, Color inner, float innerRadius = 0f)
+    /// <summary>Same shadow-backed readable-text trick as
+    /// DrawTexturePreviewLabel above, centered on a single GUI point
+    /// instead of filling a caller-given Rect — sized to the text itself
+    /// rather than a fixed box, so it works for any short live readout
+    /// (currently: the Measure tool's distance label).</summary>
+    public static void DrawFloatingLabel(Vector2 guiPosition, string text, Color accentColor)
+    {
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
+        var baseStyle = SafeGuiStyle(EditorStyles.boldLabel);
+        baseStyle.alignment = TextAnchor.MiddleCenter;
+        baseStyle.fontSize = SC2UiScale.F(12);
+        baseStyle.wordWrap = false;
+        var size = baseStyle.CalcSize(new GUIContent(text));
+        var rect = new Rect(guiPosition.x - size.x * 0.5f - 4f, guiPosition.y - size.y * 0.5f - 14f, size.x + 8f, size.y + 4f);
+
+        var shadow = new GUIStyle(baseStyle) { normal = { textColor = new Color(0f, 0f, 0f, 0.85f) } };
+        var main = new GUIStyle(baseStyle) { normal = { textColor = accentColor } };
+        GUI.Label(new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height), text, shadow);
+        GUI.Label(rect, text, main);
+    }
+
+    /// <summary>sampleHeight (world X,Z -> world Y), when given, makes the
+    /// ring hug the terrain surface instead of floating as a flat 2D circle
+    /// — a Blender-sculpt-style brush cursor that visibly rises/dips over
+    /// slopes and cliffs instead of appearing to float above or sink below
+    /// them. Omit it (default) for the original flat stamped-texture ring —
+    /// still exactly right for a preview that must NOT track the surface
+    /// (e.g. SC2GeometryMode's SetHeight-tool preview, which shows the flat
+    /// target height plane by design).</summary>
+    public static void DrawGameViewBrush(Camera camera, Rect viewportRect, Vector3 worldPosition, float radius, Color outer, Color inner, float innerRadius = 0f, Func<float, float, float> sampleHeight = null)
     {
         if (Event.current.type != EventType.Repaint || camera == null)
             return;
@@ -2210,6 +2249,14 @@ public class SC2TerrainShell : ScriptableObject
         var center = WorldToGameGui(camera, viewportRect, worldPosition);
         if (!viewportRect.Contains(center))
             return;
+
+        if (sampleHeight != null)
+        {
+            DrawTerrainHuggingRing(camera, viewportRect, worldPosition, radius, outer, sampleHeight);
+            if (innerRadius > 0.5f)
+                DrawTerrainHuggingRing(camera, viewportRect, worldPosition, innerRadius, inner, sampleHeight);
+            return;
+        }
 
         var edge = WorldToGameGui(camera, viewportRect, worldPosition + Vector3.right * Mathf.Max(0.01f, radius));
         var screenRadius = Mathf.Max(4f, Vector2.Distance(center, edge));
@@ -2225,6 +2272,95 @@ public class SC2TerrainShell : ScriptableObject
         }
         GUI.color = previousGuiColor;
         GUI.enabled = previousGuiEnabled;
+    }
+
+    /// <summary>A small, fixed-screen-size filled dot marking a world
+    /// position — for calling out where SC2TerrainData.GetSymmetricPositions'
+    /// mirrored/radial copies of a brush will land, alongside (not instead
+    /// of) DrawGameViewBrush's own full-size ring for the primary position.
+    /// Deliberately a fixed PIXEL size (unlike the brush ring itself, which
+    /// is world-space) so it stays clearly visible regardless of brush
+    /// radius or camera zoom — a full duplicate ring at every mirrored
+    /// position would visually compete with the primary brush and clutter
+    /// tightly-clustered radial symmetry counts. sampleHeight (optional,
+    /// same contract as DrawGameViewBrush) re-samples world Y at the
+    /// marker's own X/Z so it hugs terrain that isn't perfectly symmetric
+    /// in height, rather than reusing the primary position's own Y
+    /// verbatim.</summary>
+    public static void DrawSymmetryPointMarker(Camera camera, Rect viewportRect, Vector3 worldPosition, Color color, Func<float, float, float> sampleHeight = null, float pixelSize = 12f)
+    {
+        if (Event.current.type != EventType.Repaint || camera == null)
+            return;
+        if (sampleHeight != null)
+            worldPosition = new Vector3(worldPosition.x, sampleHeight(worldPosition.x, worldPosition.z), worldPosition.z);
+        var center = WorldToGameGui(camera, viewportRect, worldPosition);
+        if (!viewportRect.Contains(center))
+            return;
+        var previousColor = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(new Rect(center.x - pixelSize * 0.5f, center.y - pixelSize * 0.5f, pixelSize, pixelSize), GetSolidDotTexture(), ScaleMode.StretchToFill, true);
+        GUI.color = previousColor;
+    }
+
+    /// <summary>Convenience wrapper every shell's own brush-drawing call
+    /// site uses identically: draw DrawSymmetryPointMarker at every
+    /// position GetSymmetricPositions(primaryPosition) returns EXCEPT the
+    /// primary position itself (already shown by that shell's own full
+    /// brush cursor). No-ops cleanly when allPositions is null/empty or
+    /// Symmetry is None (GetSymmetricPositions then returns just the
+    /// primary position, so the loop below finds nothing to draw).</summary>
+    public static void DrawSymmetryPointMarkers(Camera camera, Rect viewportRect, Vector3 primaryPosition, IEnumerable<Vector3> allPositions, Color color, Func<float, float, float> sampleHeight = null)
+    {
+        if (allPositions == null) return;
+        foreach (var pos in allPositions)
+            if (pos != primaryPosition)
+                DrawSymmetryPointMarker(camera, viewportRect, pos, color, sampleHeight);
+    }
+
+    private const int BrushRingSegments = 48;
+
+    private static void DrawTerrainHuggingRing(Camera camera, Rect viewportRect, Vector3 center, float radius, Color color, Func<float, float, float> sampleHeight)
+    {
+        var previousGuiColor = GUI.color;
+        var previousGuiEnabled = GUI.enabled;
+        GUI.enabled = true;
+
+        Vector2? previousPoint = null;
+        for (var i = 0; i <= BrushRingSegments; i++)
+        {
+            var angle = (i % BrushRingSegments) / (float)BrushRingSegments * Mathf.PI * 2f;
+            var worldX = center.x + Mathf.Cos(angle) * radius;
+            var worldZ = center.z + Mathf.Sin(angle) * radius;
+            var worldPoint = new Vector3(worldX, sampleHeight(worldX, worldZ), worldZ);
+            var screenPoint = WorldToGameGui(camera, viewportRect, worldPoint);
+            if (previousPoint.HasValue)
+                DrawGuiLineSegment(previousPoint.Value, screenPoint, color, 2f);
+            previousPoint = screenPoint;
+        }
+
+        GUI.color = previousGuiColor;
+        GUI.enabled = previousGuiEnabled;
+    }
+
+    /// <summary>Build-safe line segment (no UnityEditor.Handles dependency,
+    /// works identically in the Editor Game View and a real Build) — a
+    /// single rotated, stretched white-texture quad. Same trick
+    /// SC2ObjectsShell's own graph-edge line drawing already uses. Widened
+    /// from private to public so the Measure tool (SC2GameViewEditorUI,
+    /// a top-level "Global" tool rather than a per-shell one) can draw its
+    /// own start-to-end line with this exact same primitive.</summary>
+    public static void DrawGuiLineSegment(Vector2 a, Vector2 b, Color color, float width)
+    {
+        var delta = b - a;
+        var length = delta.magnitude;
+        if (length < 0.5f) return;
+        var oldMatrix = GUI.matrix;
+        var oldColor = GUI.color;
+        GUI.color = color;
+        GUIUtility.RotateAroundPivot(Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg, a);
+        GUI.DrawTexture(new Rect(a.x, a.y - width * 0.5f, length, width), Texture2D.whiteTexture);
+        GUI.matrix = oldMatrix;
+        GUI.color = oldColor;
     }
 
     // Widened from private to public so SC2BrushRadiusGesture (shared
@@ -2467,6 +2603,39 @@ public class SC2TerrainShell : ScriptableObject
 
         _brushRingTexture.Apply(false, true);
         return _brushRingTexture;
+    }
+
+    private static Texture2D _solidDotTexture;
+
+    /// <summary>Same anti-aliased-circle bake as GetBrushRingTexture, minus
+    /// the hollow center — a filled dot for DrawSymmetryPointMarker.</summary>
+    private static Texture2D GetSolidDotTexture()
+    {
+        if (_solidDotTexture != null)
+            return _solidDotTexture;
+
+        const int size = 32;
+        _solidDotTexture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+
+        var center = (size - 1) * 0.5f;
+        var outer = center - 1f;
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var dx = x - center;
+            var dy = y - center;
+            var d = Mathf.Sqrt(dx * dx + dy * dy);
+            var alpha = Mathf.Clamp01(outer - d + 1f);
+            _solidDotTexture.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+        }
+
+        _solidDotTexture.Apply(false, true);
+        return _solidDotTexture;
     }
 
     private static int StableTexturePickerId(string key)
@@ -3120,6 +3289,33 @@ public class SC2TerrainShell : ScriptableObject
         return _liveHeightGrid.TryRaycast(ray, out hit);
     }
 
+    /// <summary>Bilinear height lookup (world X,Z -> world Y) against the
+    /// LIVE runtime heightfield (Runtime.GetHeight) directly — unlike
+    /// SampleLiveHeightGrid below, this is never cached/debounced, so it
+    /// reflects a Geometry-mode brush stamp the instant it's applied, not
+    /// only after the stroke ends (SC2LiveHeightGrid.EnsureFresh only
+    /// rebuilds from Data.Heights, which itself only re-syncs from the
+    /// runtime on stroke MouseUp — see SC2GeometryMode's own comment on
+    /// that). Used by SC2TerrainShell.HeightBrushApplied subscribers
+    /// (Objects/Decals reprojection) that need this stroke's real height,
+    /// not the previous one. Procedural terrain only, no imported-terrain
+    /// raycast fallback — callers that need that too should combine this
+    /// with their own TryRaycastImportedTerrain check, same as
+    /// SC2ObjectsShell.SampleHeight does.</summary>
+    public float SampleLiveRuntimeHeight(float x, float z)
+    {
+        if (Runtime == null || _data == null || _data.CellSize <= 0f || _data.GridWidth <= 0 || _data.GridHeight <= 0) return 0f;
+        var fx = Mathf.Clamp(x / _data.CellSize, 0f, _data.GridWidth);
+        var fz = Mathf.Clamp(z / _data.CellSize, 0f, _data.GridHeight);
+        var x0 = Mathf.FloorToInt(fx); var z0 = Mathf.FloorToInt(fz);
+        var x1 = Mathf.Min(x0 + 1, _data.GridWidth); var z1 = Mathf.Min(z0 + 1, _data.GridHeight);
+        var tx = fx - x0; var tz = fz - z0;
+        var h00 = Runtime.GetHeight(x0, z0); var h10 = Runtime.GetHeight(x1, z0);
+        var h01 = Runtime.GetHeight(x0, z1); var h11 = Runtime.GetHeight(x1, z1);
+        var hx0 = Mathf.Lerp(h00, h10, tx); var hx1 = Mathf.Lerp(h01, h11, tx);
+        return Mathf.Lerp(hx0, hx1, tz);
+    }
+
     /// <summary>Ensures the grid is fresh and returns a bilinear height
     /// lookup (world X,Z -> world Y) — used by SC2CostsAutoGen.
     /// GenerateFromHeight so Costs auto-generation reads the same merged
@@ -3570,7 +3766,10 @@ public class SC2TerrainShell : ScriptableObject
 
     // ── Preview rendering (copied from TerrainEditorWindow) ──────────────────
 
-    private void ApplyPreviewModeToChunks()
+    // internal (not private): SC2PairsMode's Global UV Scale controls
+    // (moved there from the Background tab) need to re-apply the preview
+    // after toggling/changing it, same as every other call site here.
+    internal void ApplyPreviewModeToChunks()
     {
         if (_runtime == null || _data == null) return;
 

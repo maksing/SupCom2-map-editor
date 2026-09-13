@@ -81,18 +81,13 @@ public class SC2PaintMode
     public SC2PaintMode(SC2TerrainShell win, SC2TerrainData data)
     { _win = win; Data = data; }
 
-    public void SetRnmSubMode(bool enabled)
-    {
-        _sub = enabled ? Sub.RNM : Sub.Assign;
-    }
-
     // ── Panel ──────────────────────────────────────────────
 
     public void DrawPanel()
     {
         var w = SC2TerrainShell.GetPanelContentWidth();
         EditorGUILayout.BeginVertical(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        var modeLabels = new[] { "Assign", "Blend" };
+        var modeLabels = new[] { "Assign Pairs", "Blend Mask" };
         _sub = (Sub)SC2TerrainShell.DrawUnifiedSegmentGrid((int)_sub, modeLabels, 2);
 
         EditorGUILayout.Space(4);
@@ -250,7 +245,12 @@ public class SC2PaintMode
         // editor's own UI, and why it survived a manual Reset.
         if (_win.Runtime != null && _win.Runtime.BlendRT != null)
         {
-            var r = EditorGUILayout.GetControlRect(GUILayout.Height(SC2UiScale.Pxf(60f)), GUILayout.Width(w), GUILayout.MaxWidth(w));
+            // Full square (was a fixed 60px-tall strip regardless of panel
+            // width) — BlendRT's own snapshot is square, so a wide-short
+            // rect just squeezed it down to a thin, hard-to-read band via
+            // ScaleToFit's letterboxing instead of showing it at a real,
+            // legible size.
+            var r = EditorGUILayout.GetControlRect(GUILayout.Height(w), GUILayout.Width(w), GUILayout.MaxWidth(w));
             // Draw a CPU-owned Texture2D SNAPSHOT of BlendRT, never the live
             // BlendRT RenderTexture itself. IMGUI batches and defers its actual
             // GPU draws to the end of the frame; drawing a live RenderTexture
@@ -373,7 +373,8 @@ public class SC2PaintMode
         // and keeps responding to mouse movement/Escape/click-to-confirm
         // instead of this tool's own brush cursor/paint input firing
         // underneath it.
-        if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 1f, 1000f))
+        if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 1f, 1000f,
+            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z)))
             return;
         DrawGameViewGizmo(camera, viewportRect);
         switch (_sub)
@@ -463,7 +464,13 @@ public class SC2PaintMode
         // already uses.
         else if (_rnmErase || (Event.current != null && Event.current.control)) col = new Color(1f, .3f, .25f, .95f);
         else col = new Color(0f, .85f, 1f, .95f);
-        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _brushPos, _radius, col, Color.clear);
+        SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _brushPos, _radius, col, Color.clear,
+            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
+
+        if (Data.Symmetry != SymmetryMode.None)
+            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, Data.GetSymmetricPositions(_brushPos),
+                new Color(0.4f, 0.8f, 1f, 0.9f),
+                sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
     }
 
     void HandleAssign(Event e)

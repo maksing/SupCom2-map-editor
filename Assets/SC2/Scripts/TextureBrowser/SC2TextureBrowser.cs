@@ -356,7 +356,18 @@ public static class SC2TextureBrowser
         var path = SC2RuntimeFileDialog.OpenFile("Import custom texture", "Texture (*.png;*.jpg;*.jpeg;*.dds)", "png;*.jpg;*.jpeg;*.dds");
 #endif
         if (string.IsNullOrEmpty(path)) return;
-        var result = SC2CustomTextureImporter.Import(path, Query.Usage ?? SC2TextureUsage.Diffuse, false);
+        // overwrite: true — a user deliberately clicking "Import..." and
+        // re-picking a file they already imported before means "(re)import
+        // this," not "silently hand me back whatever's cached." Without
+        // this, re-importing the exact same source (same content hash, same
+        // cache path) always hit the "already cached" shortcut in Import
+        // below and reloaded the untouched old file — the only way this
+        // project can regenerate a texture's cached .dds is right here, so
+        // a fix to the encoder (e.g. SC2CustomTextureImporter.
+        // EncodeMaterialDds's row-flip fix) could never actually reach an
+        // already-imported texture no matter how many times the user
+        // re-imported it.
+        var result = SC2CustomTextureImporter.Import(path, Query.Usage ?? SC2TextureUsage.Diffuse, true);
         if (!result.Success) { _message = result.Error; return; }
         _selectedId = result.Entry.Id;
         _message = "Imported " + result.Entry.Name + " as " + result.Entry.Encoding;

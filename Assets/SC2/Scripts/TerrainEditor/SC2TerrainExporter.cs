@@ -41,7 +41,14 @@ public static class SC2TerrainExporter
     /// NOT make the document authoritative for export as a whole yet, see
     /// the status doc for the known limitation and what a full rollout
     /// still needs.</param>
-    public static string ExportCorrect(SC2TerrainData data, string outputDir, List<SC2ImportedTerrainExportData> importedTerrains = null, bool debugSaveCostsImages = false, SC2MapSession session = null, bool exportAsArchives = false)
+    /// <param name="minimapDdsBytes">Already-encoded &lt;mapName&gt;.minimap.win.dds
+    /// bytes (SC2DdsEncoder.BuildDxt1SingleMip), captured by the caller
+    /// (SC2ExportPanel, via SC2MapPreviewCapture) before calling this method
+    /// — this exporter never touches a Camera/RenderTexture itself, staying
+    /// the same Editor/Build-agnostic, non-MonoBehaviour utility it always
+    /// was. Null skips writing the file (every pre-existing caller keeps
+    /// behaving exactly as before).</param>
+    public static string ExportCorrect(SC2TerrainData data, string outputDir, List<SC2ImportedTerrainExportData> importedTerrains = null, bool debugSaveCostsImages = false, SC2MapSession session = null, bool exportAsArchives = false, byte[] minimapDdsBytes = null)
     {
         if (!data.IsInitialized || data.Pairs.Count == 0)
         {
@@ -53,7 +60,7 @@ public static class SC2TerrainExporter
         var perMapRoot = exportAsArchives ? CreateExportStagingDir() : archivePath;
         try
         {
-            var result = DoExport(data, perMapRoot, importedTerrains, debugSaveCostsImages, session);
+            var result = DoExport(data, perMapRoot, importedTerrains, debugSaveCostsImages, session, minimapDdsBytes);
             if (exportAsArchives)
                 result = PackStagingRootIntoSingleArchive(perMapRoot, archivePath, result);
             SC2Log.Log("=== Export completed ===");
@@ -616,7 +623,7 @@ public static class SC2TerrainExporter
             {
                 SC2Log.Log($"[SC2Exporter] merging imported terrain '{imported.Name}': " +
                            $"{imported.Model.Materials.Count} materials, {imported.Model.Vertices.Count} verts, {imported.Model.Triangles.Count} tris");
-                MergeImportedTerrain(model, imported);
+                MergeImportedTerrain(model, imported, ResolveRawResourcePath);
                 CopyImportedTextures(imported.Model, outputDir, warnings);
             }
         }
@@ -1195,13 +1202,32 @@ public static class SC2TerrainExporter
         };
     }
 
-    private static string DoExport(SC2TerrainData data, string outputDir, List<SC2ImportedTerrainExportData> importedTerrains = null, bool debugSaveCostsImages = false, SC2MapSession session = null)
+    private static string DoExport(SC2TerrainData data, string outputDir, List<SC2ImportedTerrainExportData> importedTerrains = null, bool debugSaveCostsImages = false, SC2MapSession session = null, byte[] minimapDdsBytes = null)
     {
         var artifacts = BuildExportArtifacts(data, outputDir, importedTerrains, debugSaveCostsImages, session);
         if (artifacts.ErrorMessage != null) return artifacts.ErrorMessage;
 
         var mapName = artifacts.MapName;
         var mapDir = artifacts.MapDir;
+        // Minimap: freshly captured by the caller for every export (see
+        // SC2ExportPanel/SC2MapPreviewCapture) — real vanilla convention,
+        // confirmed against actual game files. Mapshot: captured once by the
+        // user (Export tab's "Capture Preview" button) and stored directly
+        // on SC2TerrainData, re-used at every export until re-captured — no
+        // live render needed here at all.
+        if (minimapDdsBytes != null)
+            File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.minimap.win.dds"), minimapDdsBytes);
+        if (data.MapShotBgraPixels != null && data.MapShotBgraPixels.Length == SC2MapPreviewCapture.MapShotWidth * SC2MapPreviewCapture.MapShotHeight * 4)
+        {
+            // MapShotBgraPixels is stored in Unity's own natural (unflipped)
+            // row orientation (so the Export tab's own preview thumbnail
+            // displays right-side up) — flip only at the point of writing
+            // the DDS file itself. See SC2MapPreviewCapture.
+            // FlipRowsVertically's own doc comment.
+            var ddsBgra = SC2MapPreviewCapture.FlipRowsVertically(data.MapShotBgraPixels, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, 4);
+            File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}_PC_mapshot.dds"),
+                SC2DdsEncoder.BuildBgra32(SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, ddsBgra));
+        }
         File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.terrain.win.bdf"), artifacts.TerrainBytes);
         File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.hfield.win.bdf"), artifacts.HfieldBytes);
         File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.costs.win.bdf"), artifacts.CostsBytes);
@@ -1740,7 +1766,7 @@ public static class SC2TerrainExporter
         return (normals, tangents, binormals);
     }
 
-    internal static void MergeImportedTerrain(TerrainModel model, SC2ImportedTerrainExportData imported)
+    internal static void MergeImportedTerrain(TerrainModel model, SC2ImportedTerrainExportData imported, Func<string, Texture2D, string> resolveRawResourcePath = null)
     {
         var source = imported.Model;
         var t = imported.Transform;
@@ -1850,7 +1876,7 @@ public static class SC2TerrainExporter
         {
             var renderer = t.GetComponent<MeshRenderer>();
             if (renderer != null)
-                SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, renderer.sharedMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides);
+                SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, renderer.sharedMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath);
         }
 
         foreach (var mat in source.Materials)
@@ -1893,6 +1919,18 @@ public static class SC2TerrainExporter
         foreach (var rawPath in SC2TerrainBdfImporter.CollectTexturePaths(source))
         {
             var normalized = SC2TerrainMaterialFactory.NormalizePath(rawPath);
+            // A texture-slot override (SC2GameViewEditorUI.DrawMaterialTextureSlot)
+            // already went through MergeImportedTerrain -> SC2TerrainMaterialExporter.
+            // ApplyFromScene -> ResolveRawResourcePath just above, in this same
+            // BuildExportArtifacts call, which already copied its real file into
+            // this flat "/Textures/<Name>.dds" destination — re-resolving it
+            // here against the ORIGINAL imported-map's own nested Resources
+            // cache would always miss (it was never a pre-extracted vanilla
+            // path to begin with) and log a spurious "not found" warning for a
+            // texture that's actually already present and correctly referenced.
+            if (normalized.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) &&
+                normalized.IndexOf('/', "textures/".Length) < 0)
+                continue;
             var basePath = SC2TerrainMaterialFactory.StripExtension(normalized);
             if (!seen.Add(basePath)) continue;
 
@@ -2017,7 +2055,11 @@ public static class SC2TerrainExporter
         return bdfPath;
     }
 
-    private static string SanitizeMapName(string s)
+    /// <summary>Internal (not private) so SC2WaterPlane.BuildWaterMaterial
+    /// can sanitize its own default waterDepth.dds path reference the exact
+    /// same way every real exported file/folder name already is — see that
+    /// method's own doc comment for the bug this fixes.</summary>
+    internal static string SanitizeMapName(string s)
     {
         var safe = MakeSafe(s);
         while (safe.IndexOf("..", StringComparison.Ordinal) >= 0) safe = safe.Replace("..", "_");

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.Rendering;
+using SC2.MapEditor.Document;
 
 /// <summary>
 /// Creates runtime-visible scene representations for entries picked through
@@ -53,7 +54,7 @@ public static class SC2GameAssetScenePreview
     {
         public Mesh Mesh;
         public Material[] Materials;
-        public FileTextureResolver Resolver;
+        public ArchiveTextureResolver Resolver;
         public float UniformScale;
         public readonly Dictionary<InstanceKey, Matrix4x4> Instances = new Dictionary<InstanceKey, Matrix4x4>();
     }
@@ -393,7 +394,7 @@ public static class SC2GameAssetScenePreview
         batch = null;
         error = null;
         if (asset == null) { error = "Blueprint entry is missing."; return false; }
-        if (string.IsNullOrWhiteSpace(gameDataRoot) || !Directory.Exists(gameDataRoot))
+        if (string.IsNullOrWhiteSpace(gameDataRoot) || !SC2GameArchiveRegistry.TryGetReader(out var reader))
         {
             error = "Game data root is not configured.";
             return false;
@@ -417,16 +418,22 @@ public static class SC2GameAssetScenePreview
 
                 Debug.Log($"[SC2 Mesh] {logKey}: using LOD {lod.Index} (declaredMeshPath='{lod.DeclaredMeshPath}'), {lod.ModelPaths.Count} candidate SCM path(s): {string.Join(" | ", lod.ModelPaths)}");
 
-                string modelPath = lod.ModelPaths.FirstOrDefault(File.Exists);
+                // ModelPaths are now normalized archive-relative paths (the
+                // browser's discovery pass is archive-native — see
+                // SC2GameAssetDiscovery.BuildFromArchive) — resolve existence
+                // via the reader's entry list instead of File.Exists.
+                string modelPath = lod.ModelPaths.FirstOrDefault(candidate => ArchiveHasEntry(reader, candidate));
                 if (string.IsNullOrWhiteSpace(modelPath))
                 {
                     error = "Resolved SCM file no longer exists.";
-                    Debug.LogWarning($"[SC2 Mesh] {logKey}: none of the {lod.ModelPaths.Count} candidate SCM path(s) exist on disk.");
+                    Debug.LogWarning($"[SC2 Mesh] {logKey}: none of the {lod.ModelPaths.Count} candidate SCM path(s) exist in the configured game archives.");
                     return false;
                 }
                 Debug.Log($"[SC2 Mesh] {logKey}: reading SCM file '{modelPath}'.");
 
-                SC2ScmModel model = SC2ScmModelReader.ReadFile(modelPath);
+                SC2ScmModel model;
+                using (var stream = new MemoryStream(ReadArchiveEntryBytes(reader, modelPath)))
+                    model = SC2ScmModelReader.Read(stream, modelPath);
                 Debug.Log($"[SC2 Mesh] {logKey}: SCM v{model.Version} parsed - vertices={model.Vertices.Count}, indices={model.Indices.Count} ({model.TriangleCount} tris), materialRanges={model.Materials.Count}, bones={model.Bones.Count}.");
 
                 Mesh mesh = CreateMesh(model, asset.Id);
@@ -438,7 +445,7 @@ public static class SC2GameAssetScenePreview
                 }
                 Debug.Log($"[SC2 Mesh] {logKey}: Unity Mesh built - subMeshCount={mesh.subMeshCount}, bounds center={mesh.bounds.center}, bounds size={mesh.bounds.size}.");
 
-                var resolver = new FileTextureResolver(gameDataRoot);
+                var resolver = new ArchiveTextureResolver(reader);
                 Material[] materials = CreateMaterials(lod, mesh.subMeshCount, resolver, asset.Id);
                 var materialSetCount = lod.MaterialSets.FirstOrDefault(s => s.Materials.Count > 0)?.Materials.Count ?? 0;
                 Debug.Log($"[SC2 Mesh] {logKey}: materials built - count={materials.Length}, shader='{(materials.Length > 0 && materials[0] != null ? materials[0].shader.name : "none")}', declaredBlueprintMaterials={materialSetCount}, enableInstancing={(materials.Length > 0 && materials[0] != null && materials[0].enableInstancing)}.");
@@ -580,11 +587,12 @@ public static class SC2GameAssetScenePreview
 
     private static string GetBatchKey(SC2GameAsset asset)
     {
+        // asset.SourcePath is now always a normalized archive-relative path
+        // (see SC2GameAssetDiscovery.BuildFromArchive) — already a stable,
+        // canonical key on its own; no absolute-path resolution needed (or
+        // meaningful — there's no real filesystem path behind it any more).
         if (!string.IsNullOrWhiteSpace(asset.SourcePath))
-        {
-            try { return Path.GetFullPath(asset.SourcePath); }
-            catch { return asset.SourcePath.Replace('\\', '/'); }
-        }
+            return asset.SourcePath.Replace('\\', '/');
         return (asset.Kind ?? "Blueprint") + ":" + asset.Id;
     }
 
@@ -595,7 +603,7 @@ public static class SC2GameAssetScenePreview
         return count <= indexCount - range.FirstIndex;
     }
 
-    private static Material[] CreateMaterials(SC2GameAssetLod lod, int subMeshCount, FileTextureResolver resolver, string assetId)
+    private static Material[] CreateMaterials(SC2GameAssetLod lod, int subMeshCount, ArchiveTextureResolver resolver, string assetId)
     {
         SC2GameAssetMaterialSet set = lod.MaterialSets.FirstOrDefault(candidate => candidate.Materials.Count > 0);
         Material[] declared = new Material[0];
@@ -679,14 +687,22 @@ public static class SC2GameAssetScenePreview
         return values == null || values.Length < 2 ? Vector2.zero : new Vector2(values[0], values[1]);
     }
 
-    private sealed class FileTextureResolver : ISC2UnitTextureResolver, IDisposable
+    /// <summary>Resolves a material's raw declared texture path against the
+    /// game's own .scd archives (via the shared SC2GameArchiveRegistry
+    /// reader) instead of a loose-file gamedata copy. Deliberately its own
+    /// simple direct/.win-suffix-swap check rather than reusing the
+    /// browser's own SC2GameAssetFileResolver (that one's expensive
+    /// case-insensitive fuzzy/sibling/basename fallback search is meant to
+    /// run once during discovery, not repeated on Unity's main thread every
+    /// time a placed prop/unit needs its four material textures).</summary>
+    private sealed class ArchiveTextureResolver : ISC2UnitTextureResolver, IDisposable
     {
-        private readonly string _gameDataRoot;
+        private readonly ISC2SourceContainerReader _reader;
         private readonly Dictionary<string, Texture2D> _cache = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
 
-        public FileTextureResolver(string gameDataRoot)
+        public ArchiveTextureResolver(ISC2SourceContainerReader reader)
         {
-            _gameDataRoot = gameDataRoot;
+            _reader = reader;
         }
 
         public Texture2D Resolve(string blueprintPath)
@@ -696,8 +712,7 @@ public static class SC2GameAssetScenePreview
             if (_cache.TryGetValue(blueprintPath, out cached)) return cached;
             string path = ResolvePath(blueprintPath);
             Texture2D texture = null;
-            string error;
-            if (!string.IsNullOrWhiteSpace(path)) SC2CustomTextureImporter.TryLoad(path, out texture, out error);
+            if (!string.IsNullOrWhiteSpace(path)) SC2CustomTextureImporter.TryLoadPreviewFromArchive(_reader, path, out texture, out _);
             _cache[blueprintPath] = texture;
             return texture;
         }
@@ -708,29 +723,42 @@ public static class SC2GameAssetScenePreview
             _cache.Clear();
         }
 
-        // The browser's discovery index already performs the expensive
-        // case-insensitive full-tree scan. Preview creation must not repeat
-        // it on Unity's main thread just to load four known material files.
         private string ResolvePath(string blueprintPath)
         {
-            if (Path.IsPathRooted(blueprintPath) && File.Exists(blueprintPath)) return blueprintPath;
             string relative = blueprintPath.Replace('\\', '/').Trim().TrimStart('/');
-            string direct = Path.Combine(_gameDataRoot, relative.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(direct)) return direct;
+            if (ArchiveHasEntry(_reader, relative)) return relative;
 
             if (relative.EndsWith(".win.dds", StringComparison.OrdinalIgnoreCase))
             {
                 string withoutWin = relative.Substring(0, relative.Length - ".win.dds".Length) + ".dds";
-                string candidate = Path.Combine(_gameDataRoot, withoutWin.Replace('/', Path.DirectorySeparatorChar));
-                return File.Exists(candidate) ? candidate : null;
+                return ArchiveHasEntry(_reader, withoutWin) ? withoutWin : null;
             }
             if (relative.EndsWith(".dds", StringComparison.OrdinalIgnoreCase))
             {
                 string withWin = relative.Substring(0, relative.Length - ".dds".Length) + ".win.dds";
-                string candidate = Path.Combine(_gameDataRoot, withWin.Replace('/', Path.DirectorySeparatorChar));
-                return File.Exists(candidate) ? candidate : null;
+                return ArchiveHasEntry(_reader, withWin) ? withWin : null;
             }
             return null;
         }
+    }
+
+    /// <summary>ISC2SourceContainerReader has no O(1) existence check on its
+    /// own interface (SC2MultiSourceContainerReader's own Contains is a
+    /// concrete-type-only convenience) — a linear scan over Entries is fine
+    /// here since every call site above is memoized (ArchiveTextureResolver's
+    /// _cache, and the one-shot model-candidate lookup in TryGetOrBuildBatch),
+    /// never repeated per-frame.</summary>
+    private static bool ArchiveHasEntry(ISC2SourceContainerReader reader, string normalizedPath) =>
+        reader.Entries.Any(e => string.Equals(e.NormalizedPath, normalizedPath, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>ZipArchiveEntry.Open() (the real backing stream for a packed
+    /// .scd) is forward-only/non-seekable, but SC2ScmModelReader.Read seeks —
+    /// buffer the whole entry into memory first.</summary>
+    private static byte[] ReadArchiveEntryBytes(ISC2SourceContainerReader reader, string normalizedPath)
+    {
+        using var stream = reader.OpenEntry(normalizedPath);
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        return ms.ToArray();
     }
 }

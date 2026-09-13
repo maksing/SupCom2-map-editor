@@ -43,6 +43,19 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     public float  CellSize=2f;
     public bool   IsInitialized;
 
+    /// <summary>Raw BGRA32 pixels (448x206x4 = 369152 bytes) for the map's
+    /// "_PC_mapshot.dds" export — the user-framed angled screenshot shown in
+    /// a real game's map-select UI, captured once via the Export tab's
+    /// "Capture Preview" button (SC2MapPreviewCapture) and re-used at every
+    /// export until re-captured, unlike the minimap (which always renders
+    /// fresh at export time — see SC2TerrainExporter.BuildExportArtifacts).
+    /// Null until the user captures one; export simply skips writing the
+    /// file in that case. Deliberately not part of the undo stack (see
+    /// SC2TerrainShell.CaptureAuxState) — which camera angle was last
+    /// screenshotted isn't an editing operation Ctrl+Z is expected to touch,
+    /// unlike terrain edits.</summary>
+    public byte[] MapShotBgraPixels;
+
     /// <summary>A real "the live procedural plane
     /// contributes nothing to the shipped map" switch, for maps built purely
     /// from an imported terrain.bdf. The live SC2TerrainData still technically
@@ -344,6 +357,29 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// doesn't fade to "no water" right where the water actually continues
     /// past the texture's own bounds.</summary>
     public bool WaterDepthPaintBorder = true;
+
+    /// <summary>When on, shifts the shore-to-open-water alpha gradient (see
+    /// WaterDepthMargin/WaterDepthFalloffPower/WaterDepthMinAlpha) outward
+    /// by 5 texels (SC2WaterDepthTextureGenerator.ShoreOutlineWidthTexels):
+    /// every water texel's alpha is computed as if it were 5 texels farther
+    /// from the nearest shore than it really is. The result is the exact
+    /// same continuous fade curve, just starting from a visibly higher
+    /// alpha right at the coastline instead of bottoming out at the bare
+    /// WaterDepthMinAlpha floor — a smooth continuation of the fade, not a
+    /// hard-edged flat-color band (an earlier version forced a flat alpha
+    /// 255 for a fixed band, which showed as a visible jagged seam against
+    /// the naturally smooth gradient beyond it).</summary>
+    public bool WaterDepthShoreOutline = false;
+
+    /// <summary>When on, forces a hard 1-texel-wide ring of fully-opaque
+    /// water color (alpha 255) around the OUTER EDGE of the generated
+    /// texture itself (x/z == 0 or texSize-1) — a visible solid frame around
+    /// the whole texture. Applied last, after every other pass (including
+    /// WaterDepthPaintBorder/WaterDepthShoreOutline), so turning this on
+    /// always wins the outer ring. Same "full alpha, not zero" reasoning as
+    /// WaterDepthShoreOutline — a zero-alpha ring wouldn't read as a visible
+    /// outline, just a gap.</summary>
+    public bool WaterDepthImageBorderOutline = false;
 
     /// <summary>Optional low-detail decorative terrain surrounding the
     /// playable core on all sides — a real second SC2TerrainData instance

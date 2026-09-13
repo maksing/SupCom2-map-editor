@@ -40,6 +40,61 @@ public static class SC2GameAssetCatalog
         return result;
     }
 
+    /// <summary>Archive-native counterpart of Build(IEnumerable&lt;string&gt;,
+    /// IEnumerable&lt;string&gt;) above — same discovery/parsing/asset-creation
+    /// logic (CreateAsset, IsBrowsableBlueprint, FindModels, etc. are all pure
+    /// string/path logic and work identically on a normalized archive-relative
+    /// path), just sourced from a flat list of normalized entry paths +
+    /// a byte-reader delegate instead of Directory.EnumerateFiles +
+    /// File.ReadAllBytes. Deliberately NOT typed against
+    /// ISC2SourceContainerReader directly — that type lives in the
+    /// SC2.MapEditor.Document assembly, which this dependency-light
+    /// Runtime/GameAssets assembly (also built/tested standalone via
+    /// Tests~/StandaloneCharacterization) does not reference. The caller
+    /// (SC2UnitPropBrowser, which does reference it) adapts a real
+    /// ISC2SourceContainerReader into these two plain parameters. Used to
+    /// read units/props straight out of the game's own .scd archives
+    /// (bp.scd/props.scd/units.scd/meshes.scd, whichever the configured
+    /// gamedata root's composite reader covers) instead of requiring a
+    /// pre-extracted loose-file copy.</summary>
+    public static SC2GameAssetCatalogResult BuildFromArchive(IEnumerable<string> entryPaths, Func<string, byte[]> readEntryBytes)
+    {
+        if (entryPaths == null) throw new ArgumentNullException(nameof(entryPaths));
+        if (readEntryBytes == null) throw new ArgumentNullException(nameof(readEntryBytes));
+        var allPaths = entryPaths as IReadOnlyList<string> ?? entryPaths.ToList();
+        var result = new SC2GameAssetCatalogResult();
+        var models = IndexModelsFromArchive(allPaths);
+        foreach (var path in allPaths)
+        {
+            if (!path.EndsWith(".bp", StringComparison.OrdinalIgnoreCase) || !IsBrowsableBlueprint(path)) continue;
+            try
+            {
+                var bytes = readEntryBytes(path);
+                var blueprint = SC2BlueprintLoader.ParseBytes(bytes, path);
+                result.Assets.Add(CreateAsset(blueprint, path, models));
+            }
+            catch (Exception exception)
+            {
+                result.Warnings.Add("Could not parse blueprint '" + path + "': " + exception.Message);
+            }
+        }
+        result.Assets.Sort((a, b) => string.Compare(a.Id, b.Id, StringComparison.OrdinalIgnoreCase));
+        return result;
+    }
+
+    private static Dictionary<string, List<string>> IndexModelsFromArchive(IEnumerable<string> entryPaths)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in entryPaths)
+        {
+            if (!path.EndsWith(".scm", StringComparison.OrdinalIgnoreCase)) continue;
+            string key = Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(path)); // Foo_lod0.win.scm -> Foo_lod0
+            if (!result.TryGetValue(key, out var entries)) result[key] = entries = new List<string>();
+            if (!entries.Contains(path, StringComparer.OrdinalIgnoreCase)) entries.Add(path);
+        }
+        return result;
+    }
+
     private static bool IsBrowsableBlueprint(string path)
     {
         string normalized = path.Replace('\\', '/');
