@@ -3719,7 +3719,7 @@ public sealed class SC2ObjectsShell
     private void SelectAllMarkersOfType(string type)
     {
         _selMarkers.Clear();
-        foreach (var other in Data.ObjMarkers.Where(x => string.Equals(x.Type, type, StringComparison.OrdinalIgnoreCase)))
+        foreach (var other in Data.ObjMarkers.Where(x => string.Equals(x.Type, type, StringComparison.OrdinalIgnoreCase) && !_hiddenMarkerIds.Contains(x.Id)))
             _selMarkers.Add(other.Id);
         _lastActionSummary = $"Selected {_selMarkers.Count} marker(s) of type '{type}'.";
         ReportStatus?.Invoke(_lastActionSummary);
@@ -4084,12 +4084,32 @@ public sealed class SC2ObjectsShell
 
         SC2EnvFieldGui.SectionLabel($"Edges ({SC2ObjectGraphRefs.Count(g2)})");
         var edges = SC2ObjectGraphRefs.Enumerate(g2).ToList();
-        for (var i = 0; i < edges.Count; i++)
+        // Same fix as DrawGraphOverlays/CountDanglingEdges — this whole
+        // list redraws every OnGUI repaint while the Paths panel is open;
+        // TryGetMarker's per-endpoint linear scan turned rendering it into
+        // an O(edges * marker count) cost every single frame.
+        var edgeMarkersById = new Dictionary<int, SC2ObjMarker>(Data.ObjMarkers.Count);
+        foreach (var m in Data.ObjMarkers) edgeMarkersById[m.Id] = m;
+        // The real remaining "large graph -> lag" cost once the lookup
+        // above stopped being O(n): this loop rendered one full GUILayout
+        // row (BeginHorizontal/Label/Button/EndHorizontal, each with real
+        // per-control layout/style/GC cost) per edge, EVERY frame, with no
+        // cap at all — a graph with hundreds/thousands of path-node edges
+        // (a "large graph", not necessarily many separate SC2ObjGraph
+        // objects) made this list alone the dominant per-frame cost.
+        // Capped the same way SC2TextureVirtualGrid/MaxViewportDots already
+        // cap other large lists elsewhere in this app. Bulk cleanup beyond
+        // the cap still works via "Disconnect selected" above (select the
+        // markers, not individual edges) — this only limits the one-by-one
+        // per-edge X button list.
+        const int MaxEdgeRows = 200;
+        var rowCount = Mathf.Min(edges.Count, MaxEdgeRows);
+        for (var i = 0; i < rowCount; i++)
         {
             GUILayout.BeginHorizontal();
             var (a, b) = edges[i];
-            var nameA = SC2ObjectGraphRefs.TryGetMarker(Data, a, out var markerA) ? markerA.Name : "?(missing)";
-            var nameB = SC2ObjectGraphRefs.TryGetMarker(Data, b, out var markerB) ? markerB.Name : "?(missing)";
+            var nameA = edgeMarkersById.TryGetValue(a, out var markerA) ? markerA.Name : "?(missing)";
+            var nameB = edgeMarkersById.TryGetValue(b, out var markerB) ? markerB.Name : "?(missing)";
             GUILayout.Label(TruncateForLabel($"{nameA} — {nameB}", w * 0.7f), GUILayout.Width(w * 0.7f));
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
@@ -4101,6 +4121,8 @@ public sealed class SC2ObjectsShell
             }
             GUILayout.EndHorizontal();
         }
+        if (edges.Count > MaxEdgeRows)
+            SC2EnvFieldGui.WrapLabel($"Showing the first {MaxEdgeRows} of {edges.Count} edges — use \"Disconnect selected\" below (select the markers, not individual edges) for bulk cleanup.", w);
 
         var dup = CountDuplicateEdges(g2);
         var dangling = CountDanglingEdges(g2);
@@ -4204,15 +4226,33 @@ public sealed class SC2ObjectsShell
         }
     }
 
+    /// <summary>Only these marker Types (see SC2MarkerTemplates — the exact
+    /// template Names ApplyMarkerTemplate copies into SC2ObjMarker.Type)
+    /// have real pathing meaning; every other marker type (Start Position,
+    /// Mass/Hydro resource, Camera Info, etc.) has none and was previously
+    /// connectable into a Path Graph purely because ConnectSelectedMarkersMesh
+    /// never checked Type at all.</summary>
+    private static readonly HashSet<string> ConnectablePathNodeTypes = new(StringComparer.Ordinal)
+    {
+        "Land Path Node", "Water Path Node", "Air Path Node",
+        "Amphibious Path Node", "Default Path Node", "Auto Path Node",
+    };
+
     /// <summary>Mesh-connects every pair in the current marker selection
     /// (2 selected → 1 edge; N selected → all N*(N-1)/2 pairs), skipping
     /// pairs that already have an edge. This is deliberately the FAF map
     /// editor's model ("select the group you mean to join") rather than a
     /// chain — for 2 nodes the two are identical; for 3+, the user is
-    /// asking for the whole group to be mutually connected.</summary>
+    /// asking for the whole group to be mutually connected. Non-path-node
+    /// markers in the selection (see ConnectablePathNodeTypes) are silently
+    /// excluded rather than erroring — lets the user drag-select a mixed
+    /// area without worrying about exactly what got swept up.</summary>
     private void ConnectSelectedMarkersMesh(SC2ObjGraph g)
     {
-        var ids = _selMarkers.ToList();
+        var ids = _selMarkers
+            .Where(id => Data.ObjMarkers.Any(m => m.Id == id && ConnectablePathNodeTypes.Contains(m.Type)))
+            .ToList();
+        var skipped = _selMarkers.Count - ids.Count;
         var existing = new HashSet<(int, int)>();
         foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(g))
             existing.Add(a < b ? (a, b) : (b, a));
@@ -4221,7 +4261,8 @@ public sealed class SC2ObjectsShell
         for (var i = 0; i < ids.Count; i++)
             for (var j = i + 1; j < ids.Count; j++)
                 added += AddEdgeWithSymmetry(g, ids[i], ids[j], existing);
-        _lastActionSummary = $"Connected {added} new edge(s) among {ids.Count} selected marker(s), including symmetric siblings.";
+        _lastActionSummary = $"Connected {added} new edge(s) among {ids.Count} path-node marker(s), including symmetric siblings."
+            + (skipped > 0 ? $" ({skipped} non-path-node marker(s) in the selection were skipped.)" : "");
         if (added > 0) MarkObjectsDirty();
     }
 
@@ -4344,11 +4385,16 @@ public sealed class SC2ObjectsShell
 
     private int CountDanglingEdges(SC2ObjGraph g)
     {
+        // Same fix as DrawGraphOverlays — TryGetMarker's linear scan per
+        // endpoint, called every OnGUI repaint while the Paths panel is
+        // open, turned "how many edges does this graph have" into an
+        // O(edges * marker count) cost every single frame.
+        var ids = new HashSet<int>(Data.ObjMarkers.Count);
+        foreach (var m in Data.ObjMarkers) ids.Add(m.Id);
+
         var dangling = 0;
         foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(g))
-        {
-            if (!SC2ObjectGraphRefs.TryGetMarker(Data, a, out _) || !SC2ObjectGraphRefs.TryGetMarker(Data, b, out _)) dangling++;
-        }
+            if (!ids.Contains(a) || !ids.Contains(b)) dangling++;
         return dangling;
     }
 
@@ -6012,7 +6058,7 @@ public sealed class SC2ObjectsShell
                 foreach (var id in found) _selUnits.Add(id);
                 break;
             case ViewportObjectKind.Marker:
-                foreach (var marker in Data.ObjMarkers)
+                foreach (var marker in Data.ObjMarkers.Where(m => !_hiddenMarkerIds.Contains(m.Id)))
                     if (TryWorldToGui(camera, viewportRect, marker.Position, out var g) && rect.Contains(g)) found.Add(marker.Id);
                 if (!additive) _selMarkers.Clear();
                 foreach (var id in found) _selMarkers.Add(id);
@@ -6468,6 +6514,33 @@ public sealed class SC2ObjectsShell
     /// GraphKind decides which of these 4 flags gates it.</summary>
     private void DrawGraphOverlays(Camera camera, Rect viewportRect, bool showLand, bool showAir, bool showNaval, bool showAmphibious)
     {
+        // The actual dominant cost for a graph with many edges: this method
+        // is invoked from HandleObjectsGameViewInput, which itself runs on
+        // EVERY OnGUI event (Layout/MouseMove/MouseDown/KeyDown/Repaint —
+        // see that method's own comment), not just once per rendered frame.
+        // Without this guard, every mouse move over the viewport re-ran the
+        // full per-edge marker-dictionary build AND every GUI.DrawTexture +
+        // GUI.matrix rotate call below, multiplying the true per-edge draw
+        // cost by however many non-Repaint events fired that frame. Every
+        // other pure-drawing primitive in this codebase already guards this
+        // way (e.g. SC2TerrainShell.DrawGameViewBrush) — this one just
+        // never had the check, even though DrawChainOverlays' own comment
+        // right below already (incorrectly) assumed it only ran on Repaint.
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
+        // SC2ObjectGraphRefs.TryGetMarker does a linear FirstOrDefault scan
+        // over the WHOLE marker list — fine for the rare, user-triggered
+        // callers it's otherwise used from, but this method runs every
+        // single viewport repaint and previously called it twice per edge
+        // per graph, so total cost was O(visible graphs * edges * marker
+        // count) EVERY FRAME. With many graphs (each contributing more
+        // edges), that's exactly the "large number of graphs -> lag" report
+        // this fixes. One O(1) dictionary lookup per endpoint instead,
+        // built once here — same pattern DrawChainOverlays right below
+        // already uses for its own per-frame marker lookups.
+        var markersById = new Dictionary<int, SC2ObjMarker>(Data.ObjMarkers.Count);
+        foreach (var m in Data.ObjMarkers) markersById[m.Id] = m;
+
         foreach (var graph in Data.ObjGraphs)
         {
             var visible = graph.GraphKind switch
@@ -6486,13 +6559,17 @@ public sealed class SC2ObjectsShell
                 _ => new Color(.5f, .95f, .25f, .8f)
             };
             foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(graph))
-                if (SC2ObjectGraphRefs.TryGetMarker(Data, a, out var ma) && SC2ObjectGraphRefs.TryGetMarker(Data, b, out var mb))
+                if (markersById.TryGetValue(a, out var ma) && markersById.TryGetValue(b, out var mb))
                     DrawOverlayLine(camera, viewportRect, ma.Position, mb.Position, color, 2f);
         }
     }
 
     private void DrawChainOverlays(Camera camera, Rect viewportRect)
     {
+        // Same fix as DrawGraphOverlays right above — this method is called
+        // from the same per-OnGUI-event dispatch, not just on Repaint.
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
         // Built via an indexer loop (last-name-wins), not .ToDictionary —
         // this runs every viewport repaint, so a duplicate SC2ObjMarker.Name
         // (MakeUniqueMarkerName prevents new ones, but old save data or an
@@ -6672,6 +6749,13 @@ public sealed class SC2ObjectsShell
     /// drawn.</summary>
     private static void DrawOverlayLine(Camera camera, Rect viewportRect, Vector3 from, Vector3 to, Color color, float width)
     {
+        // Defense in depth alongside the DrawGraphOverlays/DrawChainOverlays
+        // guards above: DrawZoneOverlays interleaves this with per-zone hit
+        // testing it still needs to run on every event, so it can't skip
+        // wholesale on non-Repaint — but the actual GUI.DrawTexture call
+        // below still should, same as every other draw primitive here.
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
         var camPos = camera.transform.position;
         var camFwd = camera.transform.forward;
         const float nearEps = 0.05f;
