@@ -125,9 +125,18 @@ public class SC2CostsBlockData
         if(RnmMaskBytes.Length==MaskWidth*MaskHeight*4) RnmMaskTexture.LoadRawTextureData(RnmMaskBytes);
         else
         {
+            // Was building this neutral fill purely as a local array for
+            // the texture, never storing it back into RnmMaskBytes itself
+            // — a fresh pair's RnmMaskBytes therefore stayed permanently
+            // Array.Empty<byte>() even after this "ensure" ran, silently
+            // breaking any CPU-side painter (SC2BackgroundEditMode.
+            // ApplyPaintBlend) that checks RnmMaskBytes.Length ==
+            // MaskWidth*MaskHeight*4 before writing to it — every paint
+            // attempt on a never-baked pair bailed out immediately.
             var raw=new byte[MaskWidth*MaskHeight*4];
             for(var i=0;i<raw.Length;i+=4){raw[i]=128;raw[i+1]=128;raw[i+2]=128;raw[i+3]=0;}
             RnmMaskTexture.LoadRawTextureData(raw);
+            RnmMaskBytes=raw;
         }
         RnmMaskTexture.Apply(false);
     }

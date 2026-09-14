@@ -14,10 +14,44 @@ public struct SC2GeometryToolState
     public bool StrengthScalesWithRadius;
 }
 
+/// <summary>
+/// Sculpting tool — shared, unmodified, between the core and the
+/// background terrain. Per explicit user request, tool/radius/strength/
+/// hardness/etc. are ONE selection regardless of which surface the brush
+/// is currently pointing at, not two independent copies — so this class
+/// reads/writes whichever surface SC2TerrainShell.ActiveRuntime/
+/// ActiveTerrainData currently resolves to (decided by
+/// SC2TerrainShell.DetermineActiveBrushTarget from where the cursor
+/// actually is), instead of a fixed Data/Runtime pair. ActiveWorldOffset is
+/// zero for the core (which always sits at world origin) and the
+/// background's own real offset otherwise, added/subtracted uniformly so
+/// every call site below works unchanged for either surface.
+///
+/// Two things deliberately still always read the CORE's own data
+/// regardless of which surface is active:
+///  - Symmetry (Data.Symmetry/SymmetryCenter/GetSymmetricPositions) — there
+///    is only one symmetry setting for the whole map, authored on the
+///    Terrain tab's own Symmetry buttons.
+///  - The brush's own SHAPE settings (UseCustomGeometryBrush/
+///    CustomGeometryBrushTexturePath/RandomizeGeometryBrushRotation*) — like
+///    Tool/Radius/etc. above, these are meant to be ONE shared brush
+///    preference, but they're persisted as fields ON SC2TerrainData rather
+///    than on this class, so they explicitly read/write the core's own
+///    _win.Data instead of the dynamic Data property to avoid silently
+///    forking into two independent copies (core's own vs background's own
+///    nested SC2TerrainData instance) the moment the active surface changes.
+/// </summary>
 public class SC2GeometryMode
 {
-    public SC2TerrainData Data;
+    // Which core map this instance was built for — used only by
+    // SC2TerrainShell.EnsureSubEditors to detect a map switch and rebuild
+    // this instance. NOT what sculpt operations act on; see Data below.
+    public SC2TerrainData OwnerData { get; }
     private SC2TerrainShell _win;
+
+    /// <summary>The surface actually being read/written right now — see
+    /// this class' own header comment.</summary>
+    public SC2TerrainData Data => _win.ActiveTerrainData;
 
     // Mode 5 = SetHeight (draws exact height), rest match SculptBrush modes
     private enum Tool { Raise=0, Lower=1, Smooth=2, Flatten=3, Noise=4, SetHeight=5 }
@@ -76,7 +110,7 @@ public class SC2GeometryMode
     private float _heightRaiseOffset;
 
     public SC2GeometryMode(SC2TerrainShell win, SC2TerrainData data)
-    { _win = win; Data = data; }
+    { _win = win; OwnerData = data; }
 
     /// <summary>See SC2GeometryToolState's own doc comment.</summary>
     public SC2GeometryToolState CaptureState() => new SC2GeometryToolState
@@ -112,56 +146,68 @@ public class SC2GeometryMode
         var newTool = toolValues[selected];
         if (newTool != _tool)
         {
-            _win.RecordUndoCheckpoint("Change Brush Tool");
+            // RecordUndoCheckpointFor, not the bare core-only overload —
+            // this is a pure tool-CONFIG change (part of the shared Extra
+            // channel both stacks capture), not a terrain-data edit, but it
+            // still needs to land on whichever stack (core or background)
+            // Ctrl+Z will actually pop next, which SC2TerrainShell decides
+            // from whatever was most recently edited — see
+            // SC2TerrainShell._lastEditedTargetIsBackground's own doc
+            // comment. The bare overload would always record onto the
+            // core's stack regardless, silently losing this checkpoint from
+            // Undo history whenever the background was the more recent edit.
+            _win.RecordUndoCheckpointFor(Data, "Change Brush Tool");
             _tool = newTool;
         }
 
         EditorGUILayout.Space(4);
         _radius   = SC2TerrainShell.DrawCompactSlider("Radius",   _radius,   1f, 1000f,
-            onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Brush Radius"));
+            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Radius"));
         _strength = SC2TerrainShell.DrawCompactSlider("Strength", _strength, 0.01f, 1f,
-            onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Brush Strength"));
+            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Strength"));
         var newScalesWithRadius = EditorGUILayout.ToggleLeft(" Scale strength with radius (Raise/Lower/Smooth)", _strengthScalesWithRadius);
         if (newScalesWithRadius != _strengthScalesWithRadius)
         {
-            _win.RecordUndoCheckpoint("Toggle Strength Scales With Radius");
+            _win.RecordUndoCheckpointFor(Data, "Toggle Strength Scales With Radius");
             _strengthScalesWithRadius = newScalesWithRadius;
         }
         _hardness = SC2TerrainShell.DrawCompactSlider("Hardness", _hardness, 0f, 1f,
-            onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Brush Hardness"));
+            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Hardness"));
 
         // Irregular stamp brushes (World
         // Machine/Gaea-style grayscale masks) for sculpting, mirroring
         // Paint's existing Blend-brush stamp feature (SC2PaintMode.DrawRnm/
         // DrawCustomBrushPicker) — see SC2TerrainRuntime.SculptBrush/
         // SculptSetHeight's brushMask params for where this actually applies.
+        // Always the CORE's own _win.Data (not the dynamic Data property) —
+        // see this class' own header comment for why.
         EditorGUILayout.Space(4);
         var brushShapeLabels = new[] { "Round", "Custom" };
-        var nextCustomBrush = SC2TerrainShell.DrawUnifiedSegmentGrid(Data.UseCustomGeometryBrush ? 1 : 0, brushShapeLabels, 2) == 1;
-        if (nextCustomBrush != Data.UseCustomGeometryBrush)
+        var nextCustomBrush = SC2TerrainShell.DrawUnifiedSegmentGrid(_win.Data.UseCustomGeometryBrush ? 1 : 0, brushShapeLabels, 2) == 1;
+        if (nextCustomBrush != _win.Data.UseCustomGeometryBrush)
         {
             _win.RecordUndoCheckpoint("Change Geometry Brush Shape");
-            Data.UseCustomGeometryBrush = nextCustomBrush;
-            EditorUtility.SetDirty(Data);
+            _win.Data.UseCustomGeometryBrush = nextCustomBrush;
+            EditorUtility.SetDirty(_win.Data);
         }
-        if (Data.UseCustomGeometryBrush)
+        if (_win.Data.UseCustomGeometryBrush)
         {
             DrawCustomGeometryBrushPicker();
-            var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", Data.RandomizeGeometryBrushRotation);
-            if (nextRandomize != Data.RandomizeGeometryBrushRotation)
+            var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", _win.Data.RandomizeGeometryBrushRotation);
+            if (nextRandomize != _win.Data.RandomizeGeometryBrushRotation)
             {
                 _win.RecordUndoCheckpoint("Change Geometry Brush Randomize Rotation");
-                Data.RandomizeGeometryBrushRotation = nextRandomize;
-                EditorUtility.SetDirty(Data);
+                _win.Data.RandomizeGeometryBrushRotation = nextRandomize;
+                EditorUtility.SetDirty(_win.Data);
             }
-            if (Data.RandomizeGeometryBrushRotation)
+            if (_win.Data.RandomizeGeometryBrushRotation)
             {
-                var nextContinuous = EditorGUILayout.Toggle("Randomize While Dragging", Data.RandomizeGeometryBrushRotationContinuous);
-                if (nextContinuous != Data.RandomizeGeometryBrushRotationContinuous)
+                var nextContinuous = EditorGUILayout.Toggle("Randomize While Dragging", _win.Data.RandomizeGeometryBrushRotationContinuous);
+                if (nextContinuous != _win.Data.RandomizeGeometryBrushRotationContinuous)
                 {
                     _win.RecordUndoCheckpoint("Change Geometry Brush Randomize Continuous");
-                    Data.RandomizeGeometryBrushRotationContinuous = nextContinuous;
-                    EditorUtility.SetDirty(Data);
+                    _win.Data.RandomizeGeometryBrushRotationContinuous = nextContinuous;
+                    EditorUtility.SetDirty(_win.Data);
                 }
             }
         }
@@ -171,15 +217,15 @@ public class SC2GeometryMode
             var label = _tool == Tool.SetHeight ? "Height" : "Flatten H";
             if (_tool == Tool.SetHeight)
                 _setHeight = SC2TerrainShell.DrawCompactSlider(label, _setHeight, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight,
-                    onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Set Height"));
+                    onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Set Height"));
             else
                 _flattenH = SC2TerrainShell.DrawCompactSlider(label, _flattenH, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight,
-                    onValueChangeStart: () => _win.RecordUndoCheckpoint("Change Flatten Height"));
+                    onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Flatten Height"));
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Pick", GUILayout.Width(SC2UiScale.Pxf(40f))))
             {
-                _win.RecordUndoCheckpoint("Pick Height");
+                _win.RecordUndoCheckpointFor(Data, "Pick Height");
                 if (_tool == Tool.SetHeight) _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
                 else _flattenH = SC2TerrainData.ClampHeight(_brushPos.y);
             }
@@ -194,16 +240,17 @@ public class SC2GeometryMode
         // vertex in Data.Heights in one shot via SC2TerrainRuntime.
         // UploadHeightsCPU (the same bulk-write primitive ImportHeightmap
         // already uses), then syncs Data.Heights back from the runtime the
-        // same way every other mutation here does.
+        // same way every other mutation here does. Applies to whichever
+        // surface is currently active, same as the brush tools above.
         _heightScaleFactor = SC2TerrainShell.DrawCompactSlider("Scale Factor", _heightScaleFactor, 0.1f, 5f);
-        EditorGUI.BeginDisabledGroup(_win.Runtime == null);
+        EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
         if (GUILayout.Button("Apply Height Scale"))
             ApplyHeightTransform(h => h * _heightScaleFactor, "Scale Terrain Height");
         EditorGUI.EndDisabledGroup();
 
         EditorGUILayout.Space(2);
         _heightRaiseOffset = SC2TerrainShell.DrawCompactSlider("Raise/Lower Amount", _heightRaiseOffset, -SC2TerrainData.MaxHeight, SC2TerrainData.MaxHeight);
-        EditorGUI.BeginDisabledGroup(_win.Runtime == null);
+        EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
         if (GUILayout.Button("Apply Raise/Lower"))
             ApplyHeightTransform(h => h + _heightRaiseOffset, "Raise/Lower Terrain");
         EditorGUI.EndDisabledGroup();
@@ -226,7 +273,7 @@ public class SC2GeometryMode
         // and never touches Unity's Texture2D/AssetDatabase import pipeline
         // at all — the thing that was silently downgrading precision when
         // this used to go through a real Texture2D asset.
-        EditorGUI.BeginDisabledGroup(_win.Runtime == null);
+        EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
         if (GUILayout.Button("Import Heightmap from file..."))
             ImportHeightmapFromFile();
         EditorGUI.EndDisabledGroup();
@@ -243,8 +290,11 @@ public class SC2GeometryMode
         // Build & Run player (plain File.WriteAllBytes, only the save-
         // location picker differs) so this is one shared button — free
         // choice of destination folder, same as Import's free choice of
-        // source file.
-        EditorGUI.BeginDisabledGroup(Data == null || !Data.IsInitialized);
+        // source file. Always the CORE's own map — there is no equivalent
+        // "canonical costs-grid heightmap" for the background (see
+        // ExportHeightmap's own use of TryGetLiveHeightGridSnapshot, which
+        // is core-only), unlike every other control on this panel.
+        EditorGUI.BeginDisabledGroup(_win.Data == null || !_win.Data.IsInitialized);
         if (GUILayout.Button("Export Heightmap..."))
             ExportHeightmap();
         EditorGUI.EndDisabledGroup();
@@ -265,7 +315,8 @@ public class SC2GeometryMode
         // already use. Sourcing from SC2LiveHeightGrid's projection instead
         // of Data.Heights directly also correctly includes any merged
         // imported terrain.bdf geometry, which Data.Heights alone never
-        // captured at all.
+        // captured at all. Core-only — see DrawPanel's own comment on this
+        // button.
         if (!_win.TryGetLiveHeightGridSnapshot(out var heightmap128, out var mapX, out var mapY))
         {
             _lastExportError = "Export failed: no terrain height data available.";
@@ -327,9 +378,9 @@ public class SC2GeometryMode
             return;
         }
 
-        _win.RecordUndoCheckpoint("Import Heightmap");
-        _win.Runtime.UploadHeightsCPU(newHeights);
-        Data.Heights = _win.Runtime.GetHeightsCopy();
+        _win.RecordUndoCheckpointFor(Data, "Import Heightmap");
+        _win.ActiveRuntime.UploadHeightsCPU(newHeights);
+        Data.Heights = _win.ActiveRuntime.GetHeightsCopy();
         EditorUtility.SetDirty(Data);
         SC2TerrainShell.BumpTerrainGeometryVersion();
         _win.InvalidateLiveHeightGrid();
@@ -344,12 +395,15 @@ public class SC2GeometryMode
     /// so every anchored Prop/Marker/Unit/AlignToSurface decal needs
     /// reprojecting, not just a local circle. Reuses the same (center,
     /// radius) event shape with a radius spanning the map's whole diagonal
-    /// rather than adding a second event type.</summary>
+    /// rather than adding a second event type. World-space center — adds
+    /// ActiveWorldOffset when the active surface is the background, same as
+    /// every brush-stamp notification below.</summary>
     private void NotifyWholeMapHeightChanged()
     {
         var worldWidth = Data.GridWidth * Data.CellSize;
         var worldHeight = Data.GridHeight * Data.CellSize;
-        var center = new Vector3(worldWidth * 0.5f, 0f, worldHeight * 0.5f);
+        var offset = _win.ActiveWorldOffset;
+        var center = offset + new Vector3(worldWidth * 0.5f, 0f, worldHeight * 0.5f);
         var radius = 0.5f * Mathf.Sqrt(worldWidth * worldWidth + worldHeight * worldHeight) + 1f;
         _win.HeightBrushApplied?.Invoke(center, radius);
     }
@@ -360,14 +414,14 @@ public class SC2GeometryMode
     /// "Apply Raise/Lower". One undo checkpoint per click, not per-vertex.</summary>
     private void ApplyHeightTransform(System.Func<float, float> transform, string undoLabel)
     {
-        if (_win.Runtime == null) return;
-        _win.RecordUndoCheckpoint(undoLabel);
+        if (_win.ActiveRuntime == null) return;
+        _win.RecordUndoCheckpointFor(Data, undoLabel);
         var heights = Data.Heights;
         var newHeights = new float[heights.Length];
         for (var i = 0; i < heights.Length; i++)
             newHeights[i] = SC2TerrainData.ClampHeight(transform(heights[i]));
-        _win.Runtime.UploadHeightsCPU(newHeights);
-        Data.Heights = _win.Runtime.GetHeightsCopy();
+        _win.ActiveRuntime.UploadHeightsCPU(newHeights);
+        Data.Heights = _win.ActiveRuntime.GetHeightsCopy();
         EditorUtility.SetDirty(Data);
         SC2TerrainShell.BumpTerrainGeometryVersion();
         _win.InvalidateLiveHeightGrid();
@@ -402,11 +456,21 @@ public class SC2GeometryMode
         // responding to mouse movement/Escape/click-to-confirm instead of
         // this tool's own brush cursor/sculpt input firing underneath it.
         if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 1f, 1000f,
-            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z)))
+            sampleHeight: SampleActiveHeight))
             return;
         DrawGameViewGizmo(camera, viewportRect);
         HandleInput(e);
     }
+
+    /// <summary>Live height at a WORLD (x,z), whichever surface is currently
+    /// active — core via SC2ObjectsExport.SampleTerrainHeight(_win.Data,...)
+    /// (unchanged), background via SC2TerrainShell.SampleLiveBackgroundHeight
+    /// (already offset-aware). Used everywhere this class used to hardcode
+    /// the core-only sampler.</summary>
+    private float SampleActiveHeight(float x, float z) =>
+        _win.ActiveTerrainData == _win.Data
+            ? SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z)
+            : _win.SampleLiveBackgroundHeight(x, z);
 
     void HandleScroll(Event e)
     {
@@ -430,9 +494,11 @@ public class SC2GeometryMode
     {
         _brushVis = false;
         var ray = HandleUtility.GUIPointToWorldRay(Event.current.mousePosition);
-        if (SC2TerrainShell.RaycastTerrainHeight(_win.Runtime, ray, out var hit))
+        var offset = _win.ActiveWorldOffset;
+        var localRay = new Ray(ray.origin - offset, ray.direction);
+        if (SC2TerrainShell.RaycastTerrainHeight(_win.ActiveRuntime, localRay, out var hit))
         {
-            _brushPos = hit;
+            _brushPos = hit + offset;
             _brushVis = true;
             return;
         }
@@ -447,9 +513,16 @@ public class SC2GeometryMode
     {
         _brushVis = false;
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, guiMousePosition);
-        if (SC2TerrainShell.RaycastTerrainHeight(_win.Runtime, ray, out var hit))
+        // RaycastTerrainHeight works in ActiveRuntime's own LOCAL grid space
+        // (starts at (0,0)) — ActiveWorldOffset is zero for the core (a
+        // no-op here) and the background's own real world offset otherwise,
+        // so this same translate/untranslate works for both surfaces
+        // unconditionally.
+        var offset = _win.ActiveWorldOffset;
+        var localRay = new Ray(ray.origin - offset, ray.direction);
+        if (SC2TerrainShell.RaycastTerrainHeight(_win.ActiveRuntime, localRay, out var hit))
         {
-            _brushPos = hit;
+            _brushPos = hit + offset;
             _brushVis = true;
             return;
         }
@@ -495,10 +568,12 @@ public class SC2GeometryMode
                                  Vector3.up, _radius * 1.05f);
         }
 
-        if (Data.Symmetry != SymmetryMode.None)
+        // Symmetry always follows the CORE's own setting (_win.Data), not
+        // the dynamic Data — see this class' own header comment.
+        if (_win.Data.Symmetry != SymmetryMode.None)
         {
             Handles.color = new Color(.3f, .8f, 1f, .6f);
-            foreach (var s in Data.GetSymmetricPositions(_brushPos))
+            foreach (var s in _win.Data.GetSymmetricPositions(_brushPos))
                 if (s != _brushPos) Handles.DrawWireDisc(s, Vector3.up, _radius);
         }
     }
@@ -515,7 +590,7 @@ public class SC2GeometryMode
             new Color(1f, 1f, 0.1f, 0.95f),
             new Color(1f, 0.65f, 0f, 0.75f),
             _radius * _hardness,
-            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
+            sampleHeight: SampleActiveHeight);
 
         if (_tool == Tool.SetHeight)
         {
@@ -528,20 +603,23 @@ public class SC2GeometryMode
                 Color.clear);
         }
 
-        if (Data.Symmetry != SymmetryMode.None)
-            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, Data.GetSymmetricPositions(_brushPos),
+        // Symmetry always follows the CORE's own setting (_win.Data), not
+        // the dynamic Data — see this class' own header comment.
+        if (_win.Data.Symmetry != SymmetryMode.None)
+            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, _win.Data.GetSymmetricPositions(_brushPos),
                 new Color(0.3f, 0.8f, 1f, 0.9f),
-                sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
+                sampleHeight: SampleActiveHeight);
     }
 
     /// <summary>Editable path + thumbnail for Data.CustomGeometryBrushTexturePath
     /// — straight copy of SC2PaintMode.DrawCustomBrushPicker's pattern (same
     /// shared widget, same resolve-cache shape), just targeting the
     /// Geometry-specific field. The stamp's own alpha channel is what
-    /// SC2TerrainRuntime.SampleBrushMask actually reads.</summary>
+    /// SC2TerrainRuntime.SampleBrushMask actually reads. Always the CORE's
+    /// own _win.Data — see this class' own header comment.</summary>
     private void DrawCustomGeometryBrushPicker()
     {
-        var currentPath = Data.CustomGeometryBrushTexturePath ?? "";
+        var currentPath = _win.Data.CustomGeometryBrushTexturePath ?? "";
         if (currentPath != _customGeoBrushCachedPath)
         {
             _customGeoBrushCache = SC2TerrainMaterialFactory.LoadTexturePublicAny(currentPath);
@@ -555,12 +633,12 @@ public class SC2GeometryMode
             if (pickedViaBrowser)
                 pathDraft = picked != null ? (SC2TerrainMaterialFactory.TryGetResourcePath(picked) ?? "") : "";
         }
-        if (pathDraft != (Data.CustomGeometryBrushTexturePath ?? ""))
+        if (pathDraft != (_win.Data.CustomGeometryBrushTexturePath ?? ""))
         {
             _win.RecordUndoCheckpoint("Change Geometry Brush Texture");
-            Data.CustomGeometryBrushTexturePath = pathDraft;
+            _win.Data.CustomGeometryBrushTexturePath = pathDraft;
             _customGeoBrushCachedPath = pathDraft;
-            EditorUtility.SetDirty(Data);
+            EditorUtility.SetDirty(_win.Data);
         }
     }
 
@@ -569,10 +647,12 @@ public class SC2GeometryMode
     /// changed since the last stroke — SculptBrush/SculptSetHeight's
     /// per-vertex CPU sampling (SC2TerrainRuntime.SampleBrushMask) needs
     /// real pixel data, not just a GPU texture reference, and GetPixels32()
-    /// is too expensive to call every frame of a drag.</summary>
+    /// is too expensive to call every frame of a drag. Reads the CORE's own
+    /// _win.Data (brush shape is a shared setting) — see this class' own
+    /// header comment.</summary>
     private void EnsureGeoBrushPixelCache()
     {
-        if (!Data.UseCustomGeometryBrush || _customGeoBrushCache is not Texture2D tex2d)
+        if (!_win.Data.UseCustomGeometryBrush || _customGeoBrushCache is not Texture2D tex2d)
         {
             _geoBrushPixels = null;
             _geoBrushPixelsSourceTex = null;
@@ -602,7 +682,7 @@ public class SC2GeometryMode
 
     void HandleInput(Event e)
     {
-        if (!_brushVis || _win.Runtime == null) return;
+        if (!_brushVis || _win.ActiveRuntime == null) return;
 
         // Alt+left-click over the terrain
         // samples the height under the cursor into whichever target-height
@@ -625,7 +705,7 @@ public class SC2GeometryMode
         // double as a paint stroke either.
         if (e.type == EventType.MouseDown && e.button == 0 && e.alt && (_tool == Tool.Flatten || _tool == Tool.SetHeight))
         {
-            _win.RecordUndoCheckpoint("Pick Height");
+            _win.RecordUndoCheckpointFor(Data, "Pick Height");
             if (_tool == Tool.SetHeight) _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
             else _flattenH = SC2TerrainData.ClampHeight(_brushPos.y);
             e.Use();
@@ -662,9 +742,14 @@ public class SC2GeometryMode
                 _win.InvalidateLiveHeightGrid();
             }
             _isPainting = false;
-            Data.Heights = _win.Runtime.GetHeightsCopy();
+            Data.Heights = _win.ActiveRuntime.GetHeightsCopy();
             EditorUtility.SetDirty(Data);
             SC2TerrainShell.BumpTerrainGeometryVersion();
+            // Keeps the background's own seam skirt glued to a completed
+            // background stroke — a no-op when the active surface is the
+            // core (RefreshBackgroundRuntime itself checks whether the
+            // background even exists/needs rebuilding).
+            if (Data != _win.Data) _win.RefreshBackgroundRuntime();
             return;
         }
         if (down)
@@ -674,13 +759,13 @@ public class SC2GeometryMode
             // and (re)build the readable-pixel cache the mask sampler needs
             // — see _geoBrushRotationRad/EnsureGeoBrushPixelCache's own doc
             // comments.
-            _geoBrushRotationRad = (Data.UseCustomGeometryBrush && Data.RandomizeGeometryBrushRotation)
+            _geoBrushRotationRad = (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation)
                 ? Random.Range(0f, Mathf.PI * 2f) : 0f;
             EnsureGeoBrushPixelCache();
             // Heights[] is only re-synced from the runtime on MouseUp (see below),
             // so it already reflects the state before this stroke — one undo
             // checkpoint per stroke, not per drag frame.
-            _win.RecordUndoCheckpoint("Sculpt");
+            _win.RecordUndoCheckpointFor(Data, "Sculpt");
         }
         if (!_isPainting || (!down && !drag)) return;
         var now = EditorApplication.timeSinceStartup;
@@ -691,7 +776,7 @@ public class SC2GeometryMode
         // still rolls once per stroke (mouse-down) and holds it fixed for
         // the drag; this one re-rolls on every single application (down AND
         // every drag frame that passes the throttle above).
-        if (Data.UseCustomGeometryBrush && Data.RandomizeGeometryBrushRotation && Data.RandomizeGeometryBrushRotationContinuous)
+        if (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation && _win.Data.RandomizeGeometryBrushRotationContinuous)
             _geoBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
 
         // A little wider than the nominal brush radius when notifying
@@ -701,15 +786,20 @@ public class SC2GeometryMode
         // harmless extra objects at the edge than to miss one that's now
         // sitting at a stale height.
         var notifyRadius = _radius + Mathf.Max(2f, Data.CellSize * 2f);
+        var offset = _win.ActiveWorldOffset;
 
-        var brushMask = Data.UseCustomGeometryBrush ? _geoBrushPixels : null;
+        var brushMask = _win.Data.UseCustomGeometryBrush ? _geoBrushPixels : null;
         if (_tool == Tool.SetHeight)
         {
             // SetHeight: directly set vertices within radius to _setHeight,
-            // with hardness-controlled falloff
-            foreach (var pos in Data.GetSymmetricPositions(_brushPos))
+            // with hardness-controlled falloff. Symmetry always follows the
+            // CORE's own setting (_win.Data) — see this class' own header
+            // comment — and ActiveRuntime works in LOCAL space, so each
+            // world-space symmetric position is translated by
+            // ActiveWorldOffset before applying and back before notifying.
+            foreach (var pos in _win.Data.GetSymmetricPositions(_brushPos))
             {
-                _win.Runtime.SculptSetHeight(pos, _radius, _strength, _hardness, _setHeight,
+                _win.ActiveRuntime.SculptSetHeight(pos - offset, _radius, _strength, _hardness, _setHeight,
                     brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
@@ -723,9 +813,9 @@ public class SC2GeometryMode
             var effectiveStrength = appliesRadiusCompensation
                 ? _strength * (_radius / StrengthRadiusReference)
                 : _strength;
-            foreach (var pos in Data.GetSymmetricPositions(_brushPos))
+            foreach (var pos in _win.Data.GetSymmetricPositions(_brushPos))
             {
-                _win.Runtime.SculptBrush(pos, _radius, effectiveStrength, _hardness, mode, target,
+                _win.ActiveRuntime.SculptBrush(pos - offset, _radius, effectiveStrength, _hardness, mode, target,
                     brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }

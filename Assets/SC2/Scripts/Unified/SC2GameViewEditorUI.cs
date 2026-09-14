@@ -4973,9 +4973,31 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 _terrainShell.MarkDirtyAndRepaint();
             }
             if (entry.IsBackgroundTerrain)
-                SC2TerrainShell.DrawUnifiedNote("Stands in for the procedural background terrain — the generator is skipped and this object's own geometry is used instead. Its own real footprint isn't checked against the core's boundary; keep it well clear of the playable area yourself.");
+            {
+                SC2TerrainShell.DrawUnifiedNote("Stands in for the procedural background terrain — the generator is skipped and this object's own geometry is used instead. Keep it well clear of the playable area.");
+                DrawBackgroundSubstituteBoundaryWarning(entry);
+            }
         }
         EditorGUILayout.Space(4);
+
+        // Non-blocking only — same convention as every other informational
+        // note in this codebase (e.g. Path Graph's own edge-count warning):
+        // flags a real risk without preventing the user from doing it
+        // anyway, since a deliberately unusual placement is still a valid
+        // choice they might actually want.
+        void DrawBackgroundSubstituteBoundaryWarning(SC2ImportedTerrainEntry e)
+        {
+            var coreData = _terrainShell.Data;
+            if (coreData == null || !coreData.IsInitialized || e.Root == null) return;
+            var renderer = e.Root.GetComponentInChildren<Renderer>();
+            if (renderer == null) return;
+            var b = renderer.bounds;
+            var coreMaxX = coreData.GridWidth * coreData.CellSize;
+            var coreMaxZ = coreData.GridHeight * coreData.CellSize;
+            var overlaps = b.min.x < coreMaxX && b.max.x > 0f && b.min.z < coreMaxZ && b.max.z > 0f;
+            if (overlaps)
+                SC2TerrainShell.DrawUnifiedNote($"WARNING: this object's own world-space footprint (X {b.min.x:F0}..{b.max.x:F0}, Z {b.min.z:F0}..{b.max.z:F0}) overlaps the core map's own boundary (X 0..{coreMaxX:F0}, Z 0..{coreMaxZ:F0}) — it needs to clear the playable area entirely, or it will visibly intersect the real terrain in-game.");
+        }
 
         EditorGUILayout.LabelField("Transform", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
         var t = entry.Root.transform;
@@ -5635,15 +5657,17 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// <summary>See HandleViewportClick's own comment — excludes imported
     /// terrain.bdf AND decals.bdf roots from generic viewport
     /// object-selection (both would otherwise hijack GetViewPivot() via
-    /// Selection.activeTransform and break orbit/pan). Same reasoning
-    /// covers the background-terrain preview's own MeshCollider — its
-    /// collider exists purely for SC2BackgroundEditMode's CPU brush
-    /// raycast, never for generic selection.</summary>
+    /// Selection.activeTransform and break orbit/pan). The background
+    /// terrain's own chunk GameObjects (SC2TerrainRuntime, same as the
+    /// core's) and its seam skirt have no MeshCollider at all — same as the
+    /// core's own chunks — so they're never a physics-raycast hit in the
+    /// first place and need no exclusion entry here (unlike the old
+    /// SC2BackgroundTerrainPreview, which used a real MeshCollider purely
+    /// for SC2BackgroundEditMode's CPU brush raycast).</summary>
     private bool IsGenericSelectionExcluded(GameObject go)
     {
         if (go != null && go.GetComponentInParent<SC2DecalAuthoredPreviewMarker>() != null) return true;
         if (_importedDecalsRoots.Contains(go)) return true;
-        if (SC2BackgroundTerrainPreview.IsPreviewObject(go)) return true;
         foreach (var entry in _importedTerrains)
             if (entry?.Root == go) return true;
         return false;

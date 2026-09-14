@@ -722,9 +722,9 @@ public static class SC2TerrainExporter
                     mat.TexturePaths[3] = RegTex(m2?.Normal, m2?.NormalOverridePath);
                     mat.TexturePaths[6] = RegTex(m1?.Mask, m1?.MaskOverridePath) ?? "/textures/Engine/black_d.dds";
                     mat.TexturePaths[7] = RegTex(m2?.Mask, m2?.MaskOverridePath) ?? "/textures/Engine/black_d.dds";
-                    // Real Paint-Blend mask (SC2BackgroundEditMode's own
-                    // "Paint Blend" tool paints pair.RnmMaskBytes directly) —
-                    // reuses ExportRnmMaskByName exactly like the core's own
+                    // Real Paint-Blend mask (SC2PaintMode's own "Paint Blend"
+                    // tool paints pair.RnmMaskBytes directly) — reuses
+                    // ExportRnmMaskByName exactly like the core's own
                     // per-pair loop does, just against bg instead of data
                     // (the function is generic over WHICH SC2TerrainData's
                     // Pairs list it searches).

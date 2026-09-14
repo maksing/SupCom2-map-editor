@@ -176,7 +176,15 @@ public class SC2MaterialsMode
         // path for display (never written into overridePath unless the user
         // actually edits it).
         var fallbackPath = texture != null ? SC2TerrainMaterialFactory.TryGetResourcePath(texture) : null;
-        var next = SC2TerrainShell.DrawTexturePickerWithPath(label, texture, "Material" + materialIndex + ":" + label, ref pathDraft, out var pickedViaBrowser, fallbackPath, siblingHint) as Texture2D;
+        // Data.GetInstanceID() in the key: this picker's key also
+        // identifies it to SC2TextureBrowser.Open/Consume (only one browser
+        // session is open at a time, matched back to its opener by this
+        // exact string) and to DrawPathLockToggle's own shared lock-state
+        // dictionary — a bare "Material{index}:{label}" would let core's
+        // Material 0 and background's own Material 0 collide on both, now
+        // that Materials shows both panels stacked in the same frame.
+        var texKey = "Material" + Data.GetInstanceID() + "-" + materialIndex + ":" + label;
+        var next = SC2TerrainShell.DrawTexturePickerWithPath(label, texture, texKey, ref pathDraft, out var pickedViaBrowser, fallbackPath, siblingHint) as Texture2D;
         if (next != previous)
         {
             _win.RecordUndoCheckpointFor(Data, "Change Material " + label + " Texture");
@@ -355,7 +363,7 @@ public class SC2PairsMode
                 _win.RecordUndoCheckpointFor(Data, "Toggle Global UV Scale");
                 Data.GlobalUvScaleEnabled = newGlobalUvEnabled;
                 EditorUtility.SetDirty(Data);
-                SC2BackgroundTerrainPreview.MarkDirty();
+                _win.RefreshBackgroundRuntime();
                 _win.ApplyPreviewModeToChunks();
                 _win.MarkDirtyAndRepaint();
             }
@@ -366,7 +374,7 @@ public class SC2PairsMode
                 if (!Mathf.Approximately(newGlobalUvScale, Data.GlobalUvScale))
                 {
                     Data.GlobalUvScale = Mathf.Max(0.0001f, newGlobalUvScale);
-                    SC2BackgroundTerrainPreview.MarkDirty();
+                    _win.RefreshBackgroundRuntime();
                     _win.ApplyPreviewModeToChunks();
                     _win.MarkDirtyAndRepaint();
                 }
@@ -496,7 +504,13 @@ public class SC2PairsMode
                 $"{_win.Data.GlobalUvScale:0.##} world units for every pair, core and background alike.");
         }
 
-        pair.SimplifyRatio = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"pair-{i}",
+        // Data.GetInstanceID() in the key: since Materials/Pairs now shows
+        // the core's and the background's own panels stacked in the same
+        // frame (no more Editing Target toggle keeping them mutually
+        // exclusive), a bare "pair-{i}" would collide between e.g. core's
+        // pair 0 and background's own pair 0 — both DrawCompactSlider calls
+        // share one static cached-text dictionary keyed by this string.
+        pair.SimplifyRatio = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"pair-{Data.GetInstanceID()}-{i}",
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Simplify Ratio"));
 
         EditorGUILayout.Space(4);
@@ -625,11 +639,15 @@ public class SC2PairsMode
         // SC2TerrainShell.DrawCompactSlider already exists specifically to
         // work around this class of numeric-field jank elsewhere in this
         // codebase (see its own doc comment), so reused here instead of a
-        // second one-off fix. keySuffix includes the pair's own index so
-        // two different pairs' X/Y fields never share cached text state.
+        // second one-off fix. keySuffix includes the pair's own index (and,
+        // same reasoning as the Simplify slider above, Data's own instance
+        // ID) so two different pairs' X/Y fields — including one from the
+        // core and one from the background, now shown stacked in the same
+        // frame — never share cached text state.
         EditorGUILayout.LabelField("Texture Scroll", EditorStyles.miniLabel);
-        var newScrollX = SC2TerrainShell.DrawCompactSlider("X", pair.TextureScroll.x, -10f, 10f, "PairScroll" + i);
-        var newScrollY = SC2TerrainShell.DrawCompactSlider("Y", pair.TextureScroll.y, -10f, 10f, "PairScroll" + i);
+        var scrollKeySuffix = $"PairScroll{Data.GetInstanceID()}-{i}";
+        var newScrollX = SC2TerrainShell.DrawCompactSlider("X", pair.TextureScroll.x, -10f, 10f, scrollKeySuffix);
+        var newScrollY = SC2TerrainShell.DrawCompactSlider("Y", pair.TextureScroll.y, -10f, 10f, scrollKeySuffix);
         var newScroll = new Vector2(newScrollX, newScrollY);
         if (newScroll != pair.TextureScroll)
         {

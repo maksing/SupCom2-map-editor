@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using SC2.MapEditor.SmartExport;
@@ -8,11 +8,23 @@ using SC2.MapEditor.SmartExport;
 ///   Assign: paints pair index into PairMapRT via GPU blit
 ///   RNM:    paints blend alpha into BlendRT via GPU blit
 /// All brush operations = one Graphics.Blit, zero CPU per-pixel work.
+///
+/// Shared, unmodified, between the core and the background terrain — same
+/// reasoning and same ActiveRuntime/ActiveTerrainData/ActiveWorldOffset
+/// pattern as SC2GeometryMode (see that class' own header comment for the
+/// full rationale, including which settings deliberately stay core-only:
+/// Symmetry and the brush's own shape settings, here UseCustomBrush/
+/// CustomBrushTexturePath/RandomizeBrushRotation*).
 /// </summary>
 public class SC2PaintMode
 {
-    public SC2TerrainData Data;
+    // Which core map this instance was built for — see
+    // SC2GeometryMode.OwnerData's own doc comment.
+    public SC2TerrainData OwnerData { get; }
     private SC2TerrainShell _win;
+
+    /// <summary>The surface actually being read/written right now.</summary>
+    public SC2TerrainData Data => _win.ActiveTerrainData;
 
     private enum Sub { Assign, RNM }
     private Sub   _sub      = Sub.Assign;
@@ -79,7 +91,7 @@ public class SC2PaintMode
     public void InvalidatePendingPairSync() => _pairSyncGeneration++;
 
     public SC2PaintMode(SC2TerrainShell win, SC2TerrainData data)
-    { _win = win; Data = data; }
+    { _win = win; OwnerData = data; }
 
     // ── Panel ──────────────────────────────────────────────
 
@@ -95,10 +107,12 @@ public class SC2PaintMode
         _strength = SC2TerrainShell.DrawCompactSlider("Strength", _strength, 0.01f, 1f);
         SC2TerrainShell.DrawUnifiedNote("Shift+Scroll = Radius   Ctrl+Scroll = Strength");
 
-        if (Data.Symmetry != SymmetryMode.None)
+        // Symmetry always follows the CORE's own setting (_win.Data), not
+        // the dynamic Data — see SC2GeometryMode's own header comment.
+        if (_win.Data.Symmetry != SymmetryMode.None)
         {
-            EditorGUILayout.LabelField($"Symmetry: {Data.Symmetry}", EditorStyles.centeredGreyMiniLabel);
-            Data.SymmetryCenter = DrawVector3Row("Center", Data.SymmetryCenter, w);
+            EditorGUILayout.LabelField($"Symmetry: {_win.Data.Symmetry}", EditorStyles.centeredGreyMiniLabel);
+            _win.Data.SymmetryCenter = DrawVector3Row("Center", _win.Data.SymmetryCenter, w);
         }
 
         EditorGUILayout.Space(4);
@@ -146,12 +160,12 @@ public class SC2PaintMode
             && EditorUtility.DisplayDialog("Assign All",
                $"All triangles → '{Data.Pairs[_assignPair].Name}'?", "Yes", "Cancel"))
         {
-            _win.RecordUndoCheckpoint("Assign All");
+            _win.RecordUndoCheckpointFor(Data, "Assign All");
             // Fill PairMapRT with pair index colour via blit
-            if (_win.Runtime != null)
+            if (_win.ActiveRuntime != null)
             {
                 var prev = RenderTexture.active;
-                RenderTexture.active = _win.Runtime.PairMapRT;
+                RenderTexture.active = _win.ActiveRuntime.PairMapRT;
                 GL.Clear(false, true, new Color(_assignPair / 255f, 0, 0, 1));
                 RenderTexture.active = prev;
             }
@@ -162,11 +176,11 @@ public class SC2PaintMode
         if (GUILayout.Button("Clear All", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w))
             && EditorUtility.DisplayDialog("Clear", "Reset all assignments?", "Yes", "Cancel"))
         {
-            _win.RecordUndoCheckpoint("Clear All");
-            if (_win.Runtime != null)
+            _win.RecordUndoCheckpointFor(Data, "Clear All");
+            if (_win.ActiveRuntime != null)
             {
                 var prev = RenderTexture.active;
-                RenderTexture.active = _win.Runtime.PairMapRT;
+                RenderTexture.active = _win.ActiveRuntime.PairMapRT;
                 GL.Clear(false, true, new Color(255f/255f, 0, 0, 1)); // 255 = unassigned (-1)
                 RenderTexture.active = prev;
             }
@@ -190,11 +204,11 @@ public class SC2PaintMode
         if (nextRnmPair != _rnmPair)
         {
             _rnmPair = nextRnmPair;
-            _win.Runtime?.SetActivePairForBlend(_rnmPair, Data);
+            _win.ActiveRuntime?.SetActivePairForBlend(_rnmPair, Data);
         }
         else
         {
-            _win.Runtime?.SetActivePairForBlend(_rnmPair, Data);
+            _win.ActiveRuntime?.SetActivePairForBlend(_rnmPair, Data);
         }
         _rnmBlend = SC2TerrainShell.DrawCompactSlider("Blend alpha", _rnmBlend, 0f, 1f);
         EditorGUILayout.LabelField(
@@ -203,33 +217,35 @@ public class SC2PaintMode
             EditorStyles.centeredGreyMiniLabel);
         _rnmErase = EditorGUILayout.Toggle("Erase (→0)", _rnmErase);
 
+        // Brush shape is a shared setting, always the CORE's own _win.Data —
+        // see SC2GeometryMode's own header comment for why.
         EditorGUILayout.Space(4);
         var brushShapeLabels = new[] { "Round", "Custom" };
-        var nextBrushShape = SC2TerrainShell.DrawUnifiedSegmentGrid(Data.UseCustomBrush ? 1 : 0, brushShapeLabels, 2) == 1;
-        if (nextBrushShape != Data.UseCustomBrush)
+        var nextBrushShape = SC2TerrainShell.DrawUnifiedSegmentGrid(_win.Data.UseCustomBrush ? 1 : 0, brushShapeLabels, 2) == 1;
+        if (nextBrushShape != _win.Data.UseCustomBrush)
         {
             _win.RecordUndoCheckpoint("Change Paint Brush Shape");
-            Data.UseCustomBrush = nextBrushShape;
-            EditorUtility.SetDirty(Data);
+            _win.Data.UseCustomBrush = nextBrushShape;
+            EditorUtility.SetDirty(_win.Data);
         }
-        if (Data.UseCustomBrush)
+        if (_win.Data.UseCustomBrush)
         {
             DrawCustomBrushPicker();
-            var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", Data.RandomizeBrushRotation);
-            if (nextRandomize != Data.RandomizeBrushRotation)
+            var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", _win.Data.RandomizeBrushRotation);
+            if (nextRandomize != _win.Data.RandomizeBrushRotation)
             {
                 _win.RecordUndoCheckpoint("Change Paint Brush Randomize Rotation");
-                Data.RandomizeBrushRotation = nextRandomize;
-                EditorUtility.SetDirty(Data);
+                _win.Data.RandomizeBrushRotation = nextRandomize;
+                EditorUtility.SetDirty(_win.Data);
             }
-            if (Data.RandomizeBrushRotation)
+            if (_win.Data.RandomizeBrushRotation)
             {
-                var nextContinuous = EditorGUILayout.Toggle("Randomize While Dragging", Data.RandomizeBrushRotationContinuous);
-                if (nextContinuous != Data.RandomizeBrushRotationContinuous)
+                var nextContinuous = EditorGUILayout.Toggle("Randomize While Dragging", _win.Data.RandomizeBrushRotationContinuous);
+                if (nextContinuous != _win.Data.RandomizeBrushRotationContinuous)
                 {
                     _win.RecordUndoCheckpoint("Change Paint Brush Randomize Continuous");
-                    Data.RandomizeBrushRotationContinuous = nextContinuous;
-                    EditorUtility.SetDirty(Data);
+                    _win.Data.RandomizeBrushRotationContinuous = nextContinuous;
+                    EditorUtility.SetDirty(_win.Data);
                 }
             }
         }
@@ -243,7 +259,7 @@ public class SC2PaintMode
         // screen, continuously re-corrupting it every single repaint. This is
         // what caused exported RNM masks to contain a captured frame of the
         // editor's own UI, and why it survived a manual Reset.
-        if (_win.Runtime != null && _win.Runtime.BlendRT != null)
+        if (_win.ActiveRuntime != null && _win.ActiveRuntime.BlendRT != null)
         {
             // Full square (was a fixed 60px-tall strip regardless of panel
             // width) — BlendRT's own snapshot is square, so a wide-short
@@ -268,7 +284,7 @@ public class SC2PaintMode
             var now = EditorApplication.timeSinceStartup;
             if (_blendPreviewTex == null || now >= _blendPreviewNextUpdate)
             {
-                _blendPreviewTex = _win.Runtime.GetBlendPreviewSnapshot();
+                _blendPreviewTex = _win.ActiveRuntime.GetBlendPreviewSnapshot();
                 _blendPreviewNextUpdate = now + 0.2;
             }
             if (_blendPreviewTex != null)
@@ -277,22 +293,22 @@ public class SC2PaintMode
 
         EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
         var bw = Mathf.Max(48f, (w - 4f) * 0.5f);
-        if (GUILayout.Button("Reset (α=0)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && _win.Runtime != null)
+        if (GUILayout.Button("Reset (α=0)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && _win.ActiveRuntime != null)
         {
             var prev = RenderTexture.active;
-            RenderTexture.active = _win.Runtime.BlendRT;
+            RenderTexture.active = _win.ActiveRuntime.BlendRT;
             GL.Clear(false, true, new Color(.5f, .5f, .5f, 0f));
             RenderTexture.active = prev;
-            _win.Runtime.FlushActiveBlendGroup(Data);
+            _win.ActiveRuntime.FlushActiveBlendGroup(Data);
             EditorUtility.SetDirty(Data);
         }
-        if (GUILayout.Button("Fill (α=1)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && _win.Runtime != null)
+        if (GUILayout.Button("Fill (α=1)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && _win.ActiveRuntime != null)
         {
             var prev = RenderTexture.active;
-            RenderTexture.active = _win.Runtime.BlendRT;
+            RenderTexture.active = _win.ActiveRuntime.BlendRT;
             GL.Clear(false, true, new Color(.5f, .5f, .5f, 1f));
             RenderTexture.active = prev;
-            _win.Runtime.FlushActiveBlendGroup(Data);
+            _win.ActiveRuntime.FlushActiveBlendGroup(Data);
             EditorUtility.SetDirty(Data);
         }
         EditorGUILayout.EndHorizontal();
@@ -304,10 +320,12 @@ public class SC2PaintMode
     /// this session. SC2PaintBrush.shader samples luminance*alpha (see
     /// PaintMode==2's custom-brush branch) — a plain grayscale mask (no real
     /// alpha channel, the common World Machine/Gaea stamp-export convention)
-    /// and a real alpha-transparency brush image both work correctly.</summary>
+    /// and a real alpha-transparency brush image both work correctly. Always
+    /// the CORE's own _win.Data — see SC2GeometryMode's own header
+    /// comment.</summary>
     private void DrawCustomBrushPicker()
     {
-        var currentPath = Data.CustomBrushTexturePath ?? "";
+        var currentPath = _win.Data.CustomBrushTexturePath ?? "";
         if (currentPath != _customBrushCachedPath)
         {
             _customBrushCache = SC2TerrainMaterialFactory.LoadTexturePublicAny(currentPath);
@@ -321,12 +339,12 @@ public class SC2PaintMode
             if (pickedViaBrowser)
                 pathDraft = picked != null ? (SC2TerrainMaterialFactory.TryGetResourcePath(picked) ?? "") : "";
         }
-        if (pathDraft != (Data.CustomBrushTexturePath ?? ""))
+        if (pathDraft != (_win.Data.CustomBrushTexturePath ?? ""))
         {
             _win.RecordUndoCheckpoint("Change Custom Brush Texture");
-            Data.CustomBrushTexturePath = pathDraft;
+            _win.Data.CustomBrushTexturePath = pathDraft;
             _customBrushCachedPath = pathDraft;
-            EditorUtility.SetDirty(Data);
+            EditorUtility.SetDirty(_win.Data);
         }
     }
 
@@ -374,7 +392,7 @@ public class SC2PaintMode
         // instead of this tool's own brush cursor/paint input firing
         // underneath it.
         if (_radiusGesture.HandleInput(camera, viewportRect, mousePosition, _brushVis, _brushPos, true, ref _radius, 1f, 1000f,
-            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z)))
+            sampleHeight: SampleActiveHeight))
             return;
         DrawGameViewGizmo(camera, viewportRect);
         switch (_sub)
@@ -383,6 +401,13 @@ public class SC2PaintMode
             case Sub.RNM:    HandleRnm(e);    break;
         }
     }
+
+    /// <summary>See SC2GeometryMode.SampleActiveHeight's own doc comment —
+    /// identical pattern.</summary>
+    private float SampleActiveHeight(float x, float z) =>
+        _win.ActiveTerrainData == _win.Data
+            ? SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z)
+            : _win.SampleLiveBackgroundHeight(x, z);
 
     void HandleScroll(Event e)
     {
@@ -403,9 +428,11 @@ public class SC2PaintMode
     {
         _brushVis = false;
         var ray = HandleUtility.GUIPointToWorldRay(Event.current.mousePosition);
-        if (SC2TerrainShell.RaycastTerrainHeight(_win.Runtime, ray, out var hit))
+        var offset = _win.ActiveWorldOffset;
+        var localRay = new Ray(ray.origin - offset, ray.direction);
+        if (SC2TerrainShell.RaycastTerrainHeight(_win.ActiveRuntime, localRay, out var hit))
         {
-            _brushPos = hit;
+            _brushPos = hit + offset;
             _brushVis = true;
             return;
         }
@@ -420,9 +447,11 @@ public class SC2PaintMode
     {
         _brushVis = false;
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, guiMousePosition);
-        if (SC2TerrainShell.RaycastTerrainHeight(_win.Runtime, ray, out var hit))
+        var offset = _win.ActiveWorldOffset;
+        var localRay = new Ray(ray.origin - offset, ray.direction);
+        if (SC2TerrainShell.RaycastTerrainHeight(_win.ActiveRuntime, localRay, out var hit))
         {
-            _brushPos = hit;
+            _brushPos = hit + offset;
             _brushVis = true;
             return;
         }
@@ -445,10 +474,12 @@ public class SC2PaintMode
         var col = _sub == Sub.Assign ? new Color(1f,.5f,0f,.7f) : new Color(0f,.8f,1f,.7f);
         Handles.color = col;
         Handles.DrawWireDisc(_brushPos, Vector3.up, _radius);
-        if (Data.Symmetry != SymmetryMode.None)
+        // Symmetry always follows the CORE's own setting — see
+        // SC2GeometryMode's own header comment.
+        if (_win.Data.Symmetry != SymmetryMode.None)
         {
             Handles.color = new Color(.4f,.8f,1f,.5f);
-            var syms = Data.GetSymmetricPositions(_brushPos);
+            var syms = _win.Data.GetSymmetricPositions(_brushPos);
             for (var i = 1; i < syms.Count; i++)
                 Handles.DrawWireDisc(syms[i], Vector3.up, _radius);
         }
@@ -465,17 +496,20 @@ public class SC2PaintMode
         else if (_rnmErase || (Event.current != null && Event.current.control)) col = new Color(1f, .3f, .25f, .95f);
         else col = new Color(0f, .85f, 1f, .95f);
         SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, _brushPos, _radius, col, Color.clear,
-            sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
+            sampleHeight: SampleActiveHeight);
 
-        if (Data.Symmetry != SymmetryMode.None)
-            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, Data.GetSymmetricPositions(_brushPos),
+        // Symmetry always follows the CORE's own setting — see
+        // SC2GeometryMode's own header comment.
+        if (_win.Data.Symmetry != SymmetryMode.None)
+            SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, _brushPos, _win.Data.GetSymmetricPositions(_brushPos),
                 new Color(0.4f, 0.8f, 1f, 0.9f),
-                sampleHeight: (x, z) => SC2ObjectsExport.SampleTerrainHeight(_win.Data, x, z));
+                sampleHeight: SampleActiveHeight);
     }
 
     void HandleAssign(Event e)
     {
-        if (!_brushVis || _win.Runtime == null) return;
+        if (!_brushVis || _win.ActiveRuntime == null) return;
+        var offset = _win.ActiveWorldOffset;
 
         // Blender/Photoshop-style eyedropper — Alt+click samples
         // the pair under the cursor into _assignPair instead of painting
@@ -489,8 +523,10 @@ public class SC2PaintMode
         {
             SyncPairMapToCPU();
             var cell = Mathf.Max(0.0001f, Data.CellSize);
-            var gx = Mathf.Clamp(Mathf.FloorToInt(_brushPos.x / cell), 0, Data.GridWidth - 1);
-            var gz = Mathf.Clamp(Mathf.FloorToInt(_brushPos.z / cell), 0, Data.GridHeight - 1);
+            var localX = _brushPos.x - offset.x;
+            var localZ = _brushPos.z - offset.z;
+            var gx = Mathf.Clamp(Mathf.FloorToInt(localX / cell), 0, Data.GridWidth - 1);
+            var gz = Mathf.Clamp(Mathf.FloorToInt(localZ / cell), 0, Data.GridHeight - 1);
             var ti = (gz * Data.GridWidth + gx) * 2;
             if (Data.TrianglePairIndex != null && ti >= 0 && ti < Data.TrianglePairIndex.Length)
             {
@@ -539,6 +575,10 @@ public class SC2PaintMode
                 SyncPairMapToCPUAsync();
             }
             _win.MarkDirtyAndRepaint();
+            // Same as SC2GeometryMode's own MouseUp — keeps the background's
+            // seam skirt glued after a completed Paint Pair stroke on it;
+            // no-op when the active surface is the core.
+            if (Data != _win.Data) _win.RefreshBackgroundRuntime();
             SC2Log.Log($"[SC2PaintMode] HandleAssign MouseUp returned in {swMouseUp.ElapsedMilliseconds}ms");
             return;
         }
@@ -552,7 +592,7 @@ public class SC2PaintMode
                 // pre-stroke state (not a stale value from the last throttled
                 // async readback).
                 SyncPairMapToCPU();
-                _win.RecordUndoCheckpoint("Paint Pair");
+                _win.RecordUndoCheckpointFor(Data, "Paint Pair");
             }
         }
         if (!_isPainting || (!down && !drag)) return;
@@ -560,11 +600,14 @@ public class SC2PaintMode
         if (!down && now - _lastApply < kInterval) return;
         _lastApply = now;
 
+        // Symmetry always follows the CORE's own setting — see
+        // SC2GeometryMode's own header comment.
         if (_selectMode)
         {
             // Select mode uses CPU spatial query (only active for small grids)
-            foreach (var pos in Data.GetSymmetricPositions(_brushPos))
+            foreach (var worldPos in _win.Data.GetSymmetricPositions(_brushPos))
             {
+                var pos = worldPos - offset;
                 var cell = Data.CellSize; var r2 = _radius * _radius;
                 var x0 = Mathf.Max(0, Mathf.FloorToInt((pos.x-_radius)/cell));
                 var x1 = Mathf.Min(Data.GridWidth-1, Mathf.CeilToInt((pos.x+_radius)/cell));
@@ -582,11 +625,14 @@ public class SC2PaintMode
         else
         {
             // GPU paint — single blit per symmetric position
-            foreach (var pos in Data.GetSymmetricPositions(_brushPos))
-                _win.Runtime.PaintPair(pos, _radius, _strength, _assignPair);
+            foreach (var worldPos in _win.Data.GetSymmetricPositions(_brushPos))
+                _win.ActiveRuntime.PaintPair(worldPos - offset, _radius, _strength, _assignPair);
             _win.MarkPairCpuDataStale();
-            // Immediately update PairColor RT for real-time preview
-            _win.RepaintPairColorRTPublic();
+            // Immediately update PairColor RT for real-time preview — same
+            // call SC2TerrainShell.RepaintPairColorRTPublic makes for the
+            // core (_win.Runtime.ApplyPairColourView(_win.Data, false)),
+            // generalized to whichever surface is active.
+            _win.ActiveRuntime.ApplyPairColourView(Data, false);
 #if UNITY_EDITOR
             SceneView.RepaintAll();
 #endif
@@ -596,7 +642,8 @@ public class SC2PaintMode
 
     void HandleRnm(Event e)
     {
-        if (!_brushVis || _win.Runtime == null) return;
+        if (!_brushVis || _win.ActiveRuntime == null) return;
+        var offset = _win.ActiveWorldOffset;
         var down = e.type == EventType.MouseDown && e.button == 0 && !e.alt;
         var drag = e.type == EventType.MouseDrag  && e.button == 0 && !e.alt;
         if (e.type == EventType.MouseUp)
@@ -607,9 +654,16 @@ public class SC2PaintMode
             if (_isPainting)
                 _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
             _isPainting = false;
-            if (_win.Runtime != null)
-                _win.Runtime.FlushActiveBlendGroup(Data);
+            if (_win.ActiveRuntime != null)
+                _win.ActiveRuntime.FlushActiveBlendGroup(Data);
             EditorUtility.SetDirty(Data);
+            // Same as SC2GeometryMode's own MouseUp — keeps the background's
+            // seam skirt glued after a completed Paint Blend stroke on it
+            // (also refreshes its own RnmMaskTexture, which the chunk
+            // runtime doesn't use but the seam skirt's shared material
+            // does not depend on either — SC2TerrainRuntime.SharedChunkMat
+            // samples BlendRT directly); no-op when active surface is core.
+            if (Data != _win.Data) _win.RefreshBackgroundRuntime();
             _win.Repaint();
             return;
         }
@@ -618,10 +672,17 @@ public class SC2PaintMode
             _isPainting = true;
             // Roll a fresh stamp rotation for this stroke only —
             // see _rnmBrushRotationRad's own doc comment.
-            _rnmBrushRotationRad = (Data.UseCustomBrush && Data.RandomizeBrushRotation)
+            _rnmBrushRotationRad = (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation)
                 ? Random.Range(0f, Mathf.PI * 2f) : 0f;
-            // Ensure correct pair's blend RT is active before painting
-            _win.RecordRnmBlendCheckpoint();
+            // Ensure correct pair's blend RT is active before painting.
+            // Core routes through CombinedUndo's own dedicated RNM-blend
+            // channel; the background has no such channel (its own snapshot
+            // is folded into _bgUndoStack.CaptureExtra/ApplyExtra instead —
+            // see SC2TerrainShell.EnsureBackgroundSubEditors), so only
+            // record the core's checkpoint here when the core is actually
+            // the active surface.
+            if (Data == _win.Data) _win.RecordRnmBlendCheckpoint();
+            else _win.RecordUndoCheckpointFor(Data, "Paint Background Blend");
         }
         if (!_isPainting || (!down && !drag)) return;
         var now = EditorApplication.timeSinceStartup;
@@ -634,7 +695,7 @@ public class SC2PaintMode
         // frame that passes the throttle above), so continuously dragging
         // the mouse keeps stamping fresh random orientations instead of one
         // fixed one for the whole stroke.
-        if (Data.UseCustomBrush && Data.RandomizeBrushRotation && Data.RandomizeBrushRotationContinuous)
+        if (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation && _win.Data.RandomizeBrushRotationContinuous)
             _rnmBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
 
         // Holding Ctrl temporarily acts as the eraser,
@@ -644,9 +705,9 @@ public class SC2PaintMode
         // (_rnmErase) itself never changes, only what this stroke actually
         // paints while Ctrl is held.
         var erasing = _rnmErase || e.control;
-        var customBrush = Data.UseCustomBrush ? _customBrushCache : null;
-        foreach (var pos in Data.GetSymmetricPositions(_brushPos))
-            _win.Runtime.PaintBlend(pos, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad);
+        var customBrush = _win.Data.UseCustomBrush ? _customBrushCache : null;
+        foreach (var worldPos in _win.Data.GetSymmetricPositions(_brushPos))
+            _win.ActiveRuntime.PaintBlend(worldPos - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad);
 #if UNITY_EDITOR
         SceneView.RepaintAll();
 #endif
@@ -655,7 +716,7 @@ public class SC2PaintMode
 
     void ApplySelection()
     {
-        _win.RecordUndoCheckpoint("Assign Selection");
+        _win.RecordUndoCheckpointFor(Data, "Assign Selection");
         foreach (var ti in _sel) Data.AssignTriangleToPair(ti, _assignPair);
         _sel.Clear();
         _win.MarkDirtyAndRepaint();
@@ -663,28 +724,32 @@ public class SC2PaintMode
 
     // ── RNM blend undo ──────────────────────────────────────────────
     // Wired into SC2TerrainCombinedUndo.CaptureRnmBlend/ApplyRnmBlend by
-    // SC2TerrainShell — see that class's own doc comment for why this is a
-    // separate channel from SC2TerrainUndoStack.CaptureExtra/ApplyExtra
-    // rather than folded into it (cost: a ~16MB BlendRT copy per RNM stroke,
-    // not per checkpoint everywhere).
+    // SC2TerrainShell for the core, and directly into the background's own
+    // _bgUndoStack.CaptureExtra/ApplyExtra (see
+    // SC2TerrainShell.EnsureBackgroundSubEditors) — same capture/apply
+    // shape either way, just targeting whichever surface was active when
+    // CaptureActiveBlendState was called (RecordRnmBlendCheckpoint/
+    // RecordUndoCheckpointFor above already route to the matching stack).
 
     private sealed class RnmBlendSnapshot
     {
+        public SC2TerrainData Data;
         public int PairIndex;
         public byte[] Bytes;
     }
 
     public object CaptureActiveBlendState()
     {
-        if (_win.Runtime == null || _win.Runtime.BlendRT == null)
+        if (_win.ActiveRuntime == null || _win.ActiveRuntime.BlendRT == null)
             return null;
-        return new RnmBlendSnapshot { PairIndex = _rnmPair, Bytes = _win.Runtime.ReadBlendCPU() };
+        return new RnmBlendSnapshot { Data = Data, PairIndex = _rnmPair, Bytes = _win.ActiveRuntime.ReadBlendCPU() };
     }
 
     public void ApplyActiveBlendState(object state)
     {
-        if (state is not RnmBlendSnapshot snap || _win.Runtime == null)
-            return;
+        if (state is not RnmBlendSnapshot snap) return;
+        var runtime = snap.Data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+        if (runtime == null || snap.Data == null) return;
 
         _rnmPair = snap.PairIndex;
         // Ensures the correct mask group is the one actually active before
@@ -693,21 +758,30 @@ public class SC2PaintMode
         // UploadBlendCPU right after immediately overwrites BlendRT with the
         // exact restored bytes, so that intermediate load is harmless, just
         // slightly redundant work (undo/redo aren't a hot per-frame path).
-        _win.Runtime.SetActivePairForBlend(_rnmPair, Data);
-        _win.Runtime.UploadBlendCPU(snap.Bytes);
-        _win.Runtime.FlushActiveBlendGroup(Data);
+        runtime.SetActivePairForBlend(_rnmPair, snap.Data);
+        runtime.UploadBlendCPU(snap.Bytes);
+        runtime.FlushActiveBlendGroup(snap.Data);
         _win.MarkDirtyAndRepaint();
     }
 
     // ── CPU sync ──────────────────────────────────────────────
 
-    /// <summary>Synchronous readback — blocks the calling thread. Use only where
-    /// a blocking call is acceptable (e.g. right before Export).</summary>
-    public void SyncPairMapToCPU()
+    /// <summary>Synchronous readback — blocks the calling thread. Use only
+    /// where a blocking call is acceptable (e.g. right before Export). Syncs
+    /// whichever surface is currently ACTIVE (the brush's own target) — use
+    /// the explicit-target overload below instead for a call site that
+    /// specifically needs the CORE synced regardless of what the brush
+    /// happens to be pointing at (SaveState/EnsurePairSync both do: an
+    /// export or periodic background sync must never accidentally skip
+    /// syncing the core's own pair data just because the user was last
+    /// painting the background).</summary>
+    public void SyncPairMapToCPU() => SyncPairMapToCPU(_win.ActiveRuntime, Data);
+
+    public void SyncPairMapToCPU(SC2TerrainRuntime runtime, SC2TerrainData data)
     {
-        if (_win.Runtime == null) return;
+        if (runtime == null || data == null) return;
         _pairSyncGeneration++;
-        ApplyPairBytes(_win.Runtime.ReadPairIndexCPU());
+        ApplyPairBytes(runtime.ReadPairIndexCPU(), data, runtime.HoleTriPairIndex);
         _win.MarkPairCpuDataSynced();
     }
 
@@ -717,41 +791,63 @@ public class SC2PaintMode
     /// </summary>
     public void SyncPairMapToCPUAsync()
     {
-        if (_win.Runtime == null) return;
+        var runtime = _win.ActiveRuntime;
+        var data = Data;
+        var hole = runtime?.HoleTriPairIndex;
+        if (runtime == null) return;
         var generation = ++_pairSyncGeneration;
-        _win.Runtime.ReadPairIndexCPUAsync(bytes =>
+        runtime.ReadPairIndexCPUAsync(bytes =>
         {
             // Stale — an Undo/Redo (or a newer sync) already superseded this
             // readback by the time it completed. Applying it now would
             // silently reintroduce whatever it was that got undone.
             if (generation != _pairSyncGeneration)
                 return;
-            ApplyPairBytes(bytes);
+            ApplyPairBytes(bytes, data, hole);
             _win.MarkPairCpuDataSynced();
             _win.MarkDirtyAndRepaint();
         });
     }
 
-    private void ApplyPairBytes(byte[] bytes)
+    /// <summary>Takes an explicit target Data (and its runtime's own
+    /// HoleTriPairIndex) rather than always reading the live Data property —
+    /// the async overload above captures which surface was active when the
+    /// readback was REQUESTED, not whichever happens to be active when it
+    /// completes a frame or two later (the active surface can legitimately
+    /// change in between, e.g. the user moved the cursor off the terrain
+    /// entirely). hole is null for the core (which never carves cells) and
+    /// the background's own carved-out core footprint otherwise — cells it
+    /// marks are forced back to -1 regardless of what the raw GPU blit
+    /// painted there, since PaintPair itself has no concept of the hole
+    /// (same fix as the old SC2BackgroundEditMode.SyncPairMapFromRuntime,
+    /// now shared here instead of duplicated).</summary>
+    private void ApplyPairBytes(byte[] bytes, SC2TerrainData data, short[] hole = null)
     {
-        var w = Data.GridWidth; var h = Data.GridHeight;
+        if (data == null) return;
+        var w = data.GridWidth; var h = data.GridHeight;
         var n = w * h;
-        if (Data.TrianglePairIndex.Length != n * 2)
-            Data.TrianglePairIndex = new short[n * 2];
+        if (data.TrianglePairIndex.Length != n * 2)
+            data.TrianglePairIndex = new short[n * 2];
 
         // Build cached pair tri counts (used by UI) in the same pass as the index sync
-        var counts = new int[Data.Pairs.Count];
+        var counts = new int[data.Pairs.Count];
         for (var gz = 0; gz < h; gz++)
         for (var gx = 0; gx < w; gx++)
         {
+            var ti = (gz*w+gx)*2;
+            if (hole != null && ti + 1 < hole.Length && hole[ti] < 0)
+            {
+                data.TrianglePairIndex[ti] = -1;
+                data.TrianglePairIndex[ti+1] = -1;
+                continue;
+            }
             var raw  = bytes[gz*w+gx];
             var pair = (raw >= 255) ? (short)-1 : (short)raw;
-            var ti   = (gz*w+gx)*2;
-            Data.TrianglePairIndex[ti]   = pair;
-            Data.TrianglePairIndex[ti+1] = pair;
+            data.TrianglePairIndex[ti]   = pair;
+            data.TrianglePairIndex[ti+1] = pair;
             if (pair >= 0 && pair < counts.Length) counts[pair] += 2;
         }
-        Data.PairTriCounts = counts;
+        data.PairTriCounts = counts;
     }
 
     public bool HandleKeyboardShortcut(UnityEngine.Event e) => false;

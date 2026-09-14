@@ -117,8 +117,8 @@ namespace SC2.MapEditor.Document
         /// self-consistent state every other SC2TerrainData is expected to
         /// be in — the background is a real target for SC2BackgroundTerrain.
         /// EnsureGenerated/TopologyMatches, SC2MaterialsPairsMode, and
-        /// SC2BackgroundEditMode immediately after this returns, not an
-        /// inert data blob.</summary>
+        /// SC2GeometryMode/SC2PaintMode immediately after this returns, not
+        /// an inert data blob.</summary>
         private static SC2TerrainData ApplyTerrainResult(TerrainResult terrain, string instanceName)
         {
             var data = ScriptableObject.CreateInstance<SC2TerrainData>();

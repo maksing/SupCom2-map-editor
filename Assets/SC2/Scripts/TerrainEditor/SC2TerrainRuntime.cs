@@ -65,6 +65,7 @@ public class SC2TerrainRuntime : IDisposable
         _activeBlendMaskName = next;
     }
 
+
     private void LoadMaskGroupToRT(string maskName, SC2TerrainData data)
     {
         var prev = RenderTexture.active;
@@ -184,16 +185,66 @@ public class SC2TerrainRuntime : IDisposable
 
     // ── Init ─────────────────────────────────────────────────────────────────
 
-    public void Init(int w, int h, float cell, float heightScale)
+    /// <summary>holeTriPairIndex, when given, is the SAME array/convention
+    /// as SC2TerrainData.TrianglePairIndex (2 entries per cell, row-major,
+    /// -1 = no geometry there). The core never passes this (always null —
+    /// its own terrain has no concept of a carved hole), so its chunk
+    /// meshes are built exactly as before. The background terrain does:
+    /// its own carved-out core footprint (SC2BackgroundTerrain.
+    /// BuildPairIndexAndCarveHole) needs those cells to render no
+    /// triangles at all, not just a different material — this is purely
+    /// topological and only ever set once here at Init (painting never
+    /// turns a cell into/out of -1, see SC2BackgroundEditMode's own
+    /// ApplyPaintPair guard), so no per-stroke index-buffer rebuild is
+    /// needed to keep it correct.</summary>
+    public void Init(int w, int h, float cell, float heightScale, short[] holeTriPairIndex = null)
     {
         if (_initialized) return;
         _initialized = true;
         GridWidth = w; GridHeight = h; CellSize = cell; HeightScale = heightScale;
         _stride = w + 1;
+        _holeTriPairIndex = holeTriPairIndex;
 
         _heights = new float[_stride * (h + 1)];
         CreatePaintRTs();
         CreateChunks();
+    }
+
+    private short[] _holeTriPairIndex;
+
+    /// <summary>The same array Init's holeTriPairIndex was called with
+    /// (null for the core, which has no carved hole). Exposed so a caller
+    /// syncing PairMapRT paint results back to CPU (SC2BackgroundEditMode)
+    /// can re-clamp any hole cell the brush's raw GPU blit painted over
+    /// back to -1 — the brush itself has no concept of a hole (it's the
+    /// same shader/material the core's unholed PaintPair uses), so without
+    /// this a stroke that merely overlaps the seam would silently "fill
+    /// in" part of the carved-out core footprint in the exported data.</summary>
+    public short[] HoleTriPairIndex => _holeTriPairIndex;
+
+    /// <summary>The one Material shared by every chunk (see its own field
+    /// comment above). Exposed so SC2BackgroundSeamSkirt's own small
+    /// stitching mesh can use the EXACT same material/shader (MatCap-based
+    /// editor preview, SC2TerrainView.shader) as the surrounding chunks
+    /// instead of a separately-built one — a background pair with no real
+    /// diffuse texture assigned (the common case before the user paints
+    /// real materials in) renders as a plausible MatCap surface here, but
+    /// as a jarring flat-white-lit-by-raw-sun-color patch through the real
+    /// in-game SC2Terrain.shader (CreateLivePairMaterial) the skirt used to
+    /// build for itself — the two shaders answer "what does no-texture look
+    /// like" completely differently, so anything short of sharing the exact
+    /// same material guarantees a visible seam-vs-body color mismatch.</summary>
+    public Material SharedChunkMat => _sharedChunkMat;
+
+    /// <summary>Places this runtime's chunk root somewhere other than world
+    /// origin — every chunk mesh's vertices are already built in the
+    /// runtime's own local grid space, so this is the only thing needed to
+    /// host a second, independently-positioned instance (e.g. the
+    /// decorative background terrain, which surrounds the core at a real
+    /// world offset — see SC2BackgroundTerrain.GetWorldOffset).</summary>
+    public void SetWorldOrigin(Vector3 offset)
+    {
+        if (_chunkRoot != null) _chunkRoot.transform.position = offset;
     }
 
     public void Dispose()
@@ -313,22 +364,39 @@ public class SC2TerrainRuntime : IDisposable
     {
         var qx = Mathf.Min(CHUNK_SIZE, GridWidth  - cx * CHUNK_SIZE);
         var qz = Mathf.Min(CHUNK_SIZE, GridHeight - cz * CHUNK_SIZE);
-        var vx = qx + 1; var vz = qz + 1;
-        var tris = new int[qx * qz * 6];
+        var vx = qx + 1;
+        var gx0 = cx * CHUNK_SIZE;
+        var gz0 = cz * CHUNK_SIZE;
+        // _holeTriPairIndex null (every core chunk) -> full uniform grid,
+        // identical to this method's behavior before hole support existed.
+        // Non-null (background only) -> per-cell carved-hole cull, using
+        // the exact SAME global-cell indexing SC2BackgroundTerrain.
+        // BuildPairIndexAndCarveHole wrote it with.
+        var tris = _holeTriPairIndex == null ? new int[qx * qz * 6] : null;
+        var trisList = _holeTriPairIndex != null ? new List<int>(qx * qz * 6) : null;
         var t = 0;
         for (var z = 0; z < qz; z++)
         for (var x = 0; x < qx; x++)
         {
             var i00 = z*vx+x; var i10=i00+1; var i01=(z+1)*vx+x; var i11=i01+1;
-            tris[t++]=i00; tris[t++]=i01; tris[t++]=i10;
-            tris[t++]=i10; tris[t++]=i01; tris[t++]=i11;
+            if (_holeTriPairIndex == null)
+            {
+                tris[t++]=i00; tris[t++]=i01; tris[t++]=i10;
+                tris[t++]=i10; tris[t++]=i01; tris[t++]=i11;
+                continue;
+            }
+            var cellIdx = ((gz0 + z) * GridWidth + (gx0 + x)) * 2;
+            if (cellIdx < 0 || cellIdx + 1 >= _holeTriPairIndex.Length) continue;
+            if (_holeTriPairIndex[cellIdx] >= 0) { trisList.Add(i00); trisList.Add(i01); trisList.Add(i10); }
+            if (_holeTriPairIndex[cellIdx + 1] >= 0) { trisList.Add(i10); trisList.Add(i01); trisList.Add(i11); }
         }
         // Allocate vertex arrays (will be filled by RebuildChunk)
         mesh.SetVertices(new Vector3[(qx+1)*(qz+1)]);
         mesh.SetNormals(new Vector3[(qx+1)*(qz+1)]);
         mesh.SetUVs(0, new Vector2[(qx+1)*(qz+1)]);
         mesh.SetUVs(1, new Vector2[(qx+1)*(qz+1)]);
-        mesh.SetTriangles(tris, 0);
+        if (tris != null) mesh.SetTriangles(tris, 0);
+        else mesh.SetTriangles(trisList, 0);
     }
 
     // ── Chunk rebuild (CPU, only dirty chunks) ────────────────────────────────

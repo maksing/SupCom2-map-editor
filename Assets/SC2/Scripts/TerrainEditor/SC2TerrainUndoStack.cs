@@ -301,7 +301,7 @@ public sealed class SC2TerrainUndoStack
             data.BackgroundTerrainData.Pairs[0].SimplifyRatio = snapshot.BackgroundSimplifyRatio;
         data.GlobalUvScaleEnabled = snapshot.GlobalUvScaleEnabled;
         data.GlobalUvScale = snapshot.GlobalUvScale;
-        SC2BackgroundTerrainPreview.MarkDirty();
+        SC2BackgroundRuntimeSync.MarkDirty();
         foreach (var p in data.Pairs)
             p?.InvalidateTriCount();
         data.InvalidateGeometryCache();
