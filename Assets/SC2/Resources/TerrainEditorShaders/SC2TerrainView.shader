@@ -14,6 +14,30 @@ Shader "Hidden/SC2/TerrainView"
         _Diffuse2Arr  ("Diffuse2 Arr",  2DArray) = "" {}
         _Diffuse1Fallback ("Diffuse 1 Fallback", 2D) = "white" {}
         _Diffuse2Fallback ("Diffuse 2 Fallback", 2D) = "white" {}
+        // Baked RNM lighting (SC2RnmBakeService) — 3 basis-direction RGB
+        // textures per pair, same _0/_1/_2 layout ExportRnmMaskByName writes
+        // to disk, so PreviewMode==4 shows the real baked terrain self-
+        // shadow instead of a flat per-vertex-normal approximation once
+        // "Bake Lighting" has run. Packed into ONE Texture2DArray (layer =
+        // pairIdx*3 + basisIndex) rather than 3 separate arrays — d3d11
+        // caps a pixel shader at 16 total sampler registers, and this
+        // shader was already close to that with _Diffuse1/2Arr +
+        // fallbacks + the overlay samplers; 3 more arrays (+3 fallbacks)
+        // pushed it to 17 ("maximum ps_4_0 sampler register index (16)
+        // exceeded"). One array + one shared fallback costs only 2 more
+        // sampler slots instead of 6. Grey (not black/white) fallback so an
+        // un-baked pair still reads as lit rather than going solid black.
+        _RnmArr      ("RNM Basis Arr (packed x3)", 2DArray) = "" {}
+        _RnmFallback ("RNM Fallback", 2D) = "grey" {}
+        // World-space XZ -> RNM mask UV transform (SC2TerrainRuntime.
+        // SetRnmUvTransform): rnmUV = (worldXZ - offset) * invScale. Core
+        // uses a fixed 1024-unit tiling period (matches SC2TerrainExporter's
+        // own core-only Uv2 = worldXZ/1024); the background instead
+        // normalizes to its own bounding box (matches the exporter's
+        // background branch), since its footprint can span many thousands
+        // of world units.
+        _RnmUvOffset   ("RNM UV Offset", Vector) = (0,0,0,0)
+        _RnmUvInvScale ("RNM UV Inverse Scale", Vector) = (0.0009765625,0.0009765625,0,0)
         _AmbientColor ("Ambient",       Color)   = (1,1,1,1)
         _TexturedBrightness ("Textured Brightness", Float) = 2
         _UseArrayTextures ("Use Array Textures", Int) = 1
@@ -69,6 +93,10 @@ Shader "Hidden/SC2/TerrainView"
             UNITY_DECLARE_TEX2DARRAY(_Diffuse2Arr);
             sampler2D _Diffuse1Fallback;
             sampler2D _Diffuse2Fallback;
+            UNITY_DECLARE_TEX2DARRAY(_RnmArr);
+            sampler2D _RnmFallback;
+            float4 _RnmUvOffset;
+            float4 _RnmUvInvScale;
             float4 _AmbientColor;
             float _TexturedBrightness;
             float4 _HeightGradientMinMax;
@@ -493,17 +521,60 @@ Shader "Hidden/SC2/TerrainView"
                     return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1), i.uv0), i.uv0);
                 }
 
-                float3 nrm = normalize(i.nrm);
-                float3 B0 = float3( 0.8165,  0.0000,  0.5774);
-                float3 B1 = float3(-0.4082,  0.7071,  0.5774);
-                float3 B2 = float3(-0.4082, -0.7071,  0.5774);
-                half r0 = saturate(dot(nrm, B0));
-                half r1 = saturate(dot(nrm, B1));
-                half r2 = saturate(dot(nrm, B2));
-                half3 rnmLight = (r0 + r1 + r2) / 3.0 * _AmbientColor.rgb;
-                float3 L = normalize(float3(0.5, 1.0, 0.3));
-                float ndl = abs(dot(nrm, L)) * 0.18 + 0.82;
-                half3 lit = albedo * (ndl * _AmbientColor.rgb + rnmLight * blend * 0.5);
+                // Real baked RNM lighting (SC2RnmBakeService) instead of a
+                // flat per-vertex-normal approximation. m0/m1/m2 are the 3
+                // baked basis-direction textures — terrain self-shadow is
+                // already burned into their RGB by FinalizeLighting, so no
+                // per-pixel normal-map/light-direction math is needed here
+                // (this shader has no detail normal map to modulate it with
+                // in the first place, unlike Resources/SC2Terrain.shader's
+                // own RNM branch for imported maps). Weighting each basis by
+                // its own fixed Z component (all three share 0.5774 by
+                // construction, since B0/B1/B2 are equally tilted off a flat
+                // reference normal) exactly reproduces FinalizeLighting's own
+                // "unperturbed normal" calibration
+                // (BasisWeightNormalization = 1/(3*0.5774)), so a baked pair
+                // shows the same brightness/shadowing here as in-game.
+                float2 rnmUV = (i.uv0 - _RnmUvOffset.xy) * _RnmUvInvScale.xy;
+                half3 m0, m1, m2;
+                if (_UseArrayTextures != 0)
+                {
+                    m0 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 0))).rgb;
+                    m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 1))).rgb;
+                    m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 2))).rgb;
+                }
+                else
+                {
+                    // Rare compatibility-only path (no 2D-array texture
+                    // support) — collapses to one shared sample rather than
+                    // 3 separate fallback samplers, to stay within d3d11's
+                    // 16-sampler cap (see this shader's own _RnmArr comment).
+                    m0 = m1 = m2 = tex2D(_RnmFallback, rnmUV).rgb;
+                }
+                half3 rnmColor = (m0 + m1 + m2) * 0.5774;
+                // Confirmed via a debug build that the real baked occlusion
+                // signal IS present and correctly shaped/positioned (matches
+                // the in-game cast shadow's own outline) — but it's a
+                // genuinely subtle hue/brightness shift toward a fairly
+                // bright "sky-bounce" ShadowColor by design (real vanilla
+                // masks aren't meant to go dark on their own), and it lives
+                // in a narrow band close to 1.0. A flat brightness multiplier
+                // (tried first) only pushed everything closer to saturating
+                // white without making the shadow itself read as darker — a
+                // genuine contrast stretch around the midtone is what
+                // actually widens the visible gap between lit and shadowed
+                // areas, at the cost of some flattening at the very top/
+                // bottom of the range (acceptable for a preview mode). The
+                // dramatic, sharp-edged cast shadow the real game shows still
+                // comes from its OWN real-time terrain shadow map
+                // (SC2Terrain.shader's DYNAMIC_SHADOWS/ComputeShadow path,
+                // sampling an actual ShadowMap render target) — a separate
+                // rendering feature this procedural preview has no
+                // equivalent of; this contrast stretch only makes the RNM
+                // bake's own (real, but subtle) signal easier to see.
+                const half RNM_CONTRAST = 2.2;
+                rnmColor = saturate((rnmColor - 0.5) * RNM_CONTRAST + 0.5);
+                half3 lit = albedo * rnmColor;
                 return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1), i.uv0), i.uv0);
             }
             ENDCG

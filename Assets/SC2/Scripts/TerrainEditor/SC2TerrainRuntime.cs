@@ -183,6 +183,30 @@ public class SC2TerrainRuntime : IDisposable
     private Material       _pairColorViewMat;
     private int            _lastPairHash = -1;
 
+    // Baked RNM lighting preview (SC2RnmBakeService/PreviewMode==4) — packed
+    // into ONE Texture2DArray (layer = pairIdx*3 + basisIndex) instead of 3
+    // separate arrays, since d3d11 caps a pixel shader at 16 total sampler
+    // registers and SC2TerrainView.shader was already close to that — see
+    // this shader's own _RnmArr Properties-block comment. See
+    // SetRnmUvTransform's own doc comment for why this needs a separate
+    // world-space UV transform from the diffuse arrays' uv1_tiled.
+    private Texture2DArray _rnmArray;
+    private Texture2D      _rnmFallback;
+    private Texture2D      _greyTex;
+
+    /// <summary>Unity has no built-in Texture2D.greyTexture (only white/
+    /// black) — used as the default RNM basis color for an un-baked pair, so
+    /// PreviewMode==4 reads as "flat but lit" instead of solid black before
+    /// any bake has run.</summary>
+    private Texture2D GreyTexture()
+    {
+        if (_greyTex != null) return _greyTex;
+        _greyTex = new Texture2D(1, 1, TextureFormat.RGBA32, false, true) { name = "SC2_RnmGrey" };
+        _greyTex.SetPixel(0, 0, new Color32(128, 128, 128, 255));
+        _greyTex.Apply(false);
+        return _greyTex;
+    }
+
     // ── Init ─────────────────────────────────────────────────────────────────
 
     /// <summary>holeTriPairIndex, when given, is the SAME array/convention
@@ -247,6 +271,26 @@ public class SC2TerrainRuntime : IDisposable
         if (_chunkRoot != null) _chunkRoot.transform.position = offset;
     }
 
+    /// <summary>World-space XZ -> RNM basis-texture UV transform for
+    /// PreviewMode==4 (rnmUV = (worldXZ - offset) * (1/span)) — deliberately
+    /// separate from the diffuse arrays' own uv1_tiled (world XZ / each
+    /// pair's TilingScale), because SC2TerrainExporter uses a DIFFERENT UV2
+    /// convention for RNM masks than for diffuse: the core tiles at a fixed
+    /// 1024-unit period regardless of any pair's TilingScale, while the
+    /// background normalizes to its own bounding box instead (matches
+    /// SC2TerrainExporter.Export's two Uv2 branches) since its footprint can
+    /// span many thousands of world units. Called once per
+    /// ApplyPreviewModeToChunksFor, by the caller — this runtime has no way
+    /// to know on its own whether it's the core or the background.</summary>
+    public void SetRnmUvTransform(Vector2 offset, Vector2 span)
+    {
+        if (_sharedChunkMat == null) return;
+        _sharedChunkMat.SetVector("_RnmUvOffset", new Vector4(offset.x, offset.y, 0f, 0f));
+        var invX = span.x > 0.0001f ? 1f / span.x : 0f;
+        var invY = span.y > 0.0001f ? 1f / span.y : 0f;
+        _sharedChunkMat.SetVector("_RnmUvInvScale", new Vector4(invX, invY, 0f, 0f));
+    }
+
     public void Dispose()
     {
         foreach (var c in _chunks) if (c.GO) DestroyObject(c.GO);
@@ -256,6 +300,8 @@ public class SC2TerrainRuntime : IDisposable
         SafeRelease(PairMapRT); SafeRelease(BlendRT); SafeRelease(_pairColorRT);
         if (_diffuse1Array != null) DestroyObject(_diffuse1Array);
         if (_diffuse2Array != null) DestroyObject(_diffuse2Array);
+        if (_rnmArray != null) DestroyObject(_rnmArray);
+        if (_greyTex != null) DestroyObject(_greyTex);
         if (_pairLUT       != null) DestroyObject(_pairLUT);
         if (_tilingLUT     != null) DestroyObject(_tilingLUT);
         if (_pairColorRT_tex != null) DestroyObject(_pairColorRT_tex);
@@ -266,6 +312,7 @@ public class SC2TerrainRuntime : IDisposable
         _chunkRoot = null; _sharedChunkMat = null;
         PairMapRT = null; BlendRT = null; _pairColorRT = null;
         _diffuse1Array = null; _diffuse2Array = null; _diffuse1Fallback = null; _diffuse2Fallback = null; _pairLUT = null; _tilingLUT = null;
+        _rnmArray = null; _rnmFallback = null; _greyTex = null;
         _pairColorRT_tex = null; _pairColorViewMat = null; _paintBrushMat = null; _viewMat = null;
         _activeBlendMaskName = null;
         _initialized = false;
@@ -891,10 +938,22 @@ public class SC2TerrainRuntime : IDisposable
         _sharedChunkMat.SetVector("_HeightGradientMinMax", new Vector4(minHeight, maxHeight, 0f, 0f));
     }
 
-    public void SetAllPairMaterials(PairMaterialData[] pairs, int previewMode)
+    public void SetAllPairMaterials(PairMaterialData[] pairs, int previewMode, int bakeGeneration = 0)
     {
         var n = Mathf.Min(pairs?.Length ?? 0, 72);
         RebuildDiffuseArrays(pairs, n);
+        // RebuildRnmArrays does a full CPU readback (CopyRawToArray) per
+        // layer, same cost class as RebuildDiffuseArrays. Only rebuild the
+        // real per-pair content when PreviewMode==4 is actually going to
+        // sample it, AND only when bakeGeneration (SC2TerrainData.
+        // RnmBakeGeneration, bumped once per completed Bake) has actually
+        // moved since the last rebuild — without this second check, simply
+        // leaving the RNM preview mode on while sculpting/painting (each of
+        // which calls ApplyPreviewModeToChunks for unrelated reasons) redid
+        // this full rebuild on every such call, a real perf regression with
+        // no equivalent cost before real baked-data sampling existed.
+        if (previewMode == 4) RebuildRnmArrays(pairs, n, bakeGeneration);
+        else EnsureFallbackRnmArrays();
         RebuildLUTs(pairs, n);
         var mat = _sharedChunkMat;
         if (mat == null) return;
@@ -906,6 +965,8 @@ public class SC2TerrainRuntime : IDisposable
         if (_diffuse2Array != null) mat.SetTexture("_Diffuse2Arr", _diffuse2Array);
         mat.SetTexture("_Diffuse1Fallback", _diffuse1Fallback != null ? _diffuse1Fallback : Texture2D.whiteTexture);
         mat.SetTexture("_Diffuse2Fallback", _diffuse2Fallback != null ? _diffuse2Fallback : Texture2D.whiteTexture);
+        if (_rnmArray != null) mat.SetTexture("_RnmArr", _rnmArray);
+        mat.SetTexture("_RnmFallback", _rnmFallback != null ? _rnmFallback : GreyTexture());
         // Was Application.isEditor ? 1 : 0 — that always evaluated to 0 in a
         // standalone Build & Run player, so Textured mode with 2+ material
         // pairs could never sample Texture2DArray there and silently fell back
@@ -924,6 +985,11 @@ public class SC2TerrainRuntime : IDisposable
         if (mat == null || !mat.HasProperty("_TexturedBrightness"))
             return;
 
+        // Mode 4 (TexturedRNM) does its own readability fix directly in the
+        // shader (a contrast stretch around the midtone, RNM_CONTRAST) —
+        // a flat brightness multiplier here was tried first and just pushed
+        // everything toward saturating white instead of making the shadow
+        // read as darker. See SC2TerrainView.shader's own comment on this.
         mat.SetFloat("_TexturedBrightness", previewMode == 0 ? 2f : 1f);
     }
 
@@ -932,6 +998,11 @@ public class SC2TerrainRuntime : IDisposable
         public Texture2D Diffuse1, Diffuse2;
         public Color     Color1, Color2;
         public float     TilingScale;
+        // Baked RNM basis textures (SC2MaterialPair.RnmPreviewMask0/1/2) —
+        // null when the pair has never been baked, in which case
+        // RebuildRnmArrays' own CopyRawToArray null-fallback fills that
+        // layer with flat mid-grey instead of leaving it undefined.
+        public Texture2D Rnm0, Rnm1, Rnm2;
     }
 
     private void RebuildLUTs(PairMaterialData[] pairs, int n)
@@ -1197,6 +1268,66 @@ public class SC2TerrainRuntime : IDisposable
         SC2Log.Log($"[SC2Runtime] Apply() done in {swApply.ElapsedMilliseconds}ms. Total RebuildDiffuseArrays: {swTotal.ElapsedMilliseconds}ms");
     }
 
+    /// <summary>Same per-pair Texture2DArray pattern as RebuildDiffuseArrays
+    /// above, for the 3 baked RNM basis textures (SC2MaterialPair.
+    /// RnmPreviewMask0/1/2) instead of the 2 diffuse ones. Deliberately NOT
+    /// hash-cached like RebuildDiffuseArrays is: baked lighting only changes
+    /// on an explicit "Bake Lighting" click or a Paint Blend stroke, and
+    /// this whole method only ever runs from the same discrete, UI-event-
+    /// driven call sites ApplyPreviewModeToChunks(For) already has (never a
+    /// per-frame path) — a caching layer here would just be complexity with
+    /// no measured cost to justify it. Reuses the diffuse arrays' own w/h so
+    /// this doesn't need a separate memory-budget decision: RNM lighting is
+    /// low-frequency data, so downsampling from the mask's real (often
+    /// 2048x2048) resolution to whatever the diffuse arrays already settled
+    /// on costs nothing visible.</summary>
+    private int _lastRnmHash = -1;
+
+    private void RebuildRnmArrays(PairMaterialData[] pairs, int n, int bakeGeneration)
+    {
+        var pairCount = Mathf.Max(n, 1);
+        var layers = pairCount * 3;
+        // Cache-skip mirrors RebuildDiffuseArrays' own _lastPairHash — but
+        // RnmPreviewMask0/1/2 are REUSED Texture2D instances across a
+        // re-bake (SC2TerrainMaterialModel.FillCombinedMask only creates a
+        // new one when the size changes), so their GetInstanceID() alone
+        // can't detect "the same pair got re-baked with new content" —
+        // bakeGeneration (bumped once per completed Bake) is folded in
+        // specifically to catch that case.
+        var hash = pairCount * 397 + bakeGeneration;
+        for (var i = 0; i < n && pairs != null; i++)
+            hash = hash * 31 + (pairs[i].Rnm0?.GetInstanceID() ?? 0);
+        if (hash == _lastRnmHash && _rnmArray != null && _rnmArray.depth == layers)
+            return;
+        _lastRnmHash = hash;
+
+        if (_rnmArray != null) { DestroyObject(_rnmArray); _rnmArray = null; }
+        // Deliberately NOT tied to the diffuse arrays' own resolution
+        // (unlike an earlier version of this) — that's whatever a pair's
+        // assigned Diffuse texture happens to be, which can be small (or
+        // the 64x64 placeholder when pair 0 has no diffuse texture at all),
+        // silently flattening the baked lighting's real spatial detail down
+        // to near-nothing regardless of the actual bake quality. A fixed
+        // resolution keeps RNM lighting an independent decision.
+        const int w = 1024, h = 1024;
+        _rnmArray = new Texture2DArray(w, h, layers, TextureFormat.RGBA32, false, true)
+            { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, name = "SC2_RnmArr" };
+        _rnmFallback = pairs != null && n > 0 && pairs[0].Rnm0 != null ? pairs[0].Rnm0 : GreyTexture();
+        var bakedPairs = 0;
+        for (var i = 0; i < pairCount; i++)
+        {
+            var r0 = pairs != null && i < pairs.Length ? pairs[i].Rnm0 : null;
+            var r1 = pairs != null && i < pairs.Length ? pairs[i].Rnm1 : null;
+            var r2 = pairs != null && i < pairs.Length ? pairs[i].Rnm2 : null;
+            if (r0 != null) bakedPairs++;
+            CopyRawToArray(_rnmArray, r0, i * 3 + 0, w, h);
+            CopyRawToArray(_rnmArray, r1, i * 3 + 1, w, h);
+            CopyRawToArray(_rnmArray, r2, i * 3 + 2, w, h);
+        }
+        _rnmArray.Apply();
+        SC2Log.Log($"[SC2Runtime] RebuildRnmArrays: gen={bakeGeneration}, {bakedPairs}/{pairCount} pair(s) have real baked data, array {w}x{h}x{layers}.");
+    }
+
     private static void CopyToArray(Texture2DArray arr, Texture2D src, int layer, int w, int h)
     {
         if (src == null)
@@ -1227,11 +1358,50 @@ public class SC2TerrainRuntime : IDisposable
         }
     }
 
+    /// <summary>Same as CopyToArray above, but for raw/linear data (baked
+    /// RNM basis colors) rather than sRGB diffuse albedo — uses a Linear
+    /// intermediate RenderTexture and a linear readback Texture2D so the
+    /// blit doesn't apply an unwanted gamma curve to values that were never
+    /// gamma-encoded in the first place (matches RnmPreviewMask0/1/2's own
+    /// construction in SC2TerrainMaterialModel.FillCombinedMask, and the
+    /// real import's own isLinear:true for _RNMMask0/1/2 in
+    /// SC2TerrainMaterialFactory).</summary>
+    private static void CopyRawToArray(Texture2DArray arr, Texture2D src, int layer, int w, int h)
+    {
+        if (src == null)
+        {
+            var pixels = new Color32[w * h];
+            for (var i = 0; i < pixels.Length; i++) pixels[i] = new Color32(128, 128, 128, 255);
+            arr.SetPixels32(pixels, layer, 0);
+            return;
+        }
+
+        var tmp = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+        var prev = RenderTexture.active;
+        Texture2D readable = null;
+        try
+        {
+            Graphics.Blit(src, tmp);
+            RenderTexture.active = tmp;
+            readable = new Texture2D(w, h, TextureFormat.RGBA32, false, true);
+            readable.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+            readable.Apply(false);
+            arr.SetPixels32(readable.GetPixels32(), layer, 0);
+        }
+        finally
+        {
+            if (readable != null) DestroyObject(readable);
+            RenderTexture.active = prev;
+            RenderTexture.ReleaseTemporary(tmp);
+        }
+    }
+
     // ── Material / Shader setup ───────────────────────────────────────────────
 
     private void SetChunkMaterial(Material mat, int cx, int cz)
     {
         EnsureFallbackDiffuseArrays();
+        EnsureFallbackRnmArrays();
         // uv2 per chunk: offset into global [0..1] UV
         // Stored per-vertex in uv2, so no need for per-material UV offset
         mat.SetTexture("_PairMapTex",  PairMapRT);
@@ -1241,6 +1411,10 @@ public class SC2TerrainRuntime : IDisposable
         mat.SetTexture("_Diffuse2Arr", _diffuse2Array);
         mat.SetTexture("_Diffuse1Fallback", _diffuse1Fallback != null ? _diffuse1Fallback : Texture2D.whiteTexture);
         mat.SetTexture("_Diffuse2Fallback", _diffuse2Fallback != null ? _diffuse2Fallback : Texture2D.whiteTexture);
+        mat.SetTexture("_RnmArr", _rnmArray);
+        mat.SetTexture("_RnmFallback", _rnmFallback != null ? _rnmFallback : GreyTexture());
+        mat.SetVector ("_RnmUvOffset", new Vector4(0f, 0f, 0f, 0f));
+        mat.SetVector ("_RnmUvInvScale", new Vector4(1f / 1024f, 1f / 1024f, 0f, 0f));
         mat.SetInt    ("_UseArrayTextures", SystemInfo.supports2DArrayTextures ? 1 : 0);
         mat.SetColor  ("_AmbientColor",Color.white);
         mat.SetInt    ("_PreviewMode", 0);
@@ -1277,6 +1451,27 @@ public class SC2TerrainRuntime : IDisposable
         _diffuse2Array.SetPixels32(neutral, 0);
         _diffuse1Array.Apply(false);
         _diffuse2Array.Apply(false);
+    }
+
+    /// <summary>Same reasoning as EnsureFallbackDiffuseArrays above — a
+    /// freshly-created chunk needs SOME _RnmArr bound before the first real
+    /// SetAllPairMaterials/RebuildRnmArrays call happens, or Unity renders
+    /// the unbound Texture2DArray slot as an error/pink texture.</summary>
+    private void EnsureFallbackRnmArrays()
+    {
+        if (_rnmArray != null)
+            return;
+
+        _rnmArray = new Texture2DArray(4, 4, 3, TextureFormat.RGBA32, false, true)
+        {
+            wrapMode = TextureWrapMode.Repeat,
+            filterMode = FilterMode.Point,
+            name = "SC2_RnmArr_Fallback"
+        };
+        var neutral = new Color32[16];
+        for (var i = 0; i < neutral.Length; i++) neutral[i] = new Color32(128, 128, 128, 255);
+        for (var layer = 0; layer < 3; layer++) _rnmArray.SetPixels32(neutral, layer);
+        _rnmArray.Apply(false);
     }
 
     private bool EnsureShaders()

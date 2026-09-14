@@ -404,6 +404,7 @@ public static class SC2RnmBakeService
             bakedCount++;
         }
 
+        bakeSettingsSource.RnmBakeGeneration++;
         return $"Baked lighting for {bakedCount} {unitLabel}.";
     }
 

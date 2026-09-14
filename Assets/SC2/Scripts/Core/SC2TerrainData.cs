@@ -503,6 +503,18 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// this slider.</summary>
     public int RnmBakeShadowSoftRadius = 6;
 
+    /// <summary>Bumped once per completed Bake()/BakeBackground() call (see
+    /// SC2RnmBakeService.BakeInternal). NonSerialized — this only needs to
+    /// invalidate in-memory caches for the current session, never persist.
+    /// SC2TerrainRuntime.RebuildRnmArrays uses this to skip re-uploading its
+    /// (expensive, full CPU-readback) baked-lighting Texture2DArray on every
+    /// SetAllPairMaterials call while PreviewMode==4 is active — without it,
+    /// simply leaving the RNM preview mode on while sculpting/painting (each
+    /// of which calls ApplyPreviewModeToChunks to refresh other state) redid
+    /// that full rebuild on every such call, a real perf regression that had
+    /// no equivalent cost before real baked-data sampling existed.</summary>
+    [NonSerialized] public int RnmBakeGeneration;
+
     [Header("Environment (info.bdf)")]
     /// <summary>Raw 508-byte EnvironmentHeader (BdfIO.Formats.Info.InfoModel.Header
     /// layout, byte-for-byte) — every Sun/Water/Fog/Glow/etc. field InfoModel

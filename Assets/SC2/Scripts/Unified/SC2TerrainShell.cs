@@ -3774,6 +3774,12 @@ public class SC2TerrainShell : ScriptableObject
     private bool _forceRnmOverlay;
     public bool ForceRnmOverlay => _forceRnmOverlay;
 
+    // Tracks the RnmBakeGeneration last used to refresh RnmPreviewMask0/1/2
+    // in ApplyPreviewModeToChunksFor — see that method's own comment on why
+    // this gate exists (that refresh is expensive and this method runs on
+    // nearly every repaint while PreviewMode==4 is active).
+    private int _lastRnmPreviewGeneration = -1;
+
     /// <summary>Forces the RNM-textured shader mode (PreviewMode.TexturedRNM's
     /// shaderMode==4) regardless of the Terrain tab's own selected preview
     /// mode. Only overrides the "normal" views (Textured/HeightGradient) —
@@ -4079,8 +4085,32 @@ public class SC2TerrainShell : ScriptableObject
             return;
         }
 
+        int shaderMode = _prev switch
+        {
+            // ForceRnmOverlay only overrides the "normal" views (Textured/
+            // HeightGradient) — MatColors keeps its own explicit debug view.
+            PreviewMode.Textured => _forceRnmOverlay ? 4 : 0,
+            PreviewMode.TexturedRNM => 4,
+            PreviewMode.MatColors => 1,
+            PreviewMode.HeightGradient => _forceRnmOverlay ? 4 : 0,
+            _ => 0,
+        };
         var n = Mathf.Min(data.Pairs.Count, 72);
         var mats = new SC2TerrainRuntime.PairMaterialData[n];
+        // RefreshRnmPreviewTextures rebuilds RnmPreviewMask0/1/2 from a
+        // pair's baked bytes (a raw LoadRawTextureData+Apply across up to
+        // MaskWidth*MaskHeight texels) — genuinely expensive, and this
+        // method runs on essentially every repaint/mouse-move while a
+        // preview mode is active (confirmed: 18k+ calls in one session), so
+        // calling it unconditionally whenever shaderMode==4 was the actual
+        // remaining RNM-mode-only lag (the array-rebuild gate added earlier
+        // only covered RebuildRnmArrays itself, not this upstream step).
+        // Only worth redoing when the bake data has actually changed.
+        if (shaderMode == 4 && _lastRnmPreviewGeneration != _data.RnmBakeGeneration)
+        {
+            foreach (var pair in data.Pairs) pair.RefreshRnmPreviewTextures();
+            _lastRnmPreviewGeneration = _data.RnmBakeGeneration;
+        }
         for (var i = 0; i < n; i++)
         {
             var p = data.Pairs[i];
@@ -4102,20 +4132,42 @@ public class SC2TerrainShell : ScriptableObject
                 // which already correctly used coreData) looked right —
                 // exactly the "only the seam respects it" symptom reported.
                 TilingScale = _data.EffectiveUvTilingScale(p),
+                Rnm0 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask0 : null,
+                Rnm1 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask1 : null,
+                Rnm2 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask2 : null,
             };
         }
-        int shaderMode = _prev switch
-        {
-            // ForceRnmOverlay only overrides the "normal" views (Textured/
-            // HeightGradient) — MatColors keeps its own explicit debug view.
-            PreviewMode.Textured => _forceRnmOverlay ? 4 : 0,
-            PreviewMode.TexturedRNM => 4,
-            PreviewMode.MatColors => 1,
-            PreviewMode.HeightGradient => _forceRnmOverlay ? 4 : 0,
-            _ => 0,
-        };
-        runtime.SetAllPairMaterials(mats, shaderMode);
+        // _data.RnmBakeGeneration (never `data` — the bake config, and now
+        // its generation counter, only ever lives on the core, matching
+        // "there's only one Lighting Bake config" for both core and
+        // background bakes — see SC2RnmBakeService.BakeInternal's own
+        // bakeSettingsSource parameter).
+        runtime.SetAllPairMaterials(mats, shaderMode, _data.RnmBakeGeneration);
         runtime.SetHeightGradientOverlay(_prev == PreviewMode.HeightGradient || _forceHfieldOverlay, _heightGradientMin, _heightGradientMax);
+
+        // RNM basis-texture UV domain — see SC2TerrainRuntime.
+        // SetRnmUvTransform's own doc comment. Set unconditionally (cheap
+        // uniform writes) rather than only under shaderMode==4, so toggling
+        // into TexturedRNM later doesn't need this method to re-run first.
+        if (data == _data)
+            runtime.SetRnmUvTransform(Vector2.zero, new Vector2(1024f, 1024f));
+        else
+        {
+            // ComputeBounds returns WORLD-space bounds (matches
+            // SC2TerrainExporter's own worldPos - bgMinX), but this
+            // runtime's own chunk mesh stores raw LOCAL grid-space
+            // coordinates in uv0 (RebuildChunk's uv1arr, pre-SetWorldOrigin
+            // offset — only the transform position shifts vertices into
+            // world space, not the UV data baked at chunk-build time). Must
+            // subtract the same world offset back out of the bounds so both
+            // sides of "(uv0 - offset)" in the shader are in the SAME
+            // (local) frame.
+            SC2BackgroundTerrain.ComputeBounds(_data, _data.BackgroundTerrainSize,
+                out var bgMinX, out var bgMinZ, out var bgMaxX, out var bgMaxZ, out _);
+            var worldOffset = SC2BackgroundTerrain.GetWorldOffset(_data);
+            runtime.SetRnmUvTransform(new Vector2(bgMinX - worldOffset.x, bgMinZ - worldOffset.z),
+                new Vector2(Mathf.Max(1f, bgMaxX - bgMinX), Mathf.Max(1f, bgMaxZ - bgMinZ)));
+        }
     }
 
     private void RepaintPairColorRT()
