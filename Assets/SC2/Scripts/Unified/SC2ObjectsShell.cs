@@ -160,8 +160,6 @@ public sealed class SC2ObjectsShell
     private string _lastActionSummary;
     private readonly SC2UnitPropBrowser _assetBrowser = new SC2UnitPropBrowser();
     private int _lastSubTab;
-    private int _pathPickMode; // 0 = none, 1 = picking Node A, 2 = picking Node B
-    private int _pathNodeA = -1, _pathNodeB = -1;
 
     // DrawPaths' own edges/marker-lookup/dup+dangling-count cache — see
     // DrawPaths' own comment on why this exists.
@@ -172,6 +170,12 @@ public sealed class SC2ObjectsShell
     private Dictionary<int, SC2ObjMarker> _pathsCacheMarkersById;
     private int _pathsCacheDup;
     private int _pathsCacheDangling;
+    // Collapsed by default — a large Path Graph's edge list (the thing that
+    // motivated the cache above in the first place) is exactly the case
+    // where rendering hundreds/thousands of rows every time the Paths tab
+    // just happens to be open is the least useful default.
+    private bool _pathsEdgesExpanded;
+    private (int a, int b)? _selectedPathEdge;
 
     // ── Undo (JSON snapshot of the whole Objects domain) ────────────────
     [Serializable]
@@ -4270,40 +4274,64 @@ public sealed class SC2ObjectsShell
         var edges = _pathsCacheEdges;
         var edgeMarkersById = _pathsCacheMarkersById;
 
-        SC2EnvFieldGui.SectionLabel($"Edges ({edges.Count})");
-        // The real remaining "large graph -> lag" cost once the lookup
-        // above stopped being O(n): this loop rendered one full GUILayout
-        // row (BeginHorizontal/Label/Button/EndHorizontal, each with real
-        // per-control layout/style/GC cost) per edge, EVERY frame, with no
-        // cap at all — a graph with hundreds/thousands of path-node edges
-        // (a "large graph", not necessarily many separate SC2ObjGraph
-        // objects) made this list alone the dominant per-frame cost.
-        // Capped the same way SC2TextureVirtualGrid/MaxViewportDots already
-        // cap other large lists elsewhere in this app. Bulk cleanup beyond
-        // the cap still works via "Disconnect selected" above (select the
-        // markers, not individual edges) — this only limits the one-by-one
-        // per-edge X button list.
-        const int MaxEdgeRows = 200;
-        var rowCount = Mathf.Min(edges.Count, MaxEdgeRows);
-        for (var i = 0; i < rowCount; i++)
+        if (SC2EnvFieldGui.Foldout(ref _pathsEdgesExpanded, $"Edges ({edges.Count})"))
         {
-            GUILayout.BeginHorizontal();
-            var (a, b) = edges[i];
-            var nameA = edgeMarkersById.TryGetValue(a, out var markerA) ? markerA.Name : "?(missing)";
-            var nameB = edgeMarkersById.TryGetValue(b, out var markerB) ? markerB.Name : "?(missing)";
-            GUILayout.Label(TruncateForLabel($"{nameA} — {nameB}", w * 0.7f), GUILayout.Width(w * 0.7f));
-            if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
+            // A row click selects that edge (toggle off on a second click,
+            // same convention as everywhere else in this file) so "Focus
+            // camera" below has something to jump to — this list has no
+            // other way to locate one specific edge on a large map.
+            if (_selectedPathEdge.HasValue && !edges.Contains(_selectedPathEdge.Value))
+                _selectedPathEdge = null;
+
+            // The real remaining "large graph -> lag" cost once the lookup
+            // above stopped being O(n): this loop rendered one full GUILayout
+            // row (BeginHorizontal/Label/Button/EndHorizontal, each with real
+            // per-control layout/style/GC cost) per edge, EVERY frame, with no
+            // cap at all — a graph with hundreds/thousands of path-node edges
+            // (a "large graph", not necessarily many separate SC2ObjGraph
+            // objects) made this list alone the dominant per-frame cost.
+            // Capped the same way SC2TextureVirtualGrid/MaxViewportDots already
+            // cap other large lists elsewhere in this app. Bulk cleanup beyond
+            // the cap still works via "Disconnect selected" above (select the
+            // markers, not individual edges) — this only limits the one-by-one
+            // per-edge X button list. Now also gated behind the foldout above
+            // (collapsed by default), so none of this runs at all until the
+            // user actually wants to see individual edges.
+            const int MaxEdgeRows = 200;
+            var rowCount = Mathf.Min(edges.Count, MaxEdgeRows);
+            for (var i = 0; i < rowCount; i++)
             {
-                PushUndo();
-                SC2ObjectGraphRefs.RemoveAt(g2, i);
-                MarkObjectsDirty();
+                GUILayout.BeginHorizontal();
+                var edge = edges[i];
+                var (a, b) = edge;
+                var nameA = edgeMarkersById.TryGetValue(a, out var markerA) ? markerA.Name : "?(missing)";
+                var nameB = edgeMarkersById.TryGetValue(b, out var markerB) ? markerB.Name : "?(missing)";
+                var isSel = _selectedPathEdge == edge;
+                var label = $"{(isSel ? "● " : "○ ")}{nameA} — {nameB}";
+                if (GUILayout.Button(TruncateForLabel(label, w * 0.7f), GUILayout.Width(w * 0.7f)))
+                    _selectedPathEdge = isSel ? null : edge;
+                if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
+                {
+                    PushUndo();
+                    SC2ObjectGraphRefs.RemoveAt(g2, i);
+                    if (isSel) _selectedPathEdge = null;
+                    MarkObjectsDirty();
+                    GUILayout.EndHorizontal();
+                    break;
+                }
                 GUILayout.EndHorizontal();
-                break;
             }
-            GUILayout.EndHorizontal();
+            if (edges.Count > MaxEdgeRows)
+                SC2EnvFieldGui.WrapLabel($"Showing the first {MaxEdgeRows} of {edges.Count} edges — use \"Disconnect selected\" below (select the markers, not individual edges) for bulk cleanup.", w);
+
+            if (_selectedPathEdge.HasValue)
+            {
+                var (selA, selB) = _selectedPathEdge.Value;
+                if (edgeMarkersById.TryGetValue(selA, out var focusA) && edgeMarkersById.TryGetValue(selB, out var focusB) &&
+                    SC2EnvFieldGui.Button("Focus camera on selected edge", GUILayout.Height(SC2UiScale.Pxf(20f))))
+                    RequestCameraFocus?.Invoke((focusA.Position + focusB.Position) * 0.5f);
+            }
         }
-        if (edges.Count > MaxEdgeRows)
-            SC2EnvFieldGui.WrapLabel($"Showing the first {MaxEdgeRows} of {edges.Count} edges — use \"Disconnect selected\" below (select the markers, not individual edges) for bulk cleanup.", w);
 
         var dup = _pathsCacheDup;
         var dangling = _pathsCacheDangling;
@@ -4352,7 +4380,7 @@ public sealed class SC2ObjectsShell
         {
             GUILayout.Space(6);
             SC2EnvFieldGui.SectionLabel($"Selected markers ({_selMarkers.Count}) — from the Markers tab");
-            SC2EnvFieldGui.WrapLabel("Connect links every selected pair exactly once (2 selected → 1 edge, 3 → a full triangle, etc.) — the same \"select the group you mean to join\" model as FAF's map editor.", w);
+            SC2EnvFieldGui.WrapLabel("Connect links every selected pair exactly once (2 selected → 1 edge, 3 → a full triangle, etc.).", w);
             GUILayout.BeginHorizontal();
             if (SC2EnvFieldGui.Button("Connect selected (mesh)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.48f)))
             {
@@ -4365,45 +4393,6 @@ public sealed class SC2ObjectsShell
                 DisconnectSelectedMarkers(g2);
             }
             GUILayout.EndHorizontal();
-        }
-
-        GUILayout.Space(6);
-        SC2EnvFieldGui.SectionLabel("Create edge — pick two nodes explicitly");
-        var nodes = Data.ObjMarkers.Where(m => m.Type != null && m.Type.Contains("Path Node")).ToList();
-
-        GUILayout.BeginHorizontal();
-        var labelA = SC2ObjectGraphRefs.TryGetMarker(Data, _pathNodeA, out var pathMarkerA) ? pathMarkerA.Name : "(none)";
-        if (SC2EnvFieldGui.Button(TruncateForLabel((_pathPickMode == 1 ? "● " : "") + $"Node A: {labelA}", w * 0.48f), GUILayout.Width(w * 0.48f)))
-            _pathPickMode = _pathPickMode == 1 ? 0 : 1;
-        var labelB = SC2ObjectGraphRefs.TryGetMarker(Data, _pathNodeB, out var pathMarkerB) ? pathMarkerB.Name : "(none)";
-        if (SC2EnvFieldGui.Button(TruncateForLabel((_pathPickMode == 2 ? "● " : "") + $"Node B: {labelB}", w * 0.48f), GUILayout.Width(w * 0.48f)))
-            _pathPickMode = _pathPickMode == 2 ? 0 : 2;
-        GUILayout.EndHorizontal();
-
-        if (_pathPickMode != 0)
-        {
-            GUILayout.Label($"Pick Node {(_pathPickMode == 1 ? "A" : "B")} from the list below:");
-            _scrollC = GUILayout.BeginScrollView(_scrollC, GUILayout.Height(SC2UiScale.Pxf(140f)));
-            foreach (var marker in nodes)
-                if (SC2EnvFieldGui.Button(marker.Name, GUILayout.Height(SC2UiScale.Pxf(18f))))
-                {
-                    if (_pathPickMode == 1) _pathNodeA = marker.Id; else _pathNodeB = marker.Id;
-                    _pathPickMode = 0;
-                }
-            GUILayout.EndScrollView();
-        }
-
-        if (SC2EnvFieldGui.Button("Create Edge", GUILayout.Height(SC2UiScale.Pxf(22f))) && _pathNodeA != 0 && _pathNodeB != 0 && _pathNodeA != _pathNodeB)
-        {
-            PushUndo();
-            var existingEdges = new HashSet<(int, int)>();
-            foreach (var (ea, eb) in SC2ObjectGraphRefs.Enumerate(g2))
-                existingEdges.Add(ea < eb ? (ea, eb) : (eb, ea));
-            var addedCount = AddEdgeWithSymmetry(g2, _pathNodeA, _pathNodeB, existingEdges);
-            _lastActionSummary = addedCount > 1
-                ? $"Connected 2 nodes plus {addedCount - 1} symmetric edge(s)."
-                : "Connected 2 nodes.";
-            if (addedCount > 0) MarkObjectsDirty();
         }
     }
 
@@ -4993,20 +4982,19 @@ public sealed class SC2ObjectsShell
     }
 
     /// <summary>Cancels every "armed" viewport tool this tab can have active
-    /// at once — click-to-place (Markers/Units/Army/Props/MarkerPreset),
-    /// the Props paint brush (incl. its eraser variant), and Paths' Node A/B
-    /// picking. Called whenever the user leaves the space a tool was armed
-    /// in: switching Objects sub-tab (DrawEmbeddedGUI, below) or leaving the
-    /// Objects main tab entirely (SC2GameViewEditorUI.HandleObjectsGameViewInput)
-    /// — same cancellation Esc already performs, just triggered by
-    /// navigation instead of a keypress.</summary>
+    /// at once — click-to-place (Markers/Units/Army/Props/MarkerPreset) and
+    /// the Props paint brush (incl. its eraser variant). Called whenever the
+    /// user leaves the space a tool was armed in: switching Objects sub-tab
+    /// (DrawEmbeddedGUI, below) or leaving the Objects main tab entirely
+    /// (SC2GameViewEditorUI.HandleObjectsGameViewInput) — same cancellation
+    /// Esc already performs, just triggered by navigation instead of a
+    /// keypress.</summary>
     public void CancelActiveTools()
     {
         DisarmPlacement();
         _propsBrushActive = false;
         _propsBrushErasing = false;
         _propsBrushDragging = false;
-        _pathPickMode = 0;
     }
 
     /// <summary>Consumes the click if a placement tool is armed and the
@@ -5808,6 +5796,24 @@ public sealed class SC2ObjectsShell
             }
         }
 
+        // Alt+R — the Paths tab's own "Disconnect selected" button
+        // (DrawPaths), the exact inverse of Ctrl+R above. Same gating
+        // reasoning as that hotkey in every respect.
+        if (allowInput && _lastSubTab == TabPaths && Event.current != null &&
+            Event.current.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.DisconnectMarkers", Event.current) &&
+            _selMarkers.Count >= 2)
+        {
+            var disconnectGraph = Data.ObjGraphs.FirstOrDefault(x => x.Id == _selectedGraphId);
+            if (disconnectGraph != null)
+            {
+                PushUndo();
+                DisconnectSelectedMarkers(disconnectGraph);
+                Event.current.Use();
+                RepaintHost?.Invoke();
+                return;
+            }
+        }
+
         // Objects.RotateGesture/ScaleGesture (default R/S) — interactive
         // rotate/scale gesture for the current Props selection, no
         // tool-switch/hold needed (mirrors the drag-to-move gesture's own
@@ -6101,19 +6107,13 @@ public sealed class SC2ObjectsShell
         if (canSelect && e != null && e.type == EventType.MouseDown && e.button == 0)
         {
             // Zones have no drag-move support (HandleViewportDrag only knows
-            // Prop/Marker/Unit), and an armed Node A/B path-node pick means
-            // the click is choosing a graph endpoint, not starting a move —
-            // both keep the old immediate-select-and-consume behavior. Every
-            // other pick (Prop/Marker/Unit, the common case) falls through
-            // to HandleViewportDrag below instead of being consumed here, so
-            // the same click both selects (if not already selected) and arms
-            // a drag — see the canMove comment above for why. GroupHandle is
-            // excluded from the armed-path-pick branch too: it's not a real
-            // Prop/Marker/Unit SelectViewportObject could resolve — falling
-            // into that switch's unhandled case would silently CLEAR the
-            // whole selection (its default non-additive-click behavior)
-            // instead of arming a group drag.
-            if (pick.Kind == ViewportObjectKind.Zone || (_pathPickMode != 0 && pick.Kind != ViewportObjectKind.None && pick.Kind != ViewportObjectKind.GroupHandle))
+            // Prop/Marker/Unit) — keeps the old immediate-select-and-consume
+            // behavior. Every other pick (Prop/Marker/Unit, the common case)
+            // falls through to HandleViewportDrag below instead of being
+            // consumed here, so the same click both selects (if not already
+            // selected) and arms a drag — see the canMove comment above for
+            // why.
+            if (pick.Kind == ViewportObjectKind.Zone)
             {
                 SelectViewportObject(pick);
                 e.Use();
@@ -6124,11 +6124,7 @@ public sealed class SC2ObjectsShell
             {
                 // Empty space in Select mode starts a box/marquee drag
                 // instead of doing nothing — see FinishBoxSelect for what
-                // release does. Also cancels an armed Node A/B path-node
-                // pick (clicking empty space reads as "never mind", not as
-                // leaving it silently stuck armed for whatever the NEXT
-                // click happens to be).
-                _pathPickMode = 0;
+                // release does.
                 if (viewportRect.Contains(mousePosition))
                 {
                     _boxSelectActive = true;
@@ -7091,26 +7087,6 @@ public sealed class SC2ObjectsShell
 
     private void SelectViewportObject(ViewportPick pick)
     {
-        if (_lastSubTab == TabPaths && _pathPickMode != 0)
-        {
-            if (pick.Kind == ViewportObjectKind.Marker &&
-                SC2ObjectGraphRefs.TryGetMarker(Data, pick.Id, out var pathMarker) && !string.IsNullOrEmpty(pathMarker.Type) && pathMarker.Type.Contains("Path Node"))
-            {
-                if (_pathPickMode == 1) _pathNodeA = pick.Id; else _pathNodeB = pick.Id;
-                _pathPickMode = 0;
-                _lastActionSummary = $"Selected path node '{pathMarker.Name}' from viewport.";
-                return;
-            }
-            // Clicked something that isn't a valid path-node marker while
-            // Node A/B pick mode was armed — cancel the pick instead of
-            // leaving it silently stuck (the "Node A/B: ..." button would
-            // otherwise stay highlighted "active" and swallow the NEXT
-            // path-node click too), then fall through to normal selection
-            // below so this click still selects whatever was actually
-            // clicked.
-            _pathPickMode = 0;
-        }
-
         var additive = SC2Hotkeys.ModifierHeld("Objects.SingleSelectAdditiveModifier", Event.current);
         if (!additive) { _selProps.Clear(); _selMarkers.Clear(); _selUnits.Clear(); _selectedZoneId = 0; }
         switch (pick.Kind)
