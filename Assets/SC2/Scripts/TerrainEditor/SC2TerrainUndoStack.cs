@@ -106,6 +106,18 @@ public sealed class SC2TerrainUndoStack
     public string NextUndoLabel => _undo.Count > 0 ? _undo.Peek().Label : null;
     public string NextRedoLabel => _redo.Count > 0 ? _redo.Peek().Label : null;
 
+    /// <summary>Same Stopwatch.GetTimestamp()-based monotonic clock
+    /// SC2ShellUndoCoordinator's own LastActionTimestamp/LastRedoTimestamp
+    /// use, so SC2TerrainShell can compare "most recent action" against
+    /// this stack too. Without this, the global Ctrl+Z dispatcher
+    /// (SC2GameViewEditorUI.UndoTerrainEdit) had no way to know this stack
+    /// held anything at all — SC2TerrainShell.CanUndo only ever checked
+    /// CombinedUndo, so a session that only ever edited the background
+    /// (never the core) reported "Nothing to undo" despite this stack
+    /// genuinely having a real entry waiting.</summary>
+    public long LastActionTimestamp { get; private set; }
+    public long LastRedoTimestamp { get; private set; }
+
     /// <summary>Optional hook for state that lives outside SC2TerrainData but
     /// should still undo/redo in lockstep with a checkpoint — Symmetry,
     /// active preview mode, and active sculpt tool + brush parameters all
@@ -130,6 +142,7 @@ public sealed class SC2TerrainUndoStack
         }
 
         _undo.Push(Capture(data, label));
+        LastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         TrimToMaxDepth(_undo);
         _redo.Clear();
     }
@@ -140,6 +153,7 @@ public sealed class SC2TerrainUndoStack
             return false;
 
         _redo.Push(Capture(data, "(redo target)"));
+        LastRedoTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         var snapshot = _undo.Pop();
         Apply(data, snapshot);
         ApplyExtra?.Invoke(snapshot.Extra);
@@ -152,6 +166,7 @@ public sealed class SC2TerrainUndoStack
             return false;
 
         _undo.Push(Capture(data, "(undo target)"));
+        LastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         var snapshot = _redo.Pop();
         Apply(data, snapshot);
         ApplyExtra?.Invoke(snapshot.Extra);

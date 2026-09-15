@@ -168,6 +168,12 @@ Shader "Hidden/SC2/TerrainView"
                 return max(tex2Dlod(_TilingLUT, float4(LutUV(idx, .5), 0, 0)).r, 0.001);
             }
 
+            // See RebuildLUTs' own comment on _TilingLUT's alpha channel.
+            bool PairHasBakedRnm(int idx)
+            {
+                return tex2Dlod(_TilingLUT, float4(LutUV(idx, .5), 0, 0)).a > 0.5;
+            }
+
             // MatCap-style shading for the debug/no-real-material preview
             // colors (unassigned checker, Mats, Pairs) — a plain fixed
             // world-space directional light leaves a slope facing away from
@@ -519,6 +525,27 @@ Shader "Hidden/SC2/TerrainView"
                 {
                     half3 readableDiffuse = saturate(albedo * _TexturedBrightness);
                     return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                }
+
+                // _HasRNM-style gate, matching the real game's own
+                // SC2TerrainMaterialFactory/SC2Terrain.shader: a pair with no
+                // real baked mask data falls back to plain sun-lit shading
+                // instead of running the RNM formula against a meaningless
+                // grey placeholder. Without this, an unbaked pair (e.g. the
+                // decorative background before its own "Bake Background
+                // Lighting" has been clicked) rendered as a flat, artificially
+                // bright blob sitting right next to a properly baked
+                // neighbour's real shadow variation — a stark, editor-only
+                // seam with no equivalent in the real game (which never mixes
+                // RNM-lit and plain-lit rendering paths this visibly, since
+                // its own fallback looks like ordinary lit terrain).
+                if (!PairHasBakedRnm(pIdx))
+                {
+                    float3 nrm2 = normalize(i.nrm);
+                    float3 L2 = normalize(float3(0.5, 1.0, 0.3));
+                    half ndl2 = abs(dot(nrm2, L2)) * 0.3 + 0.7;
+                    half3 lit2 = albedo * ndl2;
+                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1), i.uv0), i.uv0);
                 }
 
                 // Real baked RNM lighting (SC2RnmBakeService) instead of a

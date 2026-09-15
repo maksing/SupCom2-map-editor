@@ -219,6 +219,18 @@ public class SC2TerrainShell : ScriptableObject
     /// all before (core sculpting never touched anything background-side).</summary>
     private bool _seamSkirtHeightHookWired;
 
+    /// <summary>Set when the seam skirt's very first Rebuild (from
+    /// EnsureBackgroundRuntime's own "just created _bgRuntime" branch) ran
+    /// before the CORE's own _runtime existed yet — SampleLiveRuntimeHeight
+    /// silently returns 0 for a null Runtime, so every core-side seam vertex
+    /// sank to world Y=0 on map load, self-correcting only once something
+    /// else (any later Rebuild call, e.g. from hovering the background)
+    /// happened to fire after Runtime was finally set up. Checked once per
+    /// tick (see OnGameViewGUI's own "keep it live" background block) so
+    /// this heals itself the first frame Runtime becomes non-null, instead
+    /// of needing user interaction to notice.</summary>
+    private bool _seamPendingCoreRuntimeReady;
+
     private void RefreshSeamSkirtIfNearCoreBoundary(Vector3 center, float radius)
     {
         if (_data == null || !_data.BackgroundTerrainEnabled || _bgRuntime == null) return;
@@ -277,6 +289,11 @@ public class SC2TerrainShell : ScriptableObject
                 _bgRuntime.RestorePairMapFromData(bg);
             _bgRuntime.RestoreBlendRTFromData(bg);
             ApplyPreviewModeToChunksFor(_bgRuntime, bg);
+            // See _seamPendingCoreRuntimeReady's own doc comment — this can
+            // legitimately run before the core's own _runtime exists yet
+            // (e.g. the very first frame after a map load), which would
+            // silently sink every core-side seam vertex to Y=0.
+            if (Runtime == null) _seamPendingCoreRuntimeReady = true;
             SC2BackgroundSeamSkirt.Rebuild(_data, this);
         }
     }
@@ -727,17 +744,27 @@ public class SC2TerrainShell : ScriptableObject
     // order edits actually happened, per the user's explicit choice to unify
     // rather than replace SC2TerrainUndoStack.
 
-    public bool CanUndo => _data != null && CombinedUndo.CanUndo;
-    public bool CanRedo => _data != null && CombinedUndo.CanRedo;
+    // Must also check _bgUndoStack, not just CombinedUndo — a session that
+    // only ever edited the background (never the core) has NOTHING in
+    // CombinedUndo, so checking that alone made the global Ctrl+Z
+    // dispatcher (SC2GameViewEditorUI.UndoTerrainEdit) never even consider
+    // Terrain a candidate, reporting "Nothing to undo" despite _bgUndoStack
+    // genuinely holding a real entry. Confirmed directly: "did a sculpt [on
+    // the background], pressed Ctrl+Z, it says Nothing to undo."
+    public bool CanUndo => _data != null && (CombinedUndo.CanUndo || _bgUndoStack.CanUndo);
+    public bool CanRedo => _data != null && (CombinedUndo.CanRedo || _bgUndoStack.CanRedo);
 
-    /// <summary>See SC2TerrainCombinedUndo.LastActionTimestamp.</summary>
-    public long LastActionTimestamp => _data != null ? CombinedUndo.LastActionTimestamp : 0;
+    /// <summary>See SC2TerrainCombinedUndo.LastActionTimestamp and
+    /// SC2TerrainUndoStack.LastActionTimestamp's own doc comment for why
+    /// _bgUndoStack needs comparing here too — same reasoning as CanUndo
+    /// just above.</summary>
+    public long LastActionTimestamp => _data != null ? System.Math.Max(CombinedUndo.LastActionTimestamp, _bgUndoStack.LastActionTimestamp) : 0;
 
     /// <summary>See SC2TerrainCombinedUndo.LastRedoTimestamp — the global
     /// Redo dispatcher (SC2GameViewEditorUI.RedoTerrainEdit) must compare
     /// THIS, not LastActionTimestamp, when deciding which shell's Redo() to
     /// call; see that property's own doc comment for why the two differ.</summary>
-    public long LastRedoTimestamp => _data != null ? CombinedUndo.LastRedoTimestamp : 0;
+    public long LastRedoTimestamp => _data != null ? System.Math.Max(CombinedUndo.LastRedoTimestamp, _bgUndoStack.LastRedoTimestamp) : 0;
 
     public void RecordUndoCheckpoint(string label)
     {
@@ -816,10 +843,19 @@ public class SC2TerrainShell : ScriptableObject
 
     public bool Undo()
     {
-        if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null)
+        // _lastEditedTargetIsBackground only decides which stack to try
+        // FIRST (whichever surface was edited most recently) — it must NOT
+        // stay a hard gate once that stack runs out. It's never reset back
+        // to false just because a background Undo exhausted _bgUndoStack
+        // (only a fresh CORE edit does that, via RecordUndoCheckpoint/
+        // RecordUndoCheckpointFor's core branch), so without this fallthrough,
+        // painting background even once after painting core would make
+        // Ctrl+Z permanently unable to reach the core's own CombinedUndo
+        // history the moment _bgUndoStack ran dry — reported directly:
+        // "Ctrl+Z doesn't work on core" after painting core then background.
+        if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
+            && _bgUndoStack.Undo(_data.BackgroundTerrainData))
         {
-            if (!_bgUndoStack.Undo(_data.BackgroundTerrainData))
-                return false;
             ApplyRestoredBackgroundSnapshot();
             MarkDirtyAndRepaint();
             return true;
@@ -834,10 +870,11 @@ public class SC2TerrainShell : ScriptableObject
 
     public bool Redo()
     {
-        if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null)
+        // See Undo()'s own comment on why this falls through instead of
+        // returning false the moment _bgUndoStack has nothing left to redo.
+        if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
+            && _bgUndoStack.Redo(_data.BackgroundTerrainData))
         {
-            if (!_bgUndoStack.Redo(_data.BackgroundTerrainData))
-                return false;
             ApplyRestoredBackgroundSnapshot();
             MarkDirtyAndRepaint();
             return true;
@@ -1695,6 +1732,16 @@ public class SC2TerrainShell : ScriptableObject
             // (SC2BackgroundSeamSkirt.Rebuild), so it picks this up for
             // free, no separate call needed.
             ApplyPreviewModeToChunksFor(_bgRuntime, _data.BackgroundTerrainData);
+        }
+        // Self-heal: the seam's first-ever Rebuild may have run before the
+        // core's own Runtime existed (see _seamPendingCoreRuntimeReady's own
+        // doc comment) — as soon as it does, rebuild once more so the
+        // core-side seam vertices stop reading the Y=0 fallback, without
+        // needing the user to hover the background to trigger it manually.
+        if (_seamPendingCoreRuntimeReady && Runtime != null)
+        {
+            SC2BackgroundSeamSkirt.Rebuild(_data, this);
+            _seamPendingCoreRuntimeReady = false;
         }
 
         // Keep every imported terrain.bdf object's SC2/Terrain material(s)

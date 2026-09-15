@@ -1019,7 +1019,17 @@ public class SC2TerrainRuntime : IDisposable
             row0[i]   = (pairs!=null&&i<n) ? pairs[i].Color1 : Color.grey;
             row1[i]   = (pairs!=null&&i<n) ? pairs[i].Color2 : Color.grey;
             var ts    = (pairs!=null&&i<n&&pairs[i].TilingScale>0) ? 1f/pairs[i].TilingScale : 0.25f;
-            tiling[i] = new Color(ts,ts,ts,1);
+            // .a was always 1 (unused) — repurposed as a per-pair "has real
+            // baked RNM data" flag (Rnm0 is only non-null when shaderMode==4
+            // AND the pair was actually baked — see ApplyPreviewModeToChunksFor)
+            // so PreviewMode==4 can fall back to plain sun-lit shading for an
+            // un-baked pair instead of running the RNM formula against a
+            // meaningless grey placeholder — matches the real game's own
+            // _HasRNM gate (SC2TerrainMaterialFactory/SC2Terrain.shader),
+            // which falls back to normal ComputeLight sun shading rather
+            // than RNM math when a material has no real mask data.
+            var hasBakedRnm = pairs != null && i < n && pairs[i].Rnm0 != null ? 1f : 0f;
+            tiling[i] = new Color(ts,ts,ts,hasBakedRnm);
         }
         _pairLUT.SetPixels(0,0,72,1,row0); _pairLUT.SetPixels(0,1,72,1,row1); _pairLUT.Apply(false);
         _tilingLUT.SetPixels(tiling); _tilingLUT.Apply(false);
