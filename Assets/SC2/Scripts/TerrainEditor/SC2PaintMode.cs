@@ -545,16 +545,26 @@ public class SC2PaintMode
         var drag = e.type == EventType.MouseDrag  && e.button == 0 && !e.alt;
         if (e.type == EventType.MouseUp)
         {
+            // Same real bug as SC2GeometryMode's own matching MouseUp fix:
+            // everything below used to run on EVERY MouseUp — including a
+            // middle/right-mouse camera orbit/pan/fly release, since
+            // SC2GameViewEditorUI's own navigation MouseUp handler never
+            // calls e.Use() — not just a real completed stroke. _isPainting
+            // is only ever set true from a real left-click-no-alt
+            // MouseDown, never a camera drag, so bailing out here when it's
+            // false is the correct gate for the WHOLE block, not just the
+            // dirty-tracking calls further down.
+            if (!_isPainting) return;
             var swMouseUp = System.Diagnostics.Stopwatch.StartNew();
             // Real Smart Export dirty-
             // tracking for terrain materials — see SC2GeometryMode's own
             // matching comment for the exact Costs/Hfield/Collision2 gap
-            // this closes. Only when _isPainting AND !_selectMode: this same
+            // this closes. Only when !_selectMode: this same
             // MouseUp also fires after a pure Select-mode drag (no PaintPair
             // call anywhere in that path — see the down/(!_selectMode) guard
             // below and the select-vs-paint branch further down), which
             // changes zero exported data.
-            if (_isPainting && !_selectMode)
+            if (!_selectMode)
             {
                 _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
                 // Repainting which pair/material covers a
@@ -648,11 +658,14 @@ public class SC2PaintMode
         var drag = e.type == EventType.MouseDrag  && e.button == 0 && !e.alt;
         if (e.type == EventType.MouseUp)
         {
-            // See HandleAssign's matching
-            // comment above; no _selectMode concept here, every completed
-            // Blend stroke is a real paint.
-            if (_isPainting)
-                _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
+            // Same real bug/fix as HandleAssign's matching MouseUp above —
+            // this whole block used to run on every MouseUp, including a
+            // camera orbit/pan/fly release (SC2GameViewEditorUI's own
+            // navigation MouseUp handler never calls e.Use()). No
+            // _selectMode concept here, every completed Blend stroke is a
+            // real paint, so this gate alone is enough.
+            if (!_isPainting) return;
+            _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
             _isPainting = false;
             if (_win.ActiveRuntime != null)
                 _win.ActiveRuntime.FlushActiveBlendGroup(Data);

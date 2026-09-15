@@ -717,30 +717,45 @@ public class SC2GeometryMode
         var drag = e.type == EventType.MouseDrag  && e.button == 0 && !e.alt;
         if (e.type == EventType.MouseUp)
         {
+            // Real bug: only the MarkDirty/InvalidateLiveHeightGrid calls
+            // below were ever gated on _isPainting — the rest of this block
+            // (the full Data.Heights array copy, EditorUtility.SetDirty,
+            // a version bump, and a conditional background-runtime
+            // refresh) ran on EVERY MouseUp regardless of button or
+            // whether a stroke was even active. SC2GameViewEditorUI's own
+            // camera-orbit/pan/fly MouseUp handler never calls e.Use(), so
+            // the SAME MouseUp that ends a middle/right-mouse camera drag
+            // falls through to here too — releasing the camera after any
+            // orbit/pan/fly was paying for a full heightmap copy + SetDirty
+            // + version bump every single time, on the Terrain tab only
+            // (confirmed real: user-reported "editor freezes for a moment
+            // whenever a camera drag is released, Terrain tab only").
+            // Gating the WHOLE block on _isPainting (true only from a real
+            // left-click-no-alt MouseDown, never a camera drag) is exactly
+            // what the block's own "not an idle mouse-up" comment already
+            // claimed — it just didn't cover the whole block before.
+            if (!_isPainting) return;
+
             // Real Smart Export dirty-
             // tracking for terrain geometry — sculpting has always mutated
             // Data.Heights directly with zero signal to the session
             // (SC2MapSession.PendingDirtyFlags), the one gap that forced
             // Costs/Hfield/Collision2 to stay permanently "dirty" via the
             // TerrainGeometry cascade in SC2ExportDependencyGraph regardless
-            // of their own tracking. Only fires for a real completed
-            // stroke, not an idle mouse-up.
-            if (_isPainting)
-            {
-                _win.Session?.MarkDirty(SC2DirtyFlags.TerrainGeometry);
-                // Sculpting a hill up above
-                // the water plane still showed the water's (old, pre-sculpt)
-                // elevation in the mouse-height HUD/Costs painting/Objects
-                // placement — SC2LiveHeightGrid caches its projected
-                // heightmap and only rebuilds when told to (MarkDirty), but
-                // nothing here ever told it to, unlike every other real
-                // geometry-change source (import add/remove/undo/redo,
-                // ImportOnlyMode toggle, Costs grid size change — see
-                // SC2TerrainShell.InvalidateLiveHeightGrid's call sites).
-                // Sculpting a completed stroke is exactly as real a change
-                // as any of those.
-                _win.InvalidateLiveHeightGrid();
-            }
+            // of their own tracking.
+            _win.Session?.MarkDirty(SC2DirtyFlags.TerrainGeometry);
+            // Sculpting a hill up above
+            // the water plane still showed the water's (old, pre-sculpt)
+            // elevation in the mouse-height HUD/Costs painting/Objects
+            // placement — SC2LiveHeightGrid caches its projected
+            // heightmap and only rebuilds when told to (MarkDirty), but
+            // nothing here ever told it to, unlike every other real
+            // geometry-change source (import add/remove/undo/redo,
+            // ImportOnlyMode toggle, Costs grid size change — see
+            // SC2TerrainShell.InvalidateLiveHeightGrid's call sites).
+            // Sculpting a completed stroke is exactly as real a change
+            // as any of those.
+            _win.InvalidateLiveHeightGrid();
             _isPainting = false;
             Data.Heights = _win.ActiveRuntime.GetHeightsCopy();
             EditorUtility.SetDirty(Data);
