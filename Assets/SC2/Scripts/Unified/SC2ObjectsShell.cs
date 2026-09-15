@@ -163,6 +163,16 @@ public sealed class SC2ObjectsShell
     private int _pathPickMode; // 0 = none, 1 = picking Node A, 2 = picking Node B
     private int _pathNodeA = -1, _pathNodeB = -1;
 
+    // DrawPaths' own edges/marker-lookup/dup+dangling-count cache — see
+    // DrawPaths' own comment on why this exists.
+    private int _pathsCacheGraphId = -1;
+    private int _pathsCacheEdgeCount = -1;
+    private int _pathsCacheMarkerCount = -1;
+    private List<(int a, int b)> _pathsCacheEdges;
+    private Dictionary<int, SC2ObjMarker> _pathsCacheMarkersById;
+    private int _pathsCacheDup;
+    private int _pathsCacheDangling;
+
     // ── Undo (JSON snapshot of the whole Objects domain) ────────────────
     [Serializable]
     private class ObjSnapshot
@@ -247,6 +257,47 @@ public sealed class SC2ObjectsShell
         _lastMarkerRendererDataVersion = _dataVersion;
         _lastMarkerRendererSelectionSig = selectionSig;
         if (dueForSafetyNet) _markerRendererSafetyNetTicks = 0;
+    }
+
+    private int _lastMarkerScenePreviewDataVersion = -1;
+    private int _lastMarkerScenePreviewHiddenSig;
+    private bool _lastMarkerScenePreviewShowMarkers;
+    private int _markerScenePreviewSafetyNetTicks;
+
+    private static int ComputeHiddenSignature(HashSet<int> ids)
+    {
+        var sig = 19;
+        foreach (var id in ids) sig = sig * 31 + id;
+        return sig;
+    }
+
+    /// <summary>Same dirty-gating idea as SyncMarkerRendererIfNeeded right
+    /// above, applied to SC2MarkerScenePreview.Sync (the real 3D marker
+    /// gizmo models) — that call had no gate at all, so it ran its full
+    /// per-marker icon-key resolve + instance-matrix rebuild on every OnGUI
+    /// event (Layout/Repaint/MouseMove/...) whenever any Objects overlay
+    /// flag is on (true by default, so this fires cross-tab, not just while
+    /// a marker-heavy tab is open) — the same "real cost, nothing to show
+    /// for it" problem as the old EnsureObjectIds and the old uncached
+    /// DrawPaths. Own tracking fields rather than reusing
+    /// SyncMarkerRendererIfNeeded's: Show Markers / hidden-marker-ids can
+    /// change independently of props/units selection.</summary>
+    private void SyncMarkerScenePreviewIfNeeded(bool showMarkers)
+    {
+        if (Event.current != null && Event.current.type != EventType.Repaint) return;
+        _markerScenePreviewSafetyNetTicks++;
+        var dueForSafetyNet = _markerScenePreviewSafetyNetTicks >= PreviewSyncSafetyNetInterval;
+        var hiddenSig = ComputeHiddenSignature(_hiddenMarkerIds);
+        if (!dueForSafetyNet && !_dragActive &&
+            _dataVersion == _lastMarkerScenePreviewDataVersion && hiddenSig == _lastMarkerScenePreviewHiddenSig &&
+            showMarkers == _lastMarkerScenePreviewShowMarkers)
+            return;
+
+        SC2MarkerScenePreview.Sync(Data, _hiddenMarkerIds, showMarkers);
+        _lastMarkerScenePreviewDataVersion = _dataVersion;
+        _lastMarkerScenePreviewHiddenSig = hiddenSig;
+        _lastMarkerScenePreviewShowMarkers = showMarkers;
+        if (dueForSafetyNet) _markerScenePreviewSafetyNetTicks = 0;
     }
 
     /// <summary>Debug fallback (off by default), for the GPU
@@ -1498,10 +1549,41 @@ public sealed class SC2ObjectsShell
         return _lastImportSummary;
     }
 
+    // Validate()'s own cache — see that method's comment for why.
+    private int _validationCacheMarkersCount = -1;
+    private int _validationCacheGraphEdgeTotal = -1;
+    private int _validationCacheChainsCount = -1;
+    private int _validationCacheArmiesCount = -1;
+    private int _validationCacheUnitsCount = -1;
+    private List<string> _validationCacheIssues;
+
+    /// <summary>DrawImportAndValidation calls this unconditionally, for
+    /// EVERY Objects sub-tab, on EVERY OnGUI event (Layout/Repaint/
+    /// MouseMove/...) — same "no gate at all" class of bug as the old
+    /// EnsureObjectIds/SC2MarkerScenePreview.Sync, and the actual dominant
+    /// one measured (161fps on Terrain vs 21fps just from having the
+    /// Objects tab open, no sub-tab-specific content involved): the missing-
+    /// marker-edge check below called SC2ObjectGraphRefs.TryGetMarker
+    /// (a linear FirstOrDefault scan over ALL markers) TWICE per graph edge,
+    /// so a graph with thousands of edges made this O(edges * markers)
+    /// EVERY event. Fixed the same way DrawGraphOverlays/DrawPaths were: an
+    /// O(1) marker-id HashSet instead of the linear scan, plus caching the
+    /// whole result against cheap Count-based fingerprints so a mouse
+    /// wiggle with nothing changed costs nothing at all.</summary>
     private List<string> Validate()
     {
+        var graphEdgeTotal = 0;
+        foreach (var g in Data.ObjGraphs) graphEdgeTotal += g.MarkerIdsA?.Count ?? 0;
+        if (_validationCacheIssues != null &&
+            _validationCacheMarkersCount == Data.ObjMarkers.Count && _validationCacheGraphEdgeTotal == graphEdgeTotal &&
+            _validationCacheChainsCount == Data.ObjChains.Count && _validationCacheArmiesCount == Data.ObjArmies.Count &&
+            _validationCacheUnitsCount == Data.ObjUnits.Count)
+            return _validationCacheIssues;
+
         var issues = new List<string>();
-        var markerNames = new HashSet<string>(Data.ObjMarkers.Select(m => m.Name));
+        var markerIds = new HashSet<int>(Data.ObjMarkers.Count);
+        var markerNames = new HashSet<string>(Data.ObjMarkers.Count);
+        foreach (var m in Data.ObjMarkers) { markerIds.Add(m.Id); markerNames.Add(m.Name); }
         var armyNames = new HashSet<string>(Data.ObjArmies.Select(a => a.Name));
 
         // Every real vanilla map (D1 multiplayer + CA campaign corpus,
@@ -1526,7 +1608,7 @@ public sealed class SC2ObjectsShell
         foreach (var g in Data.ObjGraphs)
             foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(g))
             {
-                if (!SC2ObjectGraphRefs.TryGetMarker(Data, a, out _) || !SC2ObjectGraphRefs.TryGetMarker(Data, b, out _))
+                if (!markerIds.Contains(a) || !markerIds.Contains(b))
                     issues.Add($"Graph '{g.Name}' has a missing-marker edge ({a},{b}).");
             }
 
@@ -1544,6 +1626,12 @@ public sealed class SC2ObjectsShell
             if (!armyNames.Contains(u.ArmyName))
                 issues.Add($"Unit '{u.Name}' belongs to unknown army '{u.ArmyName}'.");
 
+        _validationCacheMarkersCount = Data.ObjMarkers.Count;
+        _validationCacheGraphEdgeTotal = graphEdgeTotal;
+        _validationCacheChainsCount = Data.ObjChains.Count;
+        _validationCacheArmiesCount = Data.ObjArmies.Count;
+        _validationCacheUnitsCount = Data.ObjUnits.Count;
+        _validationCacheIssues = issues;
         return issues;
     }
 
@@ -3278,6 +3366,75 @@ public sealed class SC2ObjectsShell
     }
 
     // ── 4. Markers ───────────────────────────────────────────────────────
+
+    /// <summary>Same fix as RefreshVisiblePropsIfNeeded/_cachedVisibleProps
+    /// (see that field's own comment) — DrawMarkersBrowser's equivalent
+    /// filter chain (army-position exclusion regex + name/type search +
+    /// system filter) used to rebuild from scratch on EVERY OnGUI event,
+    /// not just when the search text/filter/marker count actually changed.
+    /// Markers never got this fix when Props did; a path-node-heavy map
+    /// (thousands of markers backing a large Path Graph) made this the next
+    /// "which tab is open" FPS cliff after Validate()'s own fix.</summary>
+    private List<SC2ObjMarker> _cachedVisibleMarkers;
+    private List<int> _cachedVisibleMarkerIds;
+    private string _cachedVisibleMarkersSearch;
+    private SysFilter _cachedVisibleMarkersFilter;
+    private int _cachedVisibleMarkersSourceCount = -1;
+    private int _cachedVisibleMarkersTicks;
+
+    private void RefreshVisibleMarkersIfNeeded()
+    {
+        _cachedVisibleMarkersTicks++;
+        var dueForSafetyNet = _cachedVisibleMarkersTicks >= ListCacheSafetyNetInterval;
+        if (_cachedVisibleMarkers != null && !dueForSafetyNet &&
+            _cachedVisibleMarkersSearch == _searchMarkers && _cachedVisibleMarkersFilter == _filterMarkers &&
+            _cachedVisibleMarkersSourceCount == Data.ObjMarkers.Count)
+            return;
+
+        _cachedVisibleMarkersTicks = 0;
+        var visible = Data.ObjMarkers.Where(m => !ArmyPositionRe.IsMatch(m.Name) &&
+            (MatchSearch(m.Name, _searchMarkers) || MatchSearch(m.Type, _searchMarkers))).ToList();
+        visible = _filterMarkers switch
+        {
+            SysFilter.Selected => visible.Where(m => _selMarkers.Contains(m.Id)).ToList(),
+            SysFilter.Invalid => visible.Where(m => string.IsNullOrEmpty(m.Type) || string.IsNullOrEmpty(m.Name)).ToList(),
+            SysFilter.Unanchored => visible.Where(m => !m.AnchorToTerrain).ToList(),
+            _ => visible
+        };
+        _cachedVisibleMarkers = visible;
+        _cachedVisibleMarkerIds = visible.Select(m => m.Id).ToList();
+        _cachedVisibleMarkersSearch = _searchMarkers;
+        _cachedVisibleMarkersFilter = _filterMarkers;
+        _cachedVisibleMarkersSourceCount = Data.ObjMarkers.Count;
+    }
+
+    // Same reasoning as PropRowHeight above.
+    private static float MarkerRowHeight => SC2UiScale.Pxf(20f);
+
+    /// <summary>Virtualized replacement for the old GUILayout.Button-per-row
+    /// scroll list — same fix and same reasoning as DrawVirtualizedPropRows.</summary>
+    private void DrawVirtualizedMarkerRows(List<SC2ObjMarker> visible, List<int> visibleIds, float w, float viewHeight)
+    {
+        var rowWidth = Mathf.Max(1f, w - 24f); // leaves room for the vertical scrollbar
+        var contentHeight = Mathf.Max(viewHeight, visible.Count * MarkerRowHeight);
+        var viewRect = GUILayoutUtility.GetRect(w, viewHeight);
+        var contentRect = new Rect(0, 0, rowWidth, contentHeight);
+        _scrollB = GUI.BeginScrollView(viewRect, _scrollB, contentRect);
+
+        var first = Mathf.Max(0, Mathf.FloorToInt(_scrollB.y / MarkerRowHeight) - 2);
+        var last = Mathf.Min(visible.Count - 1, first + Mathf.CeilToInt(viewHeight / MarkerRowHeight) + 4);
+        for (var i = first; i <= last; i++)
+        {
+            var m = visible[i];
+            var isSel = _selMarkers.Contains(m.Id);
+            var label = $"{(isSel ? "● " : "○ ")}{m.Name}   [{m.Type}]" + (m.AnchorToTerrain ? "" : "  [Y locked]") + (_hiddenMarkerIds.Contains(m.Id) ? "  [hidden]" : "");
+            var rowRect = new Rect(0, i * MarkerRowHeight, rowWidth, MarkerRowHeight - 2);
+            if (GUI.Button(rowRect, TruncateForLabel(label, rowWidth - 8)))
+                HandleRowClick(_selMarkers, visibleIds, m.Id, ref _lastClickedMarkerIdx);
+        }
+        GUI.EndScrollView();
+    }
+
     private void DrawMarkers(float w)
     {
         if (_selMarkers.Count == 1)
@@ -3312,16 +3469,9 @@ public sealed class SC2ObjectsShell
         _searchMarkers = SC2EnvFieldGui.TextField("Search (name/type)", _searchMarkers, "markers_search");
         DrawSystemFilterRow(w, ref _filterMarkers);
 
-        var visible = Data.ObjMarkers.Where(m => !ArmyPositionRe.IsMatch(m.Name) &&
-            (MatchSearch(m.Name, _searchMarkers) || MatchSearch(m.Type, _searchMarkers))).ToList();
-        visible = _filterMarkers switch
-        {
-            SysFilter.Selected => visible.Where(m => _selMarkers.Contains(m.Id)).ToList(),
-            SysFilter.Invalid => visible.Where(m => string.IsNullOrEmpty(m.Type) || string.IsNullOrEmpty(m.Name)).ToList(),
-            SysFilter.Unanchored => visible.Where(m => !m.AnchorToTerrain).ToList(),
-            _ => visible
-        };
-        var visibleIds = visible.Select(m => m.Id).ToList();
+        RefreshVisibleMarkersIfNeeded();
+        var visible = _cachedVisibleMarkers;
+        var visibleIds = _cachedVisibleMarkerIds;
 
         DrawBatchBar(w, _selMarkers, new List<(string, Action)>
         {
@@ -3344,15 +3494,7 @@ public sealed class SC2ObjectsShell
             }
         }
 
-        _scrollB = GUILayout.BeginScrollView(_scrollB, GUILayout.Height(SC2UiScale.Pxf(280f)));
-        foreach (var m in visible)
-        {
-            var isSel = _selMarkers.Contains(m.Id);
-            var label = $"{(isSel ? "● " : "○ ")}{m.Name}   [{m.Type}]" + (m.AnchorToTerrain ? "" : "  [Y locked]") + (_hiddenMarkerIds.Contains(m.Id) ? "  [hidden]" : "");
-            if (GUILayout.Button(TruncateForLabel(label, w - 8), GUILayout.Width(w - 8)))
-                HandleRowClick(_selMarkers, visibleIds, m.Id, ref _lastClickedMarkerIdx);
-        }
-        GUILayout.EndScrollView();
+        DrawVirtualizedMarkerRows(visible, visibleIds, w, SC2UiScale.Pxf(280f));
 
         GUILayout.BeginHorizontal();
         if (SC2EnvFieldGui.Button("Add at camera focus", GUILayout.Height(SC2UiScale.Pxf(24f)), GUILayout.Width(w * 0.48f)))
@@ -3386,14 +3528,30 @@ public sealed class SC2ObjectsShell
     /// map" list above (ArmyPositionRe) — they all share Type="Blank
     /// Marker" with any other blank marker, and hiding/isolating that type
     /// would unexpectedly also affect army start positions.</summary>
+    private List<IGrouping<string, SC2ObjMarker>> _cachedMarkerTypeGroups;
+    private int _cachedMarkerTypeGroupsSourceCount = -1;
+
     private void DrawMarkersByTypePanel(float w)
     {
-        var groups = Data.ObjMarkers
-            .Where(m => !ArmyPositionRe.IsMatch(m.Name) && !string.IsNullOrEmpty(m.Type))
-            .GroupBy(m => m.Type, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (!SC2EnvFieldGui.Foldout(ref _markersByTypeExpanded, $"By type ({groups.Count})")) return;
+        // Same "don't pay the GroupBy+OrderBy cost while collapsed, and
+        // cache it once expanded" fix as DrawPropsByBlueprintPanel — this
+        // used to run the full grouping (a fresh scan + regex check per
+        // marker) EVERY OnGUI event regardless of whether the foldout below
+        // was even open, unlike Props' equivalent panel which already
+        // checks the foldout first.
+        var foldoutLabel = _cachedMarkerTypeGroups != null ? $"By type ({_cachedMarkerTypeGroups.Count})" : "By type";
+        if (!SC2EnvFieldGui.Foldout(ref _markersByTypeExpanded, foldoutLabel)) return;
+
+        if (_cachedMarkerTypeGroups == null || _cachedMarkerTypeGroupsSourceCount != Data.ObjMarkers.Count)
+        {
+            _cachedMarkerTypeGroupsSourceCount = Data.ObjMarkers.Count;
+            _cachedMarkerTypeGroups = Data.ObjMarkers
+                .Where(m => !ArmyPositionRe.IsMatch(m.Name) && !string.IsNullOrEmpty(m.Type))
+                .GroupBy(m => m.Type, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        var groups = _cachedMarkerTypeGroups;
 
         if (groups.Count == 0)
         {
@@ -4082,14 +4240,37 @@ public sealed class SC2ObjectsShell
         GUILayout.Space(6);
         SC2EnvFieldGui.SectionLabel($"{g2.Name} [{g2.GraphKind}]");
 
-        SC2EnvFieldGui.SectionLabel($"Edges ({SC2ObjectGraphRefs.Count(g2)})");
-        var edges = SC2ObjectGraphRefs.Enumerate(g2).ToList();
-        // Same fix as DrawGraphOverlays/CountDanglingEdges — this whole
-        // list redraws every OnGUI repaint while the Paths panel is open;
-        // TryGetMarker's per-endpoint linear scan turned rendering it into
-        // an O(edges * marker count) cost every single frame.
-        var edgeMarkersById = new Dictionary<int, SC2ObjMarker>(Data.ObjMarkers.Count);
-        foreach (var m in Data.ObjMarkers) edgeMarkersById[m.Id] = m;
+        // DrawPaths (this whole method) runs on EVERY OnGUI event, not just
+        // Repaint — GUILayout needs the identical call sequence on every
+        // event to route input/hit-testing correctly, so the method itself
+        // can't just bail out on non-Repaint the way pure-drawing overlays
+        // do. Left uncached, that meant the edge-list copy, the marker-by-id
+        // dictionary, and CountDuplicateEdges/CountDanglingEdges (each
+        // O(edges) or O(edges + markers), with real allocations) all reran
+        // on literally every mouse-move over this panel — a large graph
+        // (thousands of edges) made this the dominant lag source, and
+        // entirely independent of the viewport's own "graph visibility"
+        // toggles (DrawGraphOverlays), since this panel draws regardless of
+        // those. Cached against a cheap (O(1) property-read) fingerprint —
+        // recomputed only when the selected graph, its edge count, or the
+        // marker count actually changed, not on every event.
+        var edgeCountCheap = g2.MarkerIdsA?.Count ?? 0;
+        var markerCountCheap = Data.ObjMarkers.Count;
+        if (_pathsCacheGraphId != g2.Id || _pathsCacheEdgeCount != edgeCountCheap || _pathsCacheMarkerCount != markerCountCheap)
+        {
+            _pathsCacheGraphId = g2.Id;
+            _pathsCacheEdgeCount = edgeCountCheap;
+            _pathsCacheMarkerCount = markerCountCheap;
+            _pathsCacheEdges = SC2ObjectGraphRefs.Enumerate(g2).ToList();
+            _pathsCacheMarkersById = new Dictionary<int, SC2ObjMarker>(Data.ObjMarkers.Count);
+            foreach (var m in Data.ObjMarkers) _pathsCacheMarkersById[m.Id] = m;
+            _pathsCacheDup = CountDuplicateEdges(g2);
+            _pathsCacheDangling = CountDanglingEdges(g2);
+        }
+        var edges = _pathsCacheEdges;
+        var edgeMarkersById = _pathsCacheMarkersById;
+
+        SC2EnvFieldGui.SectionLabel($"Edges ({edges.Count})");
         // The real remaining "large graph -> lag" cost once the lookup
         // above stopped being O(n): this loop rendered one full GUILayout
         // row (BeginHorizontal/Label/Button/EndHorizontal, each with real
@@ -4124,8 +4305,8 @@ public sealed class SC2ObjectsShell
         if (edges.Count > MaxEdgeRows)
             SC2EnvFieldGui.WrapLabel($"Showing the first {MaxEdgeRows} of {edges.Count} edges — use \"Disconnect selected\" below (select the markers, not individual edges) for bulk cleanup.", w);
 
-        var dup = CountDuplicateEdges(g2);
-        var dangling = CountDanglingEdges(g2);
+        var dup = _pathsCacheDup;
+        var dangling = _pathsCacheDangling;
         if (dup > 0 || dangling > 0)
             SC2EnvFieldGui.WrapLabel($"⚠ {dup} duplicate edge(s), {dangling} dangling reference(s).", w);
 
@@ -5579,8 +5760,11 @@ public sealed class SC2ObjectsShell
         // overlay flag is on — see HandleObjectsGameViewInput) from
         // DrawEmbeddedGUI (which only ran while the Objects tab itself was
         // open), so markers now also stay in sync on other tabs the same
-        // way Props/Units now do too.
-        SC2MarkerScenePreview.Sync(Data, _hiddenMarkerIds, showMarkers);
+        // way Props/Units now do too. Dirty-gated (SyncMarkerScenePreviewIfNeeded)
+        // the same way SyncMarkerRendererIfNeeded right below already is —
+        // see that method's own comment for why an ungated call here was a
+        // real per-event cost with a large marker count.
+        SyncMarkerScenePreviewIfNeeded(showMarkers);
         // GPU-instanced viewport pick-dots (SC2ObjectMarkerRenderer,
         // user-specced) — same cross-tab reasoning as the 3D marker sync
         // directly above, dirty-gated internally so this is cheap to call
@@ -6519,28 +6703,35 @@ public sealed class SC2ObjectsShell
         // EVERY OnGUI event (Layout/MouseMove/MouseDown/KeyDown/Repaint —
         // see that method's own comment), not just once per rendered frame.
         // Without this guard, every mouse move over the viewport re-ran the
-        // full per-edge marker-dictionary build AND every GUI.DrawTexture +
-        // GUI.matrix rotate call below, multiplying the true per-edge draw
-        // cost by however many non-Repaint events fired that frame. Every
-        // other pure-drawing primitive in this codebase already guards this
-        // way (e.g. SC2TerrainShell.DrawGameViewBrush) — this one just
-        // never had the check, even though DrawChainOverlays' own comment
-        // right below already (incorrectly) assumed it only ran on Repaint.
+        // full per-edge marker-dictionary build AND every draw call below,
+        // multiplying the true per-edge draw cost by however many
+        // non-Repaint events fired that frame. Every other pure-drawing
+        // primitive in this codebase already guards this way (e.g.
+        // SC2TerrainShell.DrawGameViewBrush).
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
 
         // SC2ObjectGraphRefs.TryGetMarker does a linear FirstOrDefault scan
         // over the WHOLE marker list — fine for the rare, user-triggered
         // callers it's otherwise used from, but this method runs every
-        // single viewport repaint and previously called it twice per edge
-        // per graph, so total cost was O(visible graphs * edges * marker
-        // count) EVERY FRAME. With many graphs (each contributing more
-        // edges), that's exactly the "large number of graphs -> lag" report
-        // this fixes. One O(1) dictionary lookup per endpoint instead,
-        // built once here — same pattern DrawChainOverlays right below
-        // already uses for its own per-frame marker lookups.
+        // single viewport repaint. One O(1) dictionary lookup per endpoint
+        // instead, built once here — same pattern DrawChainOverlays right
+        // below already uses for its own per-frame marker lookups.
         var markersById = new Dictionary<int, SC2ObjMarker>(Data.ObjMarkers.Count);
         foreach (var m in Data.ObjMarkers) markersById[m.Id] = m;
 
+        // Everything below draws into ONE GL batch (a single draw call for
+        // every edge of every visible graph) instead of one GUI.DrawTexture
+        // + GUI.matrix rotation per edge (DrawOverlayLine's approach, still
+        // used by chains/zones below where edge counts stay small). A path
+        // graph can carry thousands of edges on screen at once; at that
+        // count the per-edge IMGUI round-trip (matrix set + immediate blit,
+        // each a real managed/native transition — IMGUI has a hard
+        // per-control cost floor regardless of how simple the control is)
+        // is what actually lags, not the projection math below, which still
+        // runs once per edge either way. GL's immediate-mode vertex
+        // submission inside one Begin/End has none of that per-call
+        // overhead, so total edge count stops being the bottleneck.
+        var batchOpen = false;
         foreach (var graph in Data.ObjGraphs)
         {
             var visible = graph.GraphKind switch
@@ -6559,9 +6750,104 @@ public sealed class SC2ObjectsShell
                 _ => new Color(.5f, .95f, .25f, .8f)
             };
             foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(graph))
-                if (markersById.TryGetValue(a, out var ma) && markersById.TryGetValue(b, out var mb))
-                    DrawOverlayLine(camera, viewportRect, ma.Position, mb.Position, color, 2f);
+            {
+                if (!markersById.TryGetValue(a, out var ma) || !markersById.TryGetValue(b, out var mb)) continue;
+                if (!TryProjectAndClipSegment(camera, viewportRect, ma.Position, mb.Position, out var pa, out var pb)) continue;
+                var delta = pb - pa;
+                var length = delta.magnitude;
+                if (length < .5f) continue;
+                if (!batchOpen) { BeginLineBatch(); batchOpen = true; }
+                EmitLineQuad(pa, delta, length, color, 2f);
+            }
         }
+        if (batchOpen) EndLineBatch();
+    }
+
+    /// <summary>Same near-plane + viewport-rect clipping DrawOverlayLine
+    /// applies, factored out so the batched path below can reuse it without
+    /// also paying for a per-line GUI.DrawTexture call. See DrawOverlayLine's
+    /// own doc comment for why segment clipping (not an all-or-nothing
+    /// endpoint check) matters here.</summary>
+    private static bool TryProjectAndClipSegment(Camera camera, Rect viewportRect, Vector3 from, Vector3 to, out Vector2 a, out Vector2 b)
+    {
+        a = default; b = default;
+        var camPos = camera.transform.position;
+        var camFwd = camera.transform.forward;
+        const float nearEps = 0.05f;
+        var zFrom = Vector3.Dot(from - camPos, camFwd);
+        var zTo = Vector3.Dot(to - camPos, camFwd);
+        if (zFrom <= nearEps && zTo <= nearEps) return false; // whole segment behind (or at) the camera
+
+        var clippedFrom = from;
+        var clippedTo = to;
+        if (zFrom <= nearEps)
+            clippedFrom = Vector3.Lerp(from, to, (nearEps - zFrom) / (zTo - zFrom));
+        else if (zTo <= nearEps)
+            clippedTo = Vector3.Lerp(to, from, (nearEps - zTo) / (zFrom - zTo));
+
+        var pixelA = SC2TopViewMirror.WorldToGui(camera, clippedFrom);
+        var pixelB = SC2TopViewMirror.WorldToGui(camera, clippedTo);
+        a = new Vector2(pixelA.x, pixelA.y);
+        b = new Vector2(pixelB.x, pixelB.y);
+        return ClipLineToRect(viewportRect, ref a, ref b);
+    }
+
+    private static Material _lineBatchMaterial;
+
+    /// <summary>Lazily-built vertex-colored, always-on-top material for the
+    /// GL line batch below, using this project's own Resources-shipped
+    /// SC2/LineBatchUnlit shader rather than Unity's built-in
+    /// "Hidden/Internal-Colored" (every GL line-drawing tutorial's usual
+    /// choice) — that one lives in the engine's own builtin resource
+    /// archive, and this class must keep working in a Build &amp; Run
+    /// player, not just the Editor (see this file's own header comment).
+    /// Same reasoning and fix as SC2FallbackShader/SC2VertexColorUnlit:
+    /// Resources.Load always ships, Shader.Find does not survive build
+    /// stripping. Cull/ZWrite/ZTest/Blend are hardcoded in the shader
+    /// itself rather than set here, since this material only ever needs
+    /// the one always-on-top alpha-blended state.</summary>
+    private static Material GetLineBatchMaterial()
+    {
+        if (_lineBatchMaterial == null)
+            _lineBatchMaterial = new Material(Resources.Load<Shader>("SC2LineBatchUnlit")) { hideFlags = HideFlags.HideAndDontSave };
+        return _lineBatchMaterial;
+    }
+
+    /// <summary>Opens one GL quad batch in the same pixel-space coordinate
+    /// system SC2TopViewMirror.WorldToGui/ScreenPointToRay already assume
+    /// (Screen.width/height, top-left origin) — this shell's viewport
+    /// drawing has always used that convention directly (no nested
+    /// GUIClip/BeginGroup offset to compensate for), so a matching pixel
+    /// matrix here lines up with every GUI.DrawTexture-based overlay
+    /// without any extra translation.</summary>
+    private static void BeginLineBatch()
+    {
+        GetLineBatchMaterial().SetPass(0);
+        GL.PushMatrix();
+        GL.LoadPixelMatrix(0, Screen.width, Screen.height, 0);
+        GL.Begin(GL.QUADS);
+    }
+
+    private static void EndLineBatch()
+    {
+        GL.End();
+        GL.PopMatrix();
+    }
+
+    /// <summary>Emits one already-clipped screen-space segment as a thin
+    /// quad (a rectangle perpendicular-offset from the line, same visual
+    /// width DrawOverlayLine's rotated-texture approach draws) into the
+    /// currently-open GL batch. Must only be called between BeginLineBatch
+    /// and EndLineBatch.</summary>
+    private static void EmitLineQuad(Vector2 a, Vector2 delta, float length, Color color, float width)
+    {
+        var b = a + delta;
+        var perp = new Vector2(-delta.y, delta.x) * (width * 0.5f / length);
+        GL.Color(color);
+        GL.Vertex3(a.x - perp.x, a.y - perp.y, 0f);
+        GL.Vertex3(b.x - perp.x, b.y - perp.y, 0f);
+        GL.Vertex3(b.x + perp.x, b.y + perp.y, 0f);
+        GL.Vertex3(a.x + perp.x, a.y + perp.y, 0f);
     }
 
     private void DrawChainOverlays(Camera camera, Rect viewportRect)
@@ -6755,26 +7041,7 @@ public sealed class SC2ObjectsShell
         // wholesale on non-Repaint — but the actual GUI.DrawTexture call
         // below still should, same as every other draw primitive here.
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
-
-        var camPos = camera.transform.position;
-        var camFwd = camera.transform.forward;
-        const float nearEps = 0.05f;
-        var zFrom = Vector3.Dot(from - camPos, camFwd);
-        var zTo = Vector3.Dot(to - camPos, camFwd);
-        if (zFrom <= nearEps && zTo <= nearEps) return; // whole segment behind (or at) the camera
-
-        var clippedFrom = from;
-        var clippedTo = to;
-        if (zFrom <= nearEps)
-            clippedFrom = Vector3.Lerp(from, to, (nearEps - zFrom) / (zTo - zFrom));
-        else if (zTo <= nearEps)
-            clippedTo = Vector3.Lerp(to, from, (nearEps - zTo) / (zFrom - zTo));
-
-        var pixelA = SC2TopViewMirror.WorldToGui(camera, clippedFrom);
-        var pixelB = SC2TopViewMirror.WorldToGui(camera, clippedTo);
-        var a = new Vector2(pixelA.x, pixelA.y);
-        var b = new Vector2(pixelB.x, pixelB.y);
-        if (!ClipLineToRect(viewportRect, ref a, ref b)) return;
+        if (!TryProjectAndClipSegment(camera, viewportRect, from, to, out var a, out var b)) return;
 
         var delta = b - a; var length = delta.magnitude;
         if (length < .5f) return;

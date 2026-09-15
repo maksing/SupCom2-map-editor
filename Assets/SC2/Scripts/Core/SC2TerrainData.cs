@@ -696,13 +696,37 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
 
     public int AllocateObjectId() => NextObjectId++;
 
+    // Last list sizes EnsureObjectIds actually finished a scan against — see
+    // its own comment for why this cache exists.
+    [NonSerialized] private int _idsEnsuredPropsCount = -1, _idsEnsuredMarkersCount = -1, _idsEnsuredGraphsCount = -1,
+        _idsEnsuredArmiesCount = -1, _idsEnsuredUnitsCount = -1, _idsEnsuredZonesCount = -1,
+        _idsEnsuredChainsCount = -1, _idsEnsuredSymmetryGroupsCount = -1;
+
     /// <summary>Backfills Id=0 items (old data saved before Ids existed, or
     /// anything constructed with `new()` and never assigned one) with fresh
-    /// unique ids. Safe to call every frame — a no-op once everything has an
-    /// id.</summary>
+    /// unique ids. Safe to call every frame — genuinely a no-op (not just a
+    /// no-change) once everything has an id: called every OnGUI event
+    /// whenever the Objects shell drives the viewport (SC2ObjectsShell.
+    /// OnGameViewGUI), so on a map with many props/markers this full
+    /// 8-list-times-2-passes scan was real, measurable per-event cost with
+    /// nothing to show for it in the overwhelmingly common case nothing
+    /// actually needs backfilling. Every list here only ever grows via an
+    /// explicit Add elsewhere in this codebase, and every such Add already
+    /// assigns a real id immediately (AllocateObjectId()) — the only
+    /// realistic way a zero-id item appears is a document load/import of
+    /// old data, which changes these Counts. Skipping the scan whenever
+    /// every list's Count still matches the last completed scan turns the
+    /// per-event cost back into the actual no-op the old comment
+    /// promised.</summary>
     public void EnsureObjectIds()
     {
         EnsureObjectsLists();
+        if (_idsEnsuredPropsCount == ObjProps.Count && _idsEnsuredMarkersCount == ObjMarkers.Count &&
+            _idsEnsuredGraphsCount == ObjGraphs.Count && _idsEnsuredArmiesCount == ObjArmies.Count &&
+            _idsEnsuredUnitsCount == ObjUnits.Count && _idsEnsuredZonesCount == ObjZones.Count &&
+            _idsEnsuredChainsCount == ObjChains.Count && _idsEnsuredSymmetryGroupsCount == ObjSymmetryGroups.Count)
+            return;
+
         // A deserialized document can contain valid non-zero Ids while its
         // persisted counter is stale. Advance the counter before assigning
         // anything new so AllocateObjectId never reuses an existing identity.
@@ -725,6 +749,15 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         foreach (var c in ObjChains) if (c.Id == 0) c.Id = AllocateObjectId();
         foreach (var s in ObjSymmetryGroups) if (s.Id == 0) s.Id = AllocateObjectId();
         SC2ObjectGraphRefs.MigrateLegacyIndexes(this);
+
+        _idsEnsuredPropsCount = ObjProps.Count;
+        _idsEnsuredMarkersCount = ObjMarkers.Count;
+        _idsEnsuredGraphsCount = ObjGraphs.Count;
+        _idsEnsuredArmiesCount = ObjArmies.Count;
+        _idsEnsuredUnitsCount = ObjUnits.Count;
+        _idsEnsuredZonesCount = ObjZones.Count;
+        _idsEnsuredChainsCount = ObjChains.Count;
+        _idsEnsuredSymmetryGroupsCount = ObjSymmetryGroups.Count;
     }
 
     public void EnsureObjectsLists()
