@@ -6727,6 +6727,16 @@ public sealed class SC2ObjectsShell
         // runs once per edge either way. GL's immediate-mode vertex
         // submission inside one Begin/End has none of that per-call
         // overhead, so total edge count stops being the bottleneck.
+        // Transform.position/.forward are real native-interop calls in
+        // Unity, not free field reads — confirmed the actual remaining
+        // per-repaint cost for a large graph, worse specifically while
+        // orbiting/rotating the camera (many Repaints/sec, each re-walking
+        // every edge): reading them fresh per edge meant up to 2 * edge
+        // count such calls every single repaint. The camera doesn't move
+        // mid-repaint, so read both exactly once here and pass the plain
+        // Vector3s down instead of a Camera reference for this part.
+        var camPos = camera.transform.position;
+        var camFwd = camera.transform.forward;
         var batchOpen = false;
         foreach (var graph in Data.ObjGraphs)
         {
@@ -6748,7 +6758,7 @@ public sealed class SC2ObjectsShell
             foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(graph))
             {
                 if (!markersById.TryGetValue(a, out var ma) || !markersById.TryGetValue(b, out var mb)) continue;
-                if (!TryProjectAndClipSegment(camera, viewportRect, ma.Position, mb.Position, out var pa, out var pb)) continue;
+                if (!TryProjectAndClipSegment(camera, camPos, camFwd, viewportRect, ma.Position, mb.Position, out var pa, out var pb)) continue;
                 var delta = pb - pa;
                 var length = delta.magnitude;
                 if (length < .5f) continue;
@@ -6763,12 +6773,16 @@ public sealed class SC2ObjectsShell
     /// applies, factored out so the batched path below can reuse it without
     /// also paying for a per-line GUI.DrawTexture call. See DrawOverlayLine's
     /// own doc comment for why segment clipping (not an all-or-nothing
-    /// endpoint check) matters here.</summary>
-    private static bool TryProjectAndClipSegment(Camera camera, Rect viewportRect, Vector3 from, Vector3 to, out Vector2 a, out Vector2 b)
+    /// endpoint check) matters here. camPos/camFwd are passed in (not read
+    /// from camera.transform here) so a caller iterating many segments in
+    /// one repaint — DrawGraphOverlays, potentially thousands — reads the
+    /// camera's Transform exactly once for the whole batch instead of once
+    /// per segment; DrawOverlayLine's own single-segment callers just read
+    /// it fresh immediately before calling, which costs the same as before
+    /// for them.</summary>
+    private static bool TryProjectAndClipSegment(Camera camera, Vector3 camPos, Vector3 camFwd, Rect viewportRect, Vector3 from, Vector3 to, out Vector2 a, out Vector2 b)
     {
         a = default; b = default;
-        var camPos = camera.transform.position;
-        var camFwd = camera.transform.forward;
         const float nearEps = 0.05f;
         var zFrom = Vector3.Dot(from - camPos, camFwd);
         var zTo = Vector3.Dot(to - camPos, camFwd);
@@ -7037,7 +7051,7 @@ public sealed class SC2ObjectsShell
         // wholesale on non-Repaint — but the actual GUI.DrawTexture call
         // below still should, same as every other draw primitive here.
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
-        if (!TryProjectAndClipSegment(camera, viewportRect, from, to, out var a, out var b)) return;
+        if (!TryProjectAndClipSegment(camera, camera.transform.position, camera.transform.forward, viewportRect, from, to, out var a, out var b)) return;
 
         var delta = b - a; var length = delta.magnitude;
         if (length < .5f) return;
