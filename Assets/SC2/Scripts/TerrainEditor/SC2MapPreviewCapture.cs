@@ -85,6 +85,16 @@ public static class SC2MapPreviewCapture
         // clip — the far clip plane below gives plenty of range under it.
         var eye = center + Vector3.up * 4000f;
 
+        // No content-level mirror here (unlike the interactive Top view's
+        // own SC2TopViewMirror-driven flip): RenderOffscreen already applies
+        // one vertical flip on every capture on this project's target
+        // platform (graphicsUVStartsAtTop's D3D readback correction below).
+        // Real vanilla minimap.win.dds files (checked directly against
+        // their own hfield.bdf heightmap — same row-major gz*mapW+gx
+        // layout this editor's own grid uses, no relative flip between
+        // them) need exactly that ONE flip, not a second one stacked on
+        // top — a second content-level mirror here would cancel it back
+        // out to an unflipped (wrong) result.
         return RenderOffscreen(sourceCamera, MinimapSize, MinimapSize, tempCam =>
         {
             tempCam.orthographic = true;
@@ -92,19 +102,7 @@ public static class SC2MapPreviewCapture
             tempCam.nearClipPlane = 1f;
             tempCam.farClipPlane = 8000f;
             tempCam.transform.SetPositionAndRotation(eye, Quaternion.Euler(90f, 0f, 0f));
-
-            // Matches the real game's own top-down screen convention (+Z
-            // pointing down-screen instead of Unity's default up-screen) —
-            // the same projection-matrix flip SC2GameViewEditorUI applies
-            // around the interactive Top view's own render (see
-            // SC2TopViewMirror's doc comment). Without this the minimap
-            // comes out vertically mirrored relative to every real vanilla
-            // minimap.win.dds.
-            var m = tempCam.projectionMatrix;
-            m.m11 *= -1f;
-            tempCam.projectionMatrix = m;
-            GL.invertCulling = true;
-        }, afterRender: () => GL.invertCulling = false);
+        });
     }
 
     private static Texture2D CapturePreviewFromCurrentView()
@@ -133,7 +131,7 @@ public static class SC2MapPreviewCapture
     /// back into a plain RGBA32 Texture2D (Unity's own bottom-row-0
     /// orientation — callers writing this out to DDS must flip rows first,
     /// see ToBgraBytes/ToRgbBytes).</summary>
-    private static Texture2D RenderOffscreen(Camera sourceCamera, int width, int height, Action<Camera> configure, Action afterRender = null)
+    private static Texture2D RenderOffscreen(Camera sourceCamera, int width, int height, Action<Camera> configure)
     {
         var go = new GameObject("SC2MapPreviewCaptureCamera") { hideFlags = HideFlags.HideAndDontSave };
         var cam = go.AddComponent<Camera>();
@@ -161,7 +159,6 @@ public static class SC2MapPreviewCapture
         {
             SC2GameAssetScenePreview.DrawAllBatches(cam);
             cam.Render();
-            afterRender?.Invoke();
 
             var previousActive = RenderTexture.active;
             RenderTexture.active = rt;
