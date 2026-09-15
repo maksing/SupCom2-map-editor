@@ -45,18 +45,7 @@ namespace SC2.MapEditor.Document
 
             var liveHashes = new HashSet<string>(StringComparer.Ordinal);
             foreach (var json in manifestJsons)
-            {
-                SC2JsonValue root;
-                try
-                {
-                    root = SC2JsonValue.Parse(json);
-                }
-                catch (FormatException)
-                {
-                    continue;
-                }
-                CollectHashes(root, liveHashes);
-            }
+                liveHashes.UnionWith(CollectReferencedHashes(json));
 
             var deleted = 0;
             foreach (var hash in new List<string>(blobStore.EnumerateHashes()))
@@ -65,6 +54,30 @@ namespace SC2.MapEditor.Document
                 if (blobStore.TryDelete(hash)) deleted++;
             }
             return deleted;
+        }
+
+        /// <summary>Every contentHash referenced by ONE manifest.json — the
+        /// same walk CollectUnreferencedBlobs uses across every saved map's
+        /// manifest, exposed standalone for callers that need just one
+        /// map's own set (e.g. building a self-contained, shareable copy of
+        /// a single map's files out of the shared blob pool). Returns an
+        /// empty set (never throws) for a manifest that fails to parse —
+        /// same "a bad file doesn't take down an unrelated pass" reasoning
+        /// as CollectUnreferencedBlobs' own per-manifest try/catch.</summary>
+        public static HashSet<string> CollectReferencedHashes(string manifestJson)
+        {
+            var liveHashes = new HashSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(manifestJson))
+                return liveHashes;
+            try
+            {
+                CollectHashes(SC2JsonValue.Parse(manifestJson), liveHashes);
+            }
+            catch (FormatException)
+            {
+                // corrupt/partial manifest — return whatever (nothing) was found rather than throw.
+            }
+            return liveHashes;
         }
 
         private static void CollectHashes(SC2JsonValue node, HashSet<string> liveHashes)

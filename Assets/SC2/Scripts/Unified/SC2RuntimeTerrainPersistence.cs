@@ -44,6 +44,8 @@ public static class SC2RuntimeTerrainPersistence
         if (!Directory.Exists(SaveDirectory))
             return result;
 
+        EnsureSharePackagesInstalled();
+
         foreach (var file in Directory.GetFiles(SaveDirectory, "*" + FileSuffix))
         {
             var fileName = Path.GetFileName(file);
@@ -51,6 +53,78 @@ public static class SC2RuntimeTerrainPersistence
         }
         result.Sort(StringComparer.OrdinalIgnoreCase);
         return result;
+    }
+
+    /// <summary>Auto-installs any "&lt;MapName&gt;.sc2mapshare" package
+    /// sitting directly under SaveDirectory — the real-world case being a
+    /// user extracting a zip someone sent them (or dropping in the whole
+    /// folder Save now produces, see RefreshShareablePackage's own doc
+    /// comment) straight into SC2Terrains without knowing they need to
+    /// reach inside it first. Confirmed real: those files never showed up
+    /// in the startup screen's map list, since ListSavedTerrains (and
+    /// TryLoad, and the blob store) only ever look directly under
+    /// SaveDirectory, never one level into a "*.sc2mapshare" subfolder.
+    /// Copies the package's contents up to the exact top-level layout
+    /// those already expect, so nothing else needs to know a share
+    /// package exists at all — same reasoning as RefreshShareablePackage
+    /// choosing that layout in the first place. Skips a map name that
+    /// already has a real top-level save: an auto-install must never
+    /// silently overwrite the user's own in-progress work just because a
+    /// received package happens to share its name.</summary>
+    private static void EnsureSharePackagesInstalled()
+    {
+        foreach (var shareDir in Directory.GetDirectories(SaveDirectory, "*.sc2mapshare"))
+        {
+            var mapName = Path.GetFileNameWithoutExtension(shareDir);
+            var destJsonPath = GetSavePath(mapName);
+            if (File.Exists(destJsonPath))
+                continue;
+
+            try
+            {
+                var sourceJsonPath = Path.Combine(shareDir, Path.GetFileName(destJsonPath));
+                if (!File.Exists(sourceJsonPath))
+                    continue; // not a complete/valid share package — nothing safe to install
+
+                File.Copy(sourceJsonPath, destJsonPath, overwrite: false);
+
+                var sourceManifestPath = Path.Combine(shareDir, Path.GetFileName(DocumentPackageDirectory(mapName)), "manifest.json");
+                if (File.Exists(sourceManifestPath))
+                {
+                    var destManifestDir = DocumentPackageDirectory(mapName);
+                    Directory.CreateDirectory(destManifestDir);
+                    File.Copy(sourceManifestPath, Path.Combine(destManifestDir, "manifest.json"), overwrite: true);
+                }
+
+                var sourceBlobsDir = Path.Combine(shareDir, "Blobs");
+                if (Directory.Exists(sourceBlobsDir))
+                {
+                    // Same "<first 2 hex chars>/<hash>.bin" shard layout
+                    // SC2DirectoryBlobStore itself writes/reads — merged in
+                    // directly rather than going through that class, since
+                    // a blob already present under the same hash is by
+                    // definition identical content (that's what content-
+                    // addressing means) and simply left alone.
+                    foreach (var shardDir in Directory.GetDirectories(sourceBlobsDir))
+                    {
+                        var destShardDir = Path.Combine(SaveDirectory, "Blobs", Path.GetFileName(shardDir));
+                        Directory.CreateDirectory(destShardDir);
+                        foreach (var srcFile in Directory.GetFiles(shardDir, "*.bin"))
+                        {
+                            var destFile = Path.Combine(destShardDir, Path.GetFileName(srcFile));
+                            if (!File.Exists(destFile))
+                                File.Copy(srcFile, destFile);
+                        }
+                    }
+                }
+
+                Debug.Log($"[SC2RuntimeTerrainPersistence] Installed shareable package for '{mapName}' from {shareDir}");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[SC2RuntimeTerrainPersistence] Failed to auto-install share package '{shareDir}': {ex}");
+            }
+        }
     }
 
     /// <summary>Writes via a temp file +
@@ -121,6 +195,7 @@ public static class SC2RuntimeTerrainPersistence
                 File.Move(manifestTempPath, manifestPath);
 
             CollectUnreferencedBlobs(blobStore);
+            RefreshShareablePackage(data.MapName, manifestJson, blobStore);
         }
         catch (Exception ex)
         {
@@ -128,6 +203,56 @@ public static class SC2RuntimeTerrainPersistence
                               $"(legacy JSON save above still succeeded): {ex}");
         }
     }
+
+    /// <summary>Mirrors this one map's own files — the legacy
+    /// .sc2terrain.json, its manifest.json, and only the blobs its manifest
+    /// actually references (out of the pool shared by every OTHER saved map
+    /// too, see SC2BlobStoreGarbageCollector's own doc comment on why that
+    /// pool can't just be shipped wholesale) — into a single self-contained
+    /// "&lt;MapName&gt;.sc2mapshare" folder the user can zip and hand to
+    /// someone else. Deliberately the SAME relative layout as SaveDirectory
+    /// itself (&lt;MapName&gt;.sc2terrain.json + &lt;MapName&gt;.sc2mapdoc/
+    /// manifest.json + Blobs/&lt;hash[0:2]&gt;/&lt;hash&gt;.bin), so
+    /// "installing" a received
+    /// package back on another machine is just copying its contents
+    /// straight into that machine's own SaveDirectory — no new load code
+    /// needed, TryLoad already reads exactly this layout. Rebuilt fresh
+    /// (old copy deleted first) on every save rather than merged into,
+    /// so a blob a since-edited map no longer references doesn't linger
+    /// in the package forever. Runs inside SaveDocumentPackage's own
+    /// try/catch — this is a convenience mirror of an already-successful
+    /// save, never allowed to make the save itself look like it failed.</summary>
+    private static void RefreshShareablePackage(string mapName, string manifestJson, ISC2BlobStore blobStore)
+    {
+        var shareDir = SharePackageDirectory(mapName);
+        if (Directory.Exists(shareDir))
+            Directory.Delete(shareDir, recursive: true);
+        Directory.CreateDirectory(shareDir);
+
+        var savePath = GetSavePath(mapName);
+        File.Copy(savePath, Path.Combine(shareDir, Path.GetFileName(savePath)), overwrite: true);
+
+        var shareManifestDir = Path.Combine(shareDir, Path.GetFileName(DocumentPackageDirectory(mapName)));
+        Directory.CreateDirectory(shareManifestDir);
+        File.WriteAllText(Path.Combine(shareManifestDir, "manifest.json"), manifestJson, Encoding.UTF8);
+
+        foreach (var hash in SC2BlobStoreGarbageCollector.CollectReferencedHashes(manifestJson))
+        {
+            if (!blobStore.Contains(hash)) continue; // referenced but somehow missing from the store — nothing to copy
+            var destDir = Path.Combine(shareDir, "Blobs", hash.Substring(0, 2));
+            Directory.CreateDirectory(destDir);
+            using var src = blobStore.OpenRead(hash);
+            using var dest = File.Create(Path.Combine(destDir, hash + ".bin"));
+            src.CopyTo(dest);
+        }
+
+        Debug.Log($"[SC2RuntimeTerrainPersistence] Shareable package refreshed: {shareDir}");
+    }
+
+    /// <summary>Sibling of DocumentPackageDirectory — see
+    /// RefreshShareablePackage's own doc comment for what lives here.</summary>
+    public static string SharePackageDirectory(string mapName) =>
+        Path.Combine(SaveDirectory, SanitizeFileName(string.IsNullOrWhiteSpace(mapName) ? "Untitled" : mapName) + ".sc2mapshare");
 
     /// <summary>Runs after every successful
     /// document-package write, scoped inside the SAME try/catch as the
