@@ -358,27 +358,15 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// past the texture's own bounds.</summary>
     public bool WaterDepthPaintBorder = true;
 
-    /// <summary>When on, shifts the shore-to-open-water alpha gradient (see
-    /// WaterDepthMargin/WaterDepthFalloffPower/WaterDepthMinAlpha) outward
-    /// by 5 texels (SC2WaterDepthTextureGenerator.ShoreOutlineWidthTexels):
-    /// every water texel's alpha is computed as if it were 5 texels farther
-    /// from the nearest shore than it really is. The result is the exact
-    /// same continuous fade curve, just starting from a visibly higher
-    /// alpha right at the coastline instead of bottoming out at the bare
-    /// WaterDepthMinAlpha floor — a smooth continuation of the fade, not a
-    /// hard-edged flat-color band (an earlier version forced a flat alpha
-    /// 255 for a fixed band, which showed as a visible jagged seam against
-    /// the naturally smooth gradient beyond it).</summary>
-    public bool WaterDepthShoreOutline = false;
-
     /// <summary>When on, forces a hard 1-texel-wide ring of fully-opaque
     /// water color (alpha 255) around the OUTER EDGE of the generated
     /// texture itself (x/z == 0 or texSize-1) — a visible solid frame around
     /// the whole texture. Applied last, after every other pass (including
-    /// WaterDepthPaintBorder/WaterDepthShoreOutline), so turning this on
-    /// always wins the outer ring. Same "full alpha, not zero" reasoning as
-    /// WaterDepthShoreOutline — a zero-alpha ring wouldn't read as a visible
-    /// outline, just a gap.</summary>
+    /// WaterDepthPaintBorder and the shore-edge alpha shift — see
+    /// SC2WaterDepthTextureGenerator.ShoreOutlineWidthTexels), so turning
+    /// this on always wins the outer ring. Same "full alpha, not zero"
+    /// reasoning as the shore-edge shift — a zero-alpha ring wouldn't read
+    /// as a visible outline, just a gap.</summary>
     public bool WaterDepthImageBorderOutline = false;
 
     /// <summary>Optional low-detail decorative terrain surrounding the

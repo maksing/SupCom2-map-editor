@@ -25,10 +25,19 @@ using UnityEngine;
 /// </summary>
 public static class SC2WaterDepthTextureGenerator
 {
-    // 5 texels — see SC2TerrainData.WaterDepthShoreOutline's own doc
-    // comment for what this width means and why it's fixed, not exposed as
-    // its own slider.
-    private const float ShoreOutlineWidthTexels = 5f;
+    // Always applied (no on/off toggle — a smooth shore edge is correct for
+    // every map, not an optional look) — shifts the shore-to-open-water
+    // alpha gradient (see WaterDepthMargin/WaterDepthFalloffPower/
+    // WaterDepthMinAlpha) outward by this many texels: every water texel's
+    // alpha is computed as if it were this much farther from the nearest
+    // shore than it really is. The result is the exact same continuous fade
+    // curve, just starting from a visibly higher alpha right at the
+    // coastline instead of bottoming out at the bare WaterDepthMinAlpha
+    // floor — a smooth continuation of the fade, not a hard-edged flat-
+    // color band (an earlier version forced a flat alpha 255 for a fixed
+    // band, which showed as a visible jagged seam against the naturally
+    // smooth gradient beyond it). Not exposed as its own slider.
+    private const float ShoreOutlineWidthTexels = 10f;
 
 
     /// <summary>Land/water classification + shoreline distance grid, shared
@@ -150,10 +159,10 @@ public static class SC2WaterDepthTextureGenerator
             rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b;
 
             if (!isWater[i]) { alpha[i] = 0; continue; }
-            // See SC2TerrainData.WaterDepthShoreOutline's own doc comment —
-            // a hard flat-255 override here (an earlier version of this)
-            // created a visible jagged seam right where the override band
-            // ended and the normal gradient resumed, since distTexels is a
+            // See ShoreOutlineWidthTexels' own doc comment — a hard
+            // flat-255 override here (an earlier version of this) created a
+            // visible jagged seam right where the override band ended and
+            // the normal gradient resumed, since distTexels is a
             // discretized per-texel distance field (a circle/diagonal
             // approximated in axis-aligned texel steps) — a solid block of
             // one constant value butting up against it stood out sharply.
@@ -166,7 +175,7 @@ public static class SC2WaterDepthTextureGenerator
             // block) and everything past it is a seamless continuation of
             // the same fade — never dropping back down to the bare
             // WaterDepthMinAlpha floor right at the coastline.
-            var effectiveDistTexels = data.WaterDepthShoreOutline ? distTexels[i] + ShoreOutlineWidthTexels : distTexels[i];
+            var effectiveDistTexels = distTexels[i] + ShoreOutlineWidthTexels;
             var distWorld = effectiveDistTexels * worldPerTexel;
             var t = Mathf.Clamp01(distWorld / margin);
             var a = Mathf.Lerp(minAlpha, 1f, Mathf.Pow(t, falloffPower));

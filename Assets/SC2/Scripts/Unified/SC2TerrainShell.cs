@@ -1329,16 +1329,6 @@ public class SC2TerrainShell : ScriptableObject
         }
         DrawUnifiedNote("Forces the outer ring of the texture to read as water — for a water body that runs off the edge of the map's own footprint.");
 
-        var nextOutline = EditorGUILayout.Toggle("Outline Water Edge (5px)", _data.WaterDepthShoreOutline);
-        if (nextOutline != _data.WaterDepthShoreOutline)
-        {
-            RecordUndoCheckpoint("Toggle Water Depth Shore Outline");
-            _data.WaterDepthShoreOutline = nextOutline;
-            EditorUtility.SetDirty(_data);
-            MarkDirtyAndRepaint();
-        }
-        DrawUnifiedNote("Shifts the fade above outward by 5 pixels, so every shoreline starts at a visibly higher alpha instead of the bare floor — a smooth continuation of the same gradient, not a flat band, so the coast doesn't fade out as close to fully transparent.");
-
         var nextImageBorderOutline = EditorGUILayout.Toggle("Outline Image Border (1px)", _data.WaterDepthImageBorderOutline);
         if (nextImageBorderOutline != _data.WaterDepthImageBorderOutline)
         {

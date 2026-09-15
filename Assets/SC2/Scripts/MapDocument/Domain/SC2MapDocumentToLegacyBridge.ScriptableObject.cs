@@ -84,7 +84,6 @@ namespace SC2.MapEditor.Document
             data.WaterDepthFalloffPower = env.WaterDepthFalloffPower;
             data.WaterDepthMinAlpha = env.WaterDepthMinAlpha;
             data.WaterDepthPaintBorder = env.WaterDepthPaintBorder;
-            data.WaterDepthShoreOutline = env.WaterDepthShoreOutline;
             data.WaterDepthImageBorderOutline = env.WaterDepthImageBorderOutline;
 
             var objects = ReconstructObjects(document.Objects);

@@ -66172,7 +66172,6 @@ MonoBehaviour:
   WaterDepthFalloffPower: 2
   WaterDepthMinAlpha: 0.04
   WaterDepthPaintBorder: 1
-  WaterDepthShoreOutline: 0
   WaterDepthImageBorderOutline: 0
   BackgroundTerrainEnabled: 0
   BackgroundTerrainData: {fileID: 0}

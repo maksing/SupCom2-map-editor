@@ -33,7 +33,6 @@ namespace SC2.MapEditor.Document
             float waterDepthFalloffPower = 2f,
             float waterDepthMinAlpha = 0.04f,
             bool waterDepthPaintBorder = true,
-            bool waterDepthShoreOutline = false,
             bool waterDepthImageBorderOutline = false)
         {
             if (environmentHeader == null) throw new ArgumentNullException(nameof(environmentHeader));
@@ -64,7 +63,6 @@ namespace SC2.MapEditor.Document
                 WaterDepthFalloffPower = waterDepthFalloffPower,
                 WaterDepthMinAlpha = waterDepthMinAlpha,
                 WaterDepthPaintBorder = waterDepthPaintBorder,
-                WaterDepthShoreOutline = waterDepthShoreOutline,
                 WaterDepthImageBorderOutline = waterDepthImageBorderOutline,
             };
         }

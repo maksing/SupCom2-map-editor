@@ -68,7 +68,6 @@ public sealed class SC2TerrainUndoStack
         public float WaterDepthFalloffPower;
         public float WaterDepthMinAlpha;
         public bool WaterDepthPaintBorder;
-        public bool WaterDepthShoreOutline;
         public bool WaterDepthImageBorderOutline;
         public string PlayableAreaName;
         // Same audit, same false-Undo-step symptom: these are also reachable
@@ -249,7 +248,6 @@ public sealed class SC2TerrainUndoStack
             WaterDepthFalloffPower = data.WaterDepthFalloffPower,
             WaterDepthMinAlpha = data.WaterDepthMinAlpha,
             WaterDepthPaintBorder = data.WaterDepthPaintBorder,
-            WaterDepthShoreOutline = data.WaterDepthShoreOutline,
             WaterDepthImageBorderOutline = data.WaterDepthImageBorderOutline,
             PlayableAreaName = data.PlayableAreaName,
             SingleBspNodePerLayer = data.SingleBspNodePerLayer,
@@ -299,7 +297,6 @@ public sealed class SC2TerrainUndoStack
         data.WaterDepthFalloffPower = snapshot.WaterDepthFalloffPower;
         data.WaterDepthMinAlpha = snapshot.WaterDepthMinAlpha;
         data.WaterDepthPaintBorder = snapshot.WaterDepthPaintBorder;
-        data.WaterDepthShoreOutline = snapshot.WaterDepthShoreOutline;
         data.WaterDepthImageBorderOutline = snapshot.WaterDepthImageBorderOutline;
         data.PlayableAreaName = snapshot.PlayableAreaName;
         data.SingleBspNodePerLayer = snapshot.SingleBspNodePerLayer;
