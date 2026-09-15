@@ -175,8 +175,22 @@ public sealed class SC2DecalSurfaceProvider
                 var z0 = origin.z + side * z / cellsZ; var z1 = origin.z + side * (z + 1) / cellsZ;
                 var a = Pt(x0, z0); var b = Pt(x1, z0); var c = Pt(x1, z1); var d = Pt(x0, z1);
                 var na = Nm(x0, z0); var nb = Nm(x1, z0); var nc = Nm(x1, z1); var nd = Nm(x0, z1);
-                var t1 = Triangle(a, b, c); t1.NA = N(na); t1.NB = N(nb); t1.NC = N(nc); output.Add(t1);
-                var t2 = Triangle(a, c, d); t2.NA = N(na); t2.NB = N(nc); t2.NC = N(nd); output.Add(t2);
+                // Winding matches SC2TerrainRuntime.BuildChunkIndices' own
+                // proven quad split (i00,i01,i10)/(i10,i01,i11) — an earlier
+                // version of this used (a,b,c)/(a,c,d), the OPPOSITE winding
+                // (confirmed by signed-area comparison against that known-
+                // correct terrain code for the same quad corners). This
+                // synthesized surface only feeds SC2DecalGeometryBuilder's
+                // face-angle rejection/shading (both driven by the explicit
+                // normals above, unaffected by index order) and the output
+                // decal mesh's own triangle winding (which DOES come
+                // straight from this vertex order) — a reversed decal mesh
+                // still gets built and still references the right texture,
+                // it just backface-culls in anything that isn't rendering
+                // it double-sided, which is exactly "exports fine, invisible
+                // in the real game" with nothing else visibly wrong.
+                var t1 = Triangle(a, c, b); t1.NA = N(na); t1.NB = N(nc); t1.NC = N(nb); output.Add(t1);
+                var t2 = Triangle(a, d, c); t2.NA = N(na); t2.NB = N(nd); t2.NC = N(nc); output.Add(t2);
             }
         }
     }
@@ -247,8 +261,10 @@ public sealed class SC2DecalSurfaceProvider
                 // 4 corners — see SC2DecalGeometryBuilder.BuildPlacement's
                 // comment for why a flat normal here would facet visibly.
                 var na = NormalAt(terrain, x0, z0); var nb = NormalAt(terrain, x1, z0); var nc = NormalAt(terrain, x1, z1); var nd = NormalAt(terrain, x0, z1);
-                var t1 = Triangle(a, b, c); t1.NA = N(na); t1.NB = N(nb); t1.NC = N(nc); output.Add(t1);
-                var t2 = Triangle(a, c, d); t2.NA = N(na); t2.NB = N(nc); t2.NC = N(nd); output.Add(t2);
+                // Same winding fix as AddLiveHeightGrid above — see that
+                // method's own comment.
+                var t1 = Triangle(a, c, b); t1.NA = N(na); t1.NB = N(nc); t1.NC = N(nb); output.Add(t1);
+                var t2 = Triangle(a, d, c); t2.NA = N(na); t2.NB = N(nd); t2.NC = N(nc); output.Add(t2);
             }
         }
     }
