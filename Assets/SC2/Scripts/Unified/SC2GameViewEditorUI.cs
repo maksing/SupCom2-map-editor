@@ -173,13 +173,33 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     // ── Measure tool (Edit menu / "M") ──────────────────────────────────────
     // XZ tape-measure: click sets the start point, a live line+distance
-    // follows the cursor until a second click locks the end point; a third
-    // click starts a fresh measurement from that point. See
+    // follows the cursor until a second click locks the end point and adds
+    // it to _measurements; the next click starts a fresh measurement. Locked
+    // measurements stay visible (not just the most recent one) until deleted
+    // — click near an existing one's line to select it, drag either endpoint
+    // marker to edit it, Delete/Backspace to remove it. See
     // HandleMeasureToolGameViewInput's own doc comment.
     private bool _measureHasStart;
-    private Vector3 _measureStart;
-    private bool _measureHasEnd;
-    private Vector3 _measureEnd;
+    /// <summary>A shared, mutable vertex — multiple measurements can
+    /// reference the SAME instance (set up by snapping one measurement's
+    /// endpoint onto another's, or by merging an existing one into another
+    /// via drag), so moving it moves every measurement attached to it at
+    /// once, the way a real connected point graph would. A measurement
+    /// whose Start/End is its own private SC2MeasurePoint (referenced by no
+    /// one else) behaves exactly like a plain Vector3 field would.</summary>
+    private sealed class SC2MeasurePoint { public Vector3 Position; }
+    private sealed class SC2Measurement { public SC2MeasurePoint Start = new(); public SC2MeasurePoint End = new(); }
+    private readonly List<SC2Measurement> _measurements = new();
+    /// <summary>The in-progress measurement's start point — a real
+    /// SC2MeasurePoint (not a bare Vector3) so that snapping the start click
+    /// onto an existing measurement's point can reference that SAME object
+    /// directly, connecting the two from the moment this measurement locks.</summary>
+    private SC2MeasurePoint _measureStartPoint;
+    private int _selectedMeasurement = -1;
+    /// <summary>-1 = not dragging, 0 = dragging Start, 1 = dragging End —
+    /// which endpoint of _measurements[_selectedMeasurement] is currently
+    /// being repositioned.</summary>
+    private int _draggingMeasurementEndpoint = -1;
 
     // ── Map frame overlay (View menu) ───────────────────────────────────────
     // Configurable rectangle, centered on the map's own playable footprint
@@ -1352,7 +1372,22 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 // also fire on the same click while Measure is active.
                 HandleMeasureToolGameViewInput();
                 DrawMapFrameOverlay();
-                HandleTerrainGameViewInput();
+                // HandleTerrainGameViewInput draws its Geometry/Paint brush
+                // ring ONLY when the Terrain tab is active and does nothing
+                // else cross-tab, so suppressing the whole call while Measure
+                // is active cleanly hides just that cursor. HandleCostsGameViewInput
+                // and HandleObjectsGameViewInput are NOT safe to suppress the
+                // same way — both deliberately keep drawing PASSIVE content
+                // from any tab via their own Overlay* toggles (Costs tint
+                // overlay, Objects' props/markers/path graphs/areas), fully
+                // independent of whether their own tab's brush/placement
+                // cursor is active; skipping them here previously made path
+                // graphs vanish the moment Measure turned on. Their own
+                // internal allowInput/tab-active checks already gate the
+                // actual brush cursor drawing without needing to be skipped
+                // wholesale from here.
+                if (_tool != "Measure")
+                    HandleTerrainGameViewInput();
                 SyncTerrainOverlayFlags();
                 HandleCostsGameViewInput();
                 HandleCollision2GameViewInput();
@@ -3573,10 +3608,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// <summary>Shared by the Edit menu item, the View menu's own Toggle
     /// (see DrawViewMenu — its pressed state IS "is Measure active"), and
     /// the "M" hotkey, so all three agree on the exact same on/off
-    /// semantics: activating clears any stale start/end from a previous
-    /// session; deactivating just switches back to Select without also
-    /// forcing a reset, so re-activating later resumes wherever the user
-    /// left off instead of always starting fresh.</summary>
+    /// semantics: activating clears any in-progress (not yet locked) start
+    /// point from a previous session; deactivating just switches back to
+    /// Select without also forcing a reset, so re-activating later resumes
+    /// wherever the user left off (including every locked measurement)
+    /// instead of always starting fresh.</summary>
     private void ToggleMeasureTool()
     {
         if (_tool == "Measure")
@@ -3586,25 +3622,37 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
         SetTool("Measure");
         _measureHasStart = false;
-        _measureHasEnd = false;
+        _draggingMeasurementEndpoint = -1;
         SetStatus("Measure: click to set start point.");
     }
 
     /// <summary>The Measure tool's entire input+draw loop — a "Global" tool
     /// (Edit menu / View menu / "M" hotkey), not tied to whichever main
     /// tab/shell is otherwise active, so it lives here rather than inside
-    /// any one shell. Click 1 sets the start point; while no end point is
-    /// locked yet, a live line + distance follows the cursor; click 2 locks
-    /// the end point; click 3 starts a fresh measurement from that new
-    /// point. Distance is XZ-only (world height/Y deliberately excluded,
-    /// per the feature request this implements) — matches how map
-    /// distances/placement grids are reasoned about everywhere else in this
-    /// editor (SnapXZ, GetSymmetricPositions' own "Y untouched" convention).
-    /// Escape cancels an in-progress measurement first, then exits the tool
-    /// entirely (back to Select) on a second press. Consumes (e.Use()) any
-    /// click/Escape it handles so the active tab's own paint/place/select
-    /// handlers never also fire on the same input — see this method's call
-    /// site's own comment for why it must run first, before those.</summary>
+    /// any one shell.
+    ///
+    /// Click 1 sets the start point; while no end point is locked yet, a
+    /// live line + distance follows the cursor; click 2 locks the end point
+    /// into a new entry in _measurements (kept — every earlier measurement
+    /// stays visible, not just the most recent one) and immediately arms a
+    /// fresh start point for the next click. Distance is XZ-only (world
+    /// height/Y deliberately excluded, per the feature request this
+    /// implements) — matches how map distances/placement grids are reasoned
+    /// about everywhere else in this editor (SnapXZ, GetSymmetricPositions'
+    /// own "Y untouched" convention).
+    ///
+    /// Clicking near an existing locked measurement's endpoint marker
+    /// selects it and starts dragging that endpoint (released on MouseUp);
+    /// clicking near its line body (not an endpoint) just selects it,
+    /// without starting a fresh in-progress measurement. Delete/Backspace
+    /// removes the selected measurement. Escape cancels an in-progress
+    /// endpoint drag, then clears the selection, then cancels an
+    /// in-progress (not yet locked) measurement, then exits the tool
+    /// entirely (back to Select) — each press handling exactly one of those
+    /// in order. Consumes (e.Use()) any click/key it handles so the active
+    /// tab's own paint/place/select handlers never also fire on the same
+    /// input — see this method's call site's own comment for why it must
+    /// run first, before those.</summary>
     private void HandleMeasureToolGameViewInput()
     {
         if (_tool != "Measure") return;
@@ -3616,39 +3664,234 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
             {
-                if (_measureHasStart) { _measureHasStart = false; _measureHasEnd = false; SetStatus("Measure: click to set start point."); }
+                if (_draggingMeasurementEndpoint >= 0) _draggingMeasurementEndpoint = -1;
+                else if (_selectedMeasurement >= 0) { _selectedMeasurement = -1; SetStatus("Measure: click to set start point, or click an existing measurement to select it."); }
+                else if (_measureHasStart) { _measureHasStart = false; SetStatus("Measure: click to set start point."); }
                 else SetTool("Select");
                 e.Use();
             }
-            else if (e.type == EventType.MouseDown && e.button == 0 && !e.alt && TryGetMeasureHit(camera, e.mousePosition, out var clicked))
+            else if ((e.type == EventType.KeyDown && (e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace))
+                     && _selectedMeasurement >= 0 && _draggingMeasurementEndpoint < 0)
             {
-                if (!_measureHasStart || _measureHasEnd)
-                {
-                    _measureStart = clicked;
-                    _measureHasStart = true;
-                    _measureHasEnd = false;
-                    SetStatus("Measure: click to set end point (Esc to cancel).");
-                }
-                else
-                {
-                    _measureEnd = clicked;
-                    _measureHasEnd = true;
-                    var lockedDistance = Vector2.Distance(new Vector2(_measureStart.x, _measureStart.z), new Vector2(_measureEnd.x, _measureEnd.z));
-                    SetStatus($"Measure: {lockedDistance:0.00} units (XZ). Click to start a new measurement.");
-                }
+                _measurements.RemoveAt(_selectedMeasurement);
+                _selectedMeasurement = -1;
+                SetStatus("Measurement deleted.");
                 e.Use();
+            }
+            else if (e.type == EventType.MouseDrag && e.button == 0 && _draggingMeasurementEndpoint >= 0
+                     && _selectedMeasurement >= 0 && _selectedMeasurement < _measurements.Count
+                     && TryGetMeasureHit(camera, e.mousePosition, out var draggedTo))
+            {
+                var m = _measurements[_selectedMeasurement];
+                var pt = _draggingMeasurementEndpoint == 0 ? m.Start : m.End;
+                // Mutates the SHARED point object in place — any other
+                // measurement whose Start/End also references this same
+                // instance moves right along with it, live during the drag.
+                pt.Position = draggedTo;
+                e.Use();
+            }
+            else if (e.type == EventType.MouseUp && e.button == 0 && _draggingMeasurementEndpoint >= 0)
+            {
+                // Dropping the dragged endpoint near a DIFFERENT existing
+                // point merges into it — this measurement's Start/End field
+                // now references that shared point object directly (any
+                // other measurement already using the point being LEFT
+                // behind keeps using it, unaffected, at wherever the drag
+                // left it).
+                if (_selectedMeasurement >= 0 && _selectedMeasurement < _measurements.Count)
+                {
+                    var m = _measurements[_selectedMeasurement];
+                    var current = _draggingMeasurementEndpoint == 0 ? m.Start : m.End;
+                    if (TryFindNearestMeasurementPoint(camera, e.mousePosition, current, out var target))
+                    {
+                        if (_draggingMeasurementEndpoint == 0) m.Start = target; else m.End = target;
+                        SetStatus("Measure: connected to existing point.");
+                    }
+                }
+                _draggingMeasurementEndpoint = -1;
+                e.Use();
+            }
+            else if (e.type == EventType.MouseDown && e.button == 0 && !e.alt)
+            {
+                // Selecting/dragging an existing measurement only makes sense
+                // when nothing is currently being placed — while an in-progress
+                // measurement is awaiting its end point (_measureHasStart), any
+                // click always completes THAT measurement instead. Without this
+                // guard, aiming the second point of a new measurement at an
+                // existing measurement's endpoint silently selected that
+                // existing measurement instead of finishing the new one there
+                // (a real reported bug) — it falls through to the snap-to-point
+                // branch below instead, which is what actually connects the two
+                // measurements' points.
+                if (!_measureHasStart && TryHitMeasurementEndpoint(camera, e.mousePosition, out var endpointMeasurement, out var endpoint))
+                {
+                    _selectedMeasurement = endpointMeasurement;
+                    _draggingMeasurementEndpoint = endpoint;
+                    SetStatus("Measure: dragging endpoint — release to set. Delete to remove this measurement.");
+                    e.Use();
+                }
+                else if (!_measureHasStart && TryHitMeasurementLine(camera, e.mousePosition, out var lineMeasurement))
+                {
+                    _selectedMeasurement = lineMeasurement;
+                    var picked = _measurements[lineMeasurement];
+                    var pickedDistance = Vector2.Distance(new Vector2(picked.Start.Position.x, picked.Start.Position.z), new Vector2(picked.End.Position.x, picked.End.Position.z));
+                    SetStatus($"Measure: selected ({pickedDistance:0.00} u). Drag an endpoint to edit, Delete to remove.");
+                    e.Use();
+                }
+                else if (TryGetMeasureHit(camera, e.mousePosition, out var clicked))
+                {
+                    // Snap onto an existing measurement's endpoint when close
+                    // enough, REUSING that same SC2MeasurePoint object (not
+                    // just copying its coordinates) — this is what actually
+                    // connects the two measurements: moving the shared point
+                    // later moves both.
+                    var pointObj = TryFindNearestMeasurementPoint(camera, e.mousePosition, null, out var snapped)
+                        ? snapped : new SC2MeasurePoint { Position = clicked };
+                    _selectedMeasurement = -1;
+                    if (!_measureHasStart)
+                    {
+                        _measureStartPoint = pointObj;
+                        _measureHasStart = true;
+                        SetStatus("Measure: click to set end point (Esc to cancel).");
+                    }
+                    else
+                    {
+                        _measurements.Add(new SC2Measurement { Start = _measureStartPoint, End = pointObj });
+                        var lockedDistance = Vector2.Distance(new Vector2(_measureStartPoint.Position.x, _measureStartPoint.Position.z), new Vector2(pointObj.Position.x, pointObj.Position.z));
+                        _measureHasStart = false;
+                        SetStatus($"Measure: {lockedDistance:0.00} units (XZ). Click to start a new measurement, or click an existing one to select it.");
+                    }
+                    e.Use();
+                }
             }
         }
 
-        if (!_measureHasStart) return;
+        for (var i = 0; i < _measurements.Count; i++)
+            DrawMeasureOverlay(camera, _measurements[i].Start.Position, _measurements[i].End.Position, isLive: false, selected: i == _selectedMeasurement);
 
-        var endPoint = _measureEnd;
-        if (!_measureHasEnd)
+        if (!_measureHasStart) return;
+        if (e == null || !_viewportRect.Contains(e.mousePosition) || !TryGetMeasureHit(camera, e.mousePosition, out var endPoint))
+            endPoint = _measureStartPoint.Position;
+        // Preview the same snap the actual click will apply, so the line
+        // visibly connects to an existing measurement's point WHILE aiming,
+        // not just after clicking.
+        else if (TryFindNearestMeasurementPoint(camera, e.mousePosition, null, out var snappedPreview))
+            endPoint = snappedPreview.Position;
+        DrawMeasureOverlay(camera, _measureStartPoint.Position, endPoint, isLive: true, selected: false);
+    }
+
+    /// <summary>Screen-space search for the nearest existing measurement
+    /// endpoint to snap a new/completing/dragged point onto, so two
+    /// measurements can share the exact same SC2MeasurePoint object instead
+    /// of two points that merely look close together on screen. Same pixel
+    /// radius as TryHitMeasurementEndpoint for consistency, but returns the
+    /// POINT OBJECT to attach to (not a copied position) — this is used
+    /// while actively placing/dragging a point, not selecting.
+    /// <paramref name="exclude"/> is the point currently being placed/
+    /// dragged, if any (pass null when there isn't one, e.g. placing a
+    /// brand new measurement's first point) — skipped so a drag can't
+    /// trivially "snap" onto the very point it's already holding.</summary>
+    private bool TryFindNearestMeasurementPoint(Camera camera, Vector2 guiMousePosition, SC2MeasurePoint exclude, out SC2MeasurePoint found)
+    {
+        const float snapPixelRadius = 10f;
+        found = null;
+        var best = snapPixelRadius;
+        foreach (var m in _measurements)
         {
-            if (e == null || !_viewportRect.Contains(e.mousePosition) || !TryGetMeasureHit(camera, e.mousePosition, out endPoint))
-                endPoint = _measureStart;
+            if (m.Start != exclude)
+            {
+                var d = Vector2.Distance(guiMousePosition, SC2TerrainShell.WorldToGameGui(camera, _viewportRect, m.Start.Position));
+                if (d < best) { best = d; found = m.Start; }
+            }
+            if (m.End != exclude)
+            {
+                var d = Vector2.Distance(guiMousePosition, SC2TerrainShell.WorldToGameGui(camera, _viewportRect, m.End.Position));
+                if (d < best) { best = d; found = m.End; }
+            }
         }
-        DrawMeasureOverlay(camera, _measureStart, endPoint, !_measureHasEnd);
+        return found != null;
+    }
+
+    /// <summary>Screen-space hit test against every locked measurement's two
+    /// endpoint markers — used to pick which measurement AND which of its
+    /// endpoints a click should start dragging. Picks the single closest
+    /// endpoint across all measurements within HitPixelRadius, so an
+    /// overlapping pair of measurements always resolves to exactly one.</summary>
+    private bool TryHitMeasurementEndpoint(Camera camera, Vector2 guiMousePosition, out int measurementIndex, out int endpoint)
+    {
+        const float hitPixelRadius = 10f;
+        measurementIndex = -1; endpoint = -1;
+        var best = hitPixelRadius;
+        for (var i = 0; i < _measurements.Count; i++)
+        {
+            var m = _measurements[i];
+            var startDist = Vector2.Distance(guiMousePosition, SC2TerrainShell.WorldToGameGui(camera, _viewportRect, m.Start.Position));
+            if (startDist < best) { best = startDist; measurementIndex = i; endpoint = 0; }
+            var endDist = Vector2.Distance(guiMousePosition, SC2TerrainShell.WorldToGameGui(camera, _viewportRect, m.End.Position));
+            if (endDist < best) { best = endDist; measurementIndex = i; endpoint = 1; }
+        }
+        return measurementIndex >= 0;
+    }
+
+    /// <summary>Screen-space hit test against every locked measurement's own
+    /// line body (not its endpoints — TryHitMeasurementEndpoint already
+    /// covers those, and is checked first, so a click right on an endpoint
+    /// never falls through to just selecting the line instead of dragging
+    /// it). Picks the single closest line within HitPixelRadius.</summary>
+    private bool TryHitMeasurementLine(Camera camera, Vector2 guiMousePosition, out int measurementIndex)
+    {
+        const float hitPixelRadius = 6f;
+        measurementIndex = -1;
+        var best = hitPixelRadius;
+        for (var i = 0; i < _measurements.Count; i++)
+        {
+            var m = _measurements[i];
+            var startGui = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, m.Start.Position);
+            var endGui = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, m.End.Position);
+            var dist = DistancePointToGuiSegment(guiMousePosition, startGui, endGui);
+            if (dist < best) { best = dist; measurementIndex = i; }
+        }
+        return measurementIndex >= 0;
+    }
+
+    private static float DistancePointToGuiSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        var t = ab.sqrMagnitude > 1e-6f ? Mathf.Clamp01(Vector2.Dot(p - a, ab) / ab.sqrMagnitude) : 0f;
+        return Vector2.Distance(p, a + ab * t);
+    }
+
+    /// <summary>Liang-Barsky line clip — shortens segment a-b down to just
+    /// the portion inside _viewportRect (returns false, with a/b unchanged,
+    /// when none of it is visible). Used by DrawMeasureOverlay so a
+    /// measurement's line/label never render on top of the left panel/
+    /// header, which visually covers part of the same camera image the
+    /// Game View renders behind it.</summary>
+    private bool ClipGuiSegmentToViewport(Vector2 a, Vector2 b, out Vector2 clippedA, out Vector2 clippedB)
+    {
+        var rect = _viewportRect;
+        var dx = b.x - a.x; var dy = b.y - a.y;
+        float t0 = 0f, t1 = 1f;
+        var p0 = -dx; var q0 = a.x - rect.xMin;
+        var p1 = dx; var q1 = rect.xMax - a.x;
+        var p2 = -dy; var q2 = a.y - rect.yMin;
+        var p3 = dy; var q3 = rect.yMax - a.y;
+        for (var i = 0; i < 4; i++)
+        {
+            var p = i == 0 ? p0 : i == 1 ? p1 : i == 2 ? p2 : p3;
+            var q = i == 0 ? q0 : i == 1 ? q1 : i == 2 ? q2 : q3;
+            if (Mathf.Approximately(p, 0f))
+            {
+                if (q < 0f) { clippedA = a; clippedB = b; return false; }
+                continue;
+            }
+            var r = q / p;
+            if (p < 0f) { if (r > t1) { clippedA = a; clippedB = b; return false; } if (r > t0) t0 = r; }
+            else { if (r < t0) { clippedA = a; clippedB = b; return false; } if (r < t1) t1 = r; }
+        }
+        clippedA = new Vector2(a.x + dx * t0, a.y + dy * t0);
+        clippedB = new Vector2(a.x + dx * t1, a.y + dy * t1);
+        return true;
     }
 
     /// <summary>Same imported-terrain-first, live-procedural-fallback
@@ -3665,20 +3908,39 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         return false;
     }
 
-    private void DrawMeasureOverlay(Camera camera, Vector3 start, Vector3 end, bool isLive)
+    private void DrawMeasureOverlay(Camera camera, Vector3 start, Vector3 end, bool isLive, bool selected)
     {
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
 
         var startGui = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, start);
         var endGui = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, end);
-        var lineColor = isLive ? new Color(1f, 0.85f, 0.2f, 0.9f) : new Color(0.3f, 1f, 0.55f, 0.95f);
+        // Live (in-progress, not yet locked) stays the original amber;
+        // selected (locked, click-picked for editing/deletion) gets its own
+        // distinct color so it's obvious which measurement Delete/dragging
+        // would affect; every other locked measurement keeps the original
+        // green.
+        var lineColor = isLive ? new Color(1f, 0.85f, 0.2f, 0.9f)
+            : selected ? new Color(0.4f, 0.75f, 1f, 0.95f)
+            : new Color(0.3f, 1f, 0.55f, 0.95f);
 
-        SC2TerrainShell.DrawGuiLineSegment(startGui, endGui, lineColor, 2f);
-        SC2TerrainShell.DrawSymmetryPointMarker(camera, _viewportRect, start, Color.white, pixelSize: 8f);
-        SC2TerrainShell.DrawSymmetryPointMarker(camera, _viewportRect, end, Color.white, pixelSize: 8f);
+        // The camera renders behind the WHOLE Game View — the left panel/
+        // header are just opaque UI drawn on top of part of that same image
+        // — so an endpoint sitting behind them still has a valid (but
+        // off-limits) GUI position. DrawSymmetryPointMarker already skips
+        // itself when its point falls outside _viewportRect; DrawGuiLineSegment/
+        // DrawFloatingLabel don't (they're shared primitives used elsewhere
+        // that assume the caller already stayed in-bounds), so this method
+        // clips its own line to the visible rect and only labels the visible
+        // portion, instead of drawing straight over the panel.
+        if (!ClipGuiSegmentToViewport(startGui, endGui, out var clippedStart, out var clippedEnd)) return;
+
+        SC2TerrainShell.DrawGuiLineSegment(clippedStart, clippedEnd, lineColor, selected ? 3f : 2f);
+        var markerSize = selected ? 11f : 8f;
+        SC2TerrainShell.DrawSymmetryPointMarker(camera, _viewportRect, start, Color.white, pixelSize: markerSize);
+        SC2TerrainShell.DrawSymmetryPointMarker(camera, _viewportRect, end, Color.white, pixelSize: markerSize);
 
         var distanceXz = Vector2.Distance(new Vector2(start.x, start.z), new Vector2(end.x, end.z));
-        var midGui = (startGui + endGui) * 0.5f;
+        var midGui = (clippedStart + clippedEnd) * 0.5f;
         SC2TerrainShell.DrawFloatingLabel(midGui, $"{distanceXz:0.00} u", lineColor);
     }
 
