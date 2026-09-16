@@ -870,6 +870,7 @@ namespace SC2.MapEditor.Document
             o.Set("backgroundTerrainUvScale", SC2JsonValue.Of(t.BackgroundTerrainUvScale));
             o.Set("globalUvScaleEnabled", SC2JsonValue.Of(t.GlobalUvScaleEnabled));
             o.Set("globalUvScale", SC2JsonValue.Of(t.GlobalUvScale));
+            o.Set("uv1HeightWeight", SC2JsonValue.Of(t.Uv1HeightWeight));
             o.Set("rnmBakeSyncSunDirection", SC2JsonValue.Of(t.RnmBakeSyncSunDirection));
             o.Set("rnmBakeSyncSunColor", SC2JsonValue.Of(t.RnmBakeSyncSunColor));
             o.Set("rnmBakeSyncSunIntensity", SC2JsonValue.Of(t.RnmBakeSyncSunIntensity));
@@ -909,6 +910,7 @@ namespace SC2.MapEditor.Document
                 BackgroundTerrainUvScale = (float)o.Get("backgroundTerrainUvScale").AsDouble(1024.0),
                 GlobalUvScaleEnabled = o.Get("globalUvScaleEnabled").AsBool(false),
                 GlobalUvScale = (float)o.Get("globalUvScale").AsDouble(4.0),
+                Uv1HeightWeight = (float)o.Get("uv1HeightWeight").AsDouble(1.0),
                 RnmBakeSyncSunDirection = o.Get("rnmBakeSyncSunDirection").AsBool(true),
                 RnmBakeSyncSunColor = o.Get("rnmBakeSyncSunColor").AsBool(true),
                 RnmBakeSyncSunIntensity = o.Get("rnmBakeSyncSunIntensity").AsBool(true),

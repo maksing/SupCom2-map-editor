@@ -59,6 +59,7 @@ namespace SC2.MapEditor.Document
             public float BackgroundTerrainUvScale = 1024f;
             public bool GlobalUvScaleEnabled;
             public float GlobalUvScale = 4f;
+            public float Uv1HeightWeight = 1f;
             public bool RnmBakeSyncSunDirection = true;
             public bool RnmBakeSyncSunColor = true;
             public bool RnmBakeSyncSunIntensity = true;
@@ -100,6 +101,7 @@ namespace SC2.MapEditor.Document
                 BackgroundTerrainUvScale = doc.BackgroundTerrainUvScale,
                 GlobalUvScaleEnabled = doc.GlobalUvScaleEnabled,
                 GlobalUvScale = doc.GlobalUvScale,
+                Uv1HeightWeight = doc.Uv1HeightWeight,
                 RnmBakeSyncSunDirection = doc.RnmBakeSyncSunDirection,
                 RnmBakeSyncSunColor = doc.RnmBakeSyncSunColor,
                 RnmBakeSyncSunIntensity = doc.RnmBakeSyncSunIntensity,

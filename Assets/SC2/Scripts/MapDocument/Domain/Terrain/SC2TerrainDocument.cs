@@ -104,6 +104,11 @@ namespace SC2.MapEditor.Document
         public bool GlobalUvScaleEnabled;
         public float GlobalUvScale = 4f;
 
+        /// <summary>Amplifies height's contribution to the UV1 stretch
+        /// correction; see SC2TerrainData.Uv1HeightWeight's own doc
+        /// comment.</summary>
+        public float Uv1HeightWeight = 1f;
+
         /// <summary>The
         /// nested SC2TerrainData instance was assumed to be fully
         /// regenerable from the 3 scalars above plus the live core terrain

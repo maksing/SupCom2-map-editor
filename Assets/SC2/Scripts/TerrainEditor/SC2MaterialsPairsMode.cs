@@ -380,6 +380,38 @@ public class SC2PairsMode
                 }
             }
             SC2TerrainShell.DrawUnifiedNote("One shared tiling scale for EVERY pair on both the playable core and the decorative background — supersedes each pair's own Tiling Scale below while enabled, guaranteeing the texture tiling frequency can never mismatch at the seam or between two core pairs. Off leaves per-pair tiling exactly as authored.");
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Terrain UV1", EditorStyles.boldLabel);
+            var newHeightWeight = SC2TerrainShell.DrawCompactSlider("Height Stretch Weight", Data.Uv1HeightWeight, 0.25f, 10f,
+                onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change UV1 Height Weight"));
+            if (!Mathf.Approximately(newHeightWeight, Data.Uv1HeightWeight))
+            {
+                Data.Uv1HeightWeight = Mathf.Max(0f, newHeightWeight);
+                EditorUtility.SetDirty(Data);
+            }
+            SC2TerrainShell.DrawUnifiedNote("1 = physically accurate (a slope's UV1 span matches its real 3D surface distance). Higher exaggerates the correction further, so steep cliffs/mountains claim even MORE UV space than their real distance alone would give them — useful if 1 still isn't enough to hide stretching on very sharp terrain. Saved with the map; applies to core and background alike, same as Global UV Scale above. Press Recalculate UV1 below to see the new value.");
+            if (GUILayout.Button("Recalculate UV1 (fix cliff texture stretching)", GUILayout.Height(SC2UiScale.Pxf(22f))))
+            {
+                // Not tied to Bake Lighting (a separate, independent
+                // feature/button) — this ONLY refreshes the live preview's
+                // own tiling coordinate to match the current terrain shape
+                // and Height Stretch Weight above. Export already computes
+                // UV1 fresh every time on its own (SC2TerrainExporter)
+                // using whatever Uv1HeightWeight is currently saved, so
+                // there's nothing to "turn on" there; this button exists so
+                // the EDITOR VIEW doesn't keep showing a stale mapping after
+                // terrain edits or a weight change until asked to refresh —
+                // continuous per-edit recompute was deliberately avoided
+                // (see SC2TerrainRuntime.RecalculateUv1's own comment) since
+                // this runs during active sculpting/painting.
+                _win.Runtime?.RecalculateUv1(Data.Uv1HeightWeight);
+                _win.BackgroundRuntime?.RecalculateUv1(Data.Uv1HeightWeight);
+                if (Data.BackgroundTerrainEnabled && Data.BackgroundTerrainData != null)
+                    SC2BackgroundSeamSkirt.Rebuild(Data, _win);
+                _win.MarkDirtyAndRepaint();
+            }
+            SC2TerrainShell.DrawUnifiedNote("Terrain.bdf's texture coordinates (UV1) already unwrap by real 3D surface distance on every export instead of a flat top-down X/Z projection, so a tiled texture doesn't stretch along steep cliffs/mountains. This button refreshes the EDITOR PREVIEW to match after you've reshaped the terrain — it does not bake or change lighting (that's the separate Bake Lighting button).");
         }
 
         EditorGUILayout.Space(4);

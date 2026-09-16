@@ -44,7 +44,8 @@ namespace SC2.MapEditor.Document
                 data.GlobalUvScaleEnabled, data.GlobalUvScale,
                 data.RnmBakeSyncSunDirection, data.RnmBakeSyncSunColor, data.RnmBakeSyncSunIntensity, data.RnmBakeSyncShadowColor,
                 data.RnmBakeOverrideSunDirection, data.RnmBakeOverrideSunColor, data.RnmBakeOverrideSunIntensity, data.RnmBakeOverrideShadowColor,
-                data.RnmBakeShadowSoftRadius);
+                data.RnmBakeShadowSoftRadius,
+                data.Uv1HeightWeight);
             if (data.BackgroundTerrainEnabled && data.BackgroundTerrainData != null)
                 doc.Background = BuildFromLegacy(data.BackgroundTerrainData, blobStore);
             return doc;

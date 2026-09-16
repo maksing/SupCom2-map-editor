@@ -419,6 +419,16 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     public bool GlobalUvScaleEnabled;
     public float GlobalUvScale = 4f;
 
+    /// <summary>Amplifies height's contribution to SC2TerrainUv1Unwrap's
+    /// per-axis stretch profile (BuildProfiles multiplies each step's real
+    /// height delta by this before folding it into the arc-length
+    /// distance) — 1 is physically accurate (true 3D edge length), values
+    /// above 1 deliberately exaggerate the correction so a steep area
+    /// claims even more UV space than its real surface distance alone
+    /// would give it. Same map-wide, core-owned setting as GlobalUvScale
+    /// just above (applies to core AND background alike).</summary>
+    public float Uv1HeightWeight = 1f;
+
     /// <summary>The UV1 tiling scale to actually use for <paramref
     /// name="pair"/> right now — GlobalUvScale when GlobalUvScaleEnabled,
     /// else the pair's own TilingScale (both floored the same way every

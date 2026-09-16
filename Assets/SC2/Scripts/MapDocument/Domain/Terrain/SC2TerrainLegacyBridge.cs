@@ -54,7 +54,8 @@ namespace SC2.MapEditor.Document
             Color rnmBakeOverrideSunColor = default,
             float rnmBakeOverrideSunIntensity = 1f,
             Color rnmBakeOverrideShadowColor = default,
-            int rnmBakeShadowSoftRadius = 6)
+            int rnmBakeShadowSoftRadius = 6,
+            float uv1HeightWeight = 1f)
         {
             if (materials == null) throw new ArgumentNullException(nameof(materials));
             if (pairs == null) throw new ArgumentNullException(nameof(pairs));
@@ -78,6 +79,7 @@ namespace SC2.MapEditor.Document
                 BackgroundTerrainUvScale = backgroundTerrainUvScale,
                 GlobalUvScaleEnabled = globalUvScaleEnabled,
                 GlobalUvScale = globalUvScale,
+                Uv1HeightWeight = uv1HeightWeight,
                 RnmBakeSyncSunDirection = rnmBakeSyncSunDirection,
                 RnmBakeSyncSunColor = rnmBakeSyncSunColor,
                 RnmBakeSyncSunIntensity = rnmBakeSyncSunIntensity,

@@ -495,6 +495,15 @@ public static class SC2TerrainExporter
         // Cache: maskName → bdf path (export each unique mask file once)
         var rnmCache = new System.Collections.Generic.Dictionary<string, string>();
 
+        // Built ONCE for the whole core terrain (not per pair — every pair
+        // shares the same geometry, only its own UV1 tiling scale differs,
+        // applied at Sample's call site below). See SC2TerrainUv1Unwrap's
+        // own doc comment for why this replaces a flat pos.x/pos.z planar
+        // projection, and why it's a per-AXIS profile (not a 2D grid) —
+        // that's what keeps it safe from flipping triangle winding.
+        SC2TerrainUv1Unwrap.BuildProfiles(data.Heights, data.GridWidth, data.GridHeight, data.CellSize,
+            out var coreUv1ProfileU, out var coreUv1ProfileV, data.Uv1HeightWeight);
+
         for (var si = 0; si < build.Layers.Count; si++)
         {
             var builtLayer = build.Layers[si];
@@ -519,7 +528,15 @@ public static class SC2TerrainExporter
             // file can never disagree with what was actually shown while
             // editing.
             var uv1Scale = data.EffectiveUvTilingScale(pair);
-            var (layerTangents, layerBinormals) = BuildUv1Tbn(s.Vertices, s.Triangles, s.Normals);
+            var uv1U = new float[s.Vertices.Length];
+            var uv1V = new float[s.Vertices.Length];
+            for (var vi = 0; vi < s.Vertices.Length; vi++)
+            {
+                var uv = SC2TerrainUv1Unwrap.Sample(coreUv1ProfileU, coreUv1ProfileV, data.GridWidth, data.GridHeight, data.CellSize,
+                    s.Vertices[vi].x, s.Vertices[vi].z);
+                uv1U[vi] = uv.x / uv1Scale; uv1V[vi] = uv.y / uv1Scale;
+            }
+            var (layerTangents, layerBinormals) = BuildUv1Tbn(s.Vertices, s.Triangles, s.Normals, uv1U, uv1V);
             for (var vi = 0; vi < s.Vertices.Length; vi++)
             {
                 var pos = s.Vertices[vi]; var n = s.Normals[vi];
@@ -528,7 +545,7 @@ public static class SC2TerrainExporter
                 model.Vertices.Add(new TerrainVertex
                 {
                     PosX=pos.x, PosY=pos.y, PosZ=pos.z,
-                    Uv1U=pos.x/uv1Scale, Uv1V=pos.z/uv1Scale,
+                    Uv1U=uv1U[vi], Uv1V=uv1V[vi],
                     Uv2U=pos.x/1024f, Uv2V=pos.z/1024f,
                     NormalX=n.x, NormalY=n.y, NormalZ=n.z,
                     TangentX=tangent.x, TangentY=tangent.y, TangentZ=tangent.z,
@@ -646,6 +663,15 @@ public static class SC2TerrainExporter
         {
             var bgBuild = SC2BackgroundTerrain.BuildForExportOrPreview(data, out var bgOffset);
             var bg = data.BackgroundTerrainData;
+            // Same per-axis unwrap as the core loop above, built from the
+            // BACKGROUND's own Heights/grid — bg's mesh vertices (s.Vertices
+            // below, before +bgOffset) are already in this same background-
+            // local frame, so no extra offset math is needed here.
+            var bgUv1ProfileU = System.Array.Empty<float>();
+            var bgUv1ProfileV = System.Array.Empty<float>();
+            if (bg != null)
+                SC2TerrainUv1Unwrap.BuildProfiles(bg.Heights, bg.GridWidth, bg.GridHeight, bg.CellSize,
+                    out bgUv1ProfileU, out bgUv1ProfileV, data.Uv1HeightWeight);
             // Tracked so the seam skirt below can splice directly into
             // pair 0's own layer/material instead of registering a second
             // one, since it's visually the same decorative surface and there's
@@ -692,7 +718,16 @@ public static class SC2TerrainExporter
                     model.Layers.Add(layer);
                     if (pi == 0) pair0LayerIndex = model.Layers.Count - 1;
 
-                    var (layerTangents, layerBinormals) = BuildUv1Tbn(s.Vertices, s.Triangles, s.Normals);
+                    var bgUv1U = new float[s.Vertices.Length];
+                    var bgUv1V = new float[s.Vertices.Length];
+                    for (var vi = 0; vi < s.Vertices.Length; vi++)
+                    {
+                        var localPos = s.Vertices[vi];
+                        var uv = SC2TerrainUv1Unwrap.Sample(bgUv1ProfileU, bgUv1ProfileV, bg.GridWidth, bg.GridHeight, bg.CellSize,
+                            localPos.x, localPos.z);
+                        bgUv1U[vi] = uv.x / uvScale; bgUv1V[vi] = uv.y / uvScale;
+                    }
+                    var (layerTangents, layerBinormals) = BuildUv1Tbn(s.Vertices, s.Triangles, s.Normals, bgUv1U, bgUv1V);
                     for (var vi = 0; vi < s.Vertices.Length; vi++)
                     {
                         var worldPos = s.Vertices[vi] + bgOffset;
@@ -702,7 +737,7 @@ public static class SC2TerrainExporter
                         model.Vertices.Add(new TerrainVertex
                         {
                             PosX = worldPos.x, PosY = worldPos.y, PosZ = worldPos.z,
-                            Uv1U = worldPos.x / uvScale, Uv1V = worldPos.z / uvScale,
+                            Uv1U = bgUv1U[vi], Uv1V = bgUv1V[vi],
                             Uv2U = (worldPos.x - bgMinX) / bgSpanX, Uv2V = (worldPos.z - bgMinZ) / bgSpanZ,
                             NormalX = n.x, NormalY = n.y, NormalZ = n.z,
                             TangentX = tangent.x, TangentY = tangent.y, TangentZ = tangent.z,
@@ -805,7 +840,18 @@ public static class SC2TerrainExporter
                 // lines up correctly on skirt triangles too.
                 var pair0 = bg.Pairs.Count > 0 ? bg.Pairs[0] : null;
                 var uvScale = data.EffectiveUvTilingScale(pair0);
-                var (skirtTangents, skirtBinormals) = BuildUv1Tbn(skirtVerts, skirtTris, skirtNormals);
+                // Skirt vertices are already in CORE world space (see this
+                // block's own comment above), so they sample the core's own
+                // coreUv1Profile* built earlier — not the background's.
+                var skirtUv1U = new float[skirtVerts.Length];
+                var skirtUv1V = new float[skirtVerts.Length];
+                for (var vi = 0; vi < skirtVerts.Length; vi++)
+                {
+                    var uv = SC2TerrainUv1Unwrap.Sample(coreUv1ProfileU, coreUv1ProfileV, data.GridWidth, data.GridHeight, data.CellSize,
+                        skirtVerts[vi].x, skirtVerts[vi].z);
+                    skirtUv1U[vi] = uv.x / uvScale; skirtUv1V[vi] = uv.y / uvScale;
+                }
+                var (skirtTangents, skirtBinormals) = BuildUv1Tbn(skirtVerts, skirtTris, skirtNormals, skirtUv1U, skirtUv1V);
 
                 var skirtVertexList = new List<TerrainVertex>(skirtVerts.Length);
                 for (var vi = 0; vi < skirtVerts.Length; vi++)
@@ -817,7 +863,7 @@ public static class SC2TerrainExporter
                     skirtVertexList.Add(new TerrainVertex
                     {
                         PosX = worldPos.x, PosY = worldPos.y, PosZ = worldPos.z,
-                        Uv1U = worldPos.x / uvScale, Uv1V = worldPos.z / uvScale,
+                        Uv1U = skirtUv1U[vi], Uv1V = skirtUv1V[vi],
                         Uv2U = (worldPos.x - bgMinX) / bgSpanX, Uv2V = (worldPos.z - bgMinZ) / bgSpanZ,
                         NormalX = n.x, NormalY = n.y, NormalZ = n.z,
                         TangentX = tangent.x, TangentY = tangent.y, TangentZ = tangent.z,
@@ -2124,7 +2170,7 @@ public static class SC2TerrainExporter
     /// axis.
     /// </summary>
     private static (Vector3[] tangents, Vector3[] binormals) BuildUv1Tbn(
-        Vector3[] verts, int[] tris, Vector3[] normals)
+        Vector3[] verts, int[] tris, Vector3[] normals, float[] uv1U, float[] uv1V)
     {
         var accT = new Vector3[verts.Length];
         var accB = new Vector3[verts.Length];
@@ -2137,10 +2183,12 @@ public static class SC2TerrainExporter
             var e1 = verts[i1] - a;
             var e2 = verts[i2] - a;
 
-            // UV1 is the planar projection assigned above; its TilingScale is a
-            // common factor that cancels out of the tangent DIRECTION, so the
-            // raw x/z deltas can be used as the UV deltas directly.
-            float du1 = e1.x, dv1 = e1.z, du2 = e2.x, dv2 = e2.z;
+            // UV1 is now SC2TerrainUv1Unwrap's per-axis stretch profile, a
+            // genuinely non-uniform mapping (that's the whole point — it
+            // stretches proportionally on slopes), so the tangent basis must
+            // be derived from the ACTUAL assigned UV1 values per vertex.
+            float du1 = uv1U[i1] - uv1U[i0], dv1 = uv1V[i1] - uv1V[i0];
+            float du2 = uv1U[i2] - uv1U[i0], dv2 = uv1V[i2] - uv1V[i0];
             var den = du1 * dv2 - du2 * dv1;
             if (Mathf.Abs(den) < 1e-12f) continue;
             var f = 1f / den;

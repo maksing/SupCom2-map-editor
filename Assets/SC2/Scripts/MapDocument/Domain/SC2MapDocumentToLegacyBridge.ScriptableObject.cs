@@ -141,6 +141,7 @@ namespace SC2.MapEditor.Document
             data.BackgroundTerrainUvScale = terrain.BackgroundTerrainUvScale;
             data.GlobalUvScaleEnabled = terrain.GlobalUvScaleEnabled;
             data.GlobalUvScale = terrain.GlobalUvScale;
+            data.Uv1HeightWeight = terrain.Uv1HeightWeight;
             data.RnmBakeSyncSunDirection = terrain.RnmBakeSyncSunDirection;
             data.RnmBakeSyncSunColor = terrain.RnmBakeSyncSunColor;
             data.RnmBakeSyncSunIntensity = terrain.RnmBakeSyncSunIntensity;

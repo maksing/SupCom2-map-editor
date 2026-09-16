@@ -118,6 +118,7 @@ Shader "Hidden/SC2/TerrainView"
                 float3 nrm : NORMAL;
                 float2 uv0 : TEXCOORD0;
                 float2 uv1 : TEXCOORD1;
+                float2 uv2 : TEXCOORD2; // stretch-compensated tiling coordinate (SC2TerrainUv1Unwrap) — diffuse sampling ONLY, uv0 stays raw world XZ for wireframe/costs/height-grid/RNM-basis below
             };
 
             struct v2f
@@ -125,8 +126,9 @@ Shader "Hidden/SC2/TerrainView"
                 float4 clip : SV_POSITION;
                 float2 uv0 : TEXCOORD0;
                 float2 uv1 : TEXCOORD1;
-                float3 nrm : TEXCOORD2;
-                float worldY : TEXCOORD3;
+                float2 uvTile : TEXCOORD2;
+                float3 nrm : TEXCOORD3;
+                float worldY : TEXCOORD4;
             };
 
             v2f vert(a2v v)
@@ -135,6 +137,7 @@ Shader "Hidden/SC2/TerrainView"
                 o.clip = UnityObjectToClipPos(v.pos);
                 o.uv0 = v.uv0;
                 o.uv1 = v.uv1;
+                o.uvTile = v.uv2;
                 o.nrm = UnityObjectToWorldNormal(v.nrm);
                 o.worldY = mul(unity_ObjectToWorld, v.pos).y;
                 return o;
@@ -498,7 +501,10 @@ Shader "Hidden/SC2/TerrainView"
 
                 half blend = tex2D(_BlendTex, SafeBlendUV(i.uv1)).a;
                 float ts = GetTiling(pIdx);
-                float2 uv1_tiled = i.uv0 * ts;
+                // i.uvTile is the stretch-compensated coordinate (SC2TerrainUv1Unwrap) —
+                // deliberately NOT i.uv0 (raw world XZ), which stays reserved for
+                // wireframe/costs-overlay/height-grid/unassigned-checker below.
+                float2 uv1_tiled = i.uvTile * ts;
 
                 if (_PreviewMode == 1)
                 {

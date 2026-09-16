@@ -93,6 +93,7 @@ public sealed class SC2TerrainUndoStack
         public float BackgroundSimplifyRatio;
         public bool GlobalUvScaleEnabled;
         public float GlobalUvScale;
+        public float Uv1HeightWeight;
         public object Extra;
     }
 
@@ -264,6 +265,7 @@ public sealed class SC2TerrainUndoStack
                 ? data.BackgroundTerrainData.Pairs[0].SimplifyRatio : 0f,
             GlobalUvScaleEnabled = data.GlobalUvScaleEnabled,
             GlobalUvScale = data.GlobalUvScale,
+            Uv1HeightWeight = data.Uv1HeightWeight,
             Extra = CaptureExtra?.Invoke()
         };
     }
@@ -313,6 +315,7 @@ public sealed class SC2TerrainUndoStack
             data.BackgroundTerrainData.Pairs[0].SimplifyRatio = snapshot.BackgroundSimplifyRatio;
         data.GlobalUvScaleEnabled = snapshot.GlobalUvScaleEnabled;
         data.GlobalUvScale = snapshot.GlobalUvScale;
+        data.Uv1HeightWeight = snapshot.Uv1HeightWeight;
         SC2BackgroundRuntimeSync.MarkDirty();
         foreach (var p in data.Pairs)
             p?.InvalidateTriCount();

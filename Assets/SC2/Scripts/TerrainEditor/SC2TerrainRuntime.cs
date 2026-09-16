@@ -442,6 +442,7 @@ public class SC2TerrainRuntime : IDisposable
         mesh.SetNormals(new Vector3[(qx+1)*(qz+1)]);
         mesh.SetUVs(0, new Vector2[(qx+1)*(qz+1)]);
         mesh.SetUVs(1, new Vector2[(qx+1)*(qz+1)]);
+        mesh.SetUVs(2, new Vector2[(qx+1)*(qz+1)]);
         if (tris != null) mesh.SetTriangles(tris, 0);
         else mesh.SetTriangles(trisList, 0);
     }
@@ -452,6 +453,57 @@ public class SC2TerrainRuntime : IDisposable
     {
         foreach (var c in _chunks)
             RebuildChunk(c);
+    }
+
+    // ── UV1 stretch-compensated tiling coordinate ─────────────────────────────
+    // See SC2TerrainUv1Unwrap's own doc comment for the algorithm and why a
+    // flat world-XZ tiling coordinate visibly stretches a texture on steep
+    // terrain. Cached, not recomputed every RebuildChunk (which fires often
+    // during sculpting/painting — this class exists specifically to keep
+    // that path cheap) — lazily built the first time a chunk is rebuilt
+    // (matching what a fresh export already does, so a never-touched map's
+    // preview already agrees with what would be exported) and refreshed on
+    // demand by RecalculateUv1 after terrain edits change the geometry.
+    private float[] _uv1ProfileU, _uv1ProfileV;
+    // Set from SC2TerrainData.Uv1HeightWeight by the last RecalculateUv1
+    // call — this runtime only holds raw grid arrays, not the owning
+    // SC2TerrainData, so it can't read that field itself. A lazy
+    // EnsureUv1Profile build (before the button is ever pressed) uses
+    // whatever this defaults to (1, physically accurate) rather than a
+    // possibly-tuned saved value — a minor, self-correcting staleness: one
+    // press of the button afterwards always brings it in sync.
+    private float _uv1HeightWeight = 1f;
+
+    /// <summary>Rebuilds the stretch-compensated tiling profile from the
+    /// CURRENT heights and refreshes every chunk's mesh to use it — the
+    /// live-preview counterpart of what the exporter already computes fresh
+    /// on every export. Manual/on-demand (see this class's own field
+    /// comment for why), not automatic on every edit.</summary>
+    public void RecalculateUv1(float heightWeight = 1f)
+    {
+        _uv1HeightWeight = heightWeight;
+        SC2TerrainUv1Unwrap.BuildProfiles(_heights, GridWidth, GridHeight, CellSize, out _uv1ProfileU, out _uv1ProfileV, _uv1HeightWeight);
+        RebuildAllChunks();
+    }
+
+    private void EnsureUv1Profile()
+    {
+        if (_uv1ProfileU != null) return;
+        SC2TerrainUv1Unwrap.BuildProfiles(_heights, GridWidth, GridHeight, CellSize, out _uv1ProfileU, out _uv1ProfileV, _uv1HeightWeight);
+    }
+
+    /// <summary>Same stretch-compensated tiling coordinate RebuildChunk
+    /// assigns its own chunk vertices, for an external caller whose mesh
+    /// isn't part of this runtime's regular chunk grid — currently only
+    /// SC2BackgroundSeamSkirt's own thin stitching strip, which bridges this
+    /// runtime's edge to another SC2TerrainRuntime's and needs BOTH sides'
+    /// tiling to agree with their real surrounding chunks. Takes this
+    /// runtime's own LOCAL x/z (world space for the core, background-local
+    /// for the background — same frame RebuildChunk itself uses).</summary>
+    public Vector2 SampleUv1Tile(float localX, float localZ)
+    {
+        EnsureUv1Profile();
+        return SC2TerrainUv1Unwrap.Sample(_uv1ProfileU, _uv1ProfileV, GridWidth, GridHeight, CellSize, localX, localZ);
     }
 
     /// <summary>
@@ -533,6 +585,8 @@ public class SC2TerrainRuntime : IDisposable
 
     private void RebuildChunk(Chunk c)
     {
+        EnsureUv1Profile();
+
         var qx = Mathf.Min(CHUNK_SIZE, GridWidth  - c.CX * CHUNK_SIZE);
         var qz = Mathf.Min(CHUNK_SIZE, GridHeight - c.CZ * CHUNK_SIZE);
         var vx = qx + 1; var vz = qz + 1;
@@ -540,8 +594,9 @@ public class SC2TerrainRuntime : IDisposable
 
         var verts   = new Vector3[n];
         var normals = new Vector3[n];
-        var uv1arr  = new Vector2[n]; // tiling UV (will be set per-pair in shader)
+        var uv1arr  = new Vector2[n]; // raw world XZ — wireframe/costs/height-grid overlays AND RNM basis UV all key off this; do not repurpose it for tiling.
         var uv2arr  = new Vector2[n]; // world UV [0..1]
+        var uv3arr  = new Vector2[n]; // stretch-compensated tiling UV (shader applies each pair's own scale)
 
         var ox = c.CX * CHUNK_SIZE; // origin in grid
         var oz = c.CZ * CHUNK_SIZE;
@@ -559,6 +614,11 @@ public class SC2TerrainRuntime : IDisposable
             verts[vi]  = new Vector3(wx, h, wz);
             uv1arr[vi] = new Vector2(wx, wz); // raw world XZ; shader applies tiling
             uv2arr[vi] = new Vector2((float)gx / GridWidth, (float)gz / GridHeight);
+            // Exact grid vertex (gx,gz) — a direct profile lookup, no
+            // bilinear sampling needed (unlike the exporter's own
+            // Sample(), whose simplified submesh vertices can land between
+            // grid points).
+            uv3arr[vi] = new Vector2(_uv1ProfileU[gx], _uv1ProfileV[gz]);
 
             // Normal from finite differences (grid neighbours)
             var hL = GetHeight(Mathf.Max(0, gx-1), gz);
@@ -572,6 +632,7 @@ public class SC2TerrainRuntime : IDisposable
         c.Mesh.SetNormals(normals);
         c.Mesh.SetUVs(0, uv1arr);
         c.Mesh.SetUVs(1, uv2arr);
+        c.Mesh.SetUVs(2, uv3arr);
         c.Mesh.RecalculateBounds();
     }
 

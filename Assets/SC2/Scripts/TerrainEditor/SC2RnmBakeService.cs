@@ -419,6 +419,16 @@ public static class SC2RnmBakeService
         pairIndexPerLayer = new List<int>();
 
         var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true);
+        // Same per-axis unwrap as the real exporter (SC2TerrainUv1Unwrap) —
+        // built once for the whole core terrain, sampled per pair below with
+        // that pair's own tiling scale. Keeping the bake's own UV1 in sync
+        // with the exporter's is NOT cosmetic: ComputeVertexTangents derives
+        // the tangent basis this bake lights against from UV1's real
+        // gradient (see its own doc comment), and that basis now genuinely
+        // depends on the mapping (per-axis stretch vs. planar), not just a
+        // magnitude that normalizes away.
+        SC2TerrainUv1Unwrap.BuildProfiles(data.Heights, data.GridWidth, data.GridHeight, data.CellSize,
+            out var coreUv1ProfileU, out var coreUv1ProfileV, data.Uv1HeightWeight);
         for (var si = 0; si < build.Layers.Count; si++)
         {
             var builtLayer = build.Layers[si];
@@ -429,20 +439,16 @@ public static class SC2RnmBakeService
             model.Layers.Add(layer);
             pairIndexPerLayer.Add(builtLayer.PairIndex);
 
-            // Uses the same GlobalUvScale-aware resolver as everywhere
-            // else, though a uniform per-triangle scale factor cancels out
-            // of the tangent DIRECTION ComputeVertexTangents derives from
-            // it regardless (only the magnitude scales, and that gets
-            // normalized away) — kept consistent anyway rather than
-            // resolving a value nothing else in the app would agree with.
+            // Uses the same GlobalUvScale-aware resolver as everywhere else.
             var uv1Scale = data.EffectiveUvTilingScale(pair);
             for (var vi = 0; vi < s.Vertices.Length; vi++)
             {
                 var pos = s.Vertices[vi]; var n = s.Normals[vi];
+                var uv = SC2TerrainUv1Unwrap.Sample(coreUv1ProfileU, coreUv1ProfileV, data.GridWidth, data.GridHeight, data.CellSize, pos.x, pos.z);
                 model.Vertices.Add(new TerrainVertex
                 {
                     PosX = pos.x, PosY = pos.y, PosZ = pos.z,
-                    Uv1U = pos.x / uv1Scale, Uv1V = pos.z / uv1Scale,
+                    Uv1U = uv.x / uv1Scale, Uv1V = uv.y / uv1Scale,
                     Uv2U = pos.x / 1024f, Uv2V = pos.z / 1024f,
                     NormalX = n.x, NormalY = n.y, NormalZ = n.z,
                 });
@@ -511,6 +517,15 @@ public static class SC2RnmBakeService
         mapX = Mathf.Clamp(Mathf.CeilToInt(spanX) + 1, 2, 8193);
         mapY = Mathf.Clamp(Mathf.CeilToInt(spanZ) + 1, 2, 8193);
 
+        // Background's own per-axis unwrap, in the SAME local frame as
+        // s.Vertices below (bg's own Heights/grid, not the core's).
+        SC2TerrainUv1Unwrap.BuildProfiles(bg.Heights, bg.GridWidth, bg.GridHeight, bg.CellSize,
+            out var bgUv1ProfileU, out var bgUv1ProfileV, coreData.Uv1HeightWeight);
+        // Core's own profile, for the seam skirt below (its vertices are
+        // core world-space, bridging core-to-background, not background-local).
+        SC2TerrainUv1Unwrap.BuildProfiles(coreData.Heights, coreData.GridWidth, coreData.GridHeight, coreData.CellSize,
+            out var coreUv1ProfileU, out var coreUv1ProfileV, coreData.Uv1HeightWeight);
+
         foreach (var builtLayer in bgBuild.Layers)
         {
             var pi = builtLayer.PairIndex;
@@ -529,10 +544,11 @@ public static class SC2RnmBakeService
             {
                 var localPos = s.Vertices[vi]; // already local — BuildForExportOrPreview's own vertices need +offset to reach world space, so they're local as-is
                 var n = s.Normals[vi];
+                var uv = SC2TerrainUv1Unwrap.Sample(bgUv1ProfileU, bgUv1ProfileV, bg.GridWidth, bg.GridHeight, bg.CellSize, localPos.x, localPos.z);
                 model.Vertices.Add(new TerrainVertex
                 {
                     PosX = localPos.x, PosY = localPos.y, PosZ = localPos.z,
-                    Uv1U = localPos.x / uvScale, Uv1V = localPos.z / uvScale,
+                    Uv1U = uv.x / uvScale, Uv1V = uv.y / uvScale,
                     Uv2U = localPos.x / spanX, Uv2V = localPos.z / spanZ,
                     NormalX = n.x, NormalY = n.y, NormalZ = n.z,
                 });
@@ -567,10 +583,15 @@ public static class SC2RnmBakeService
             {
                 var localPos = skirtVerts[vi] - offset; // BuildSeamSkirt's own vertices are already in core WORLD space
                 var n = skirtNormals[vi];
+                // Sampled against the CORE's own profile using skirtVerts[vi]
+                // directly (core world space, pre-offset) — the skirt
+                // bridges the core terrain's edge, not the background's.
+                var uv = SC2TerrainUv1Unwrap.Sample(coreUv1ProfileU, coreUv1ProfileV, coreData.GridWidth, coreData.GridHeight, coreData.CellSize,
+                    skirtVerts[vi].x, skirtVerts[vi].z);
                 model.Vertices.Add(new TerrainVertex
                 {
                     PosX = localPos.x, PosY = localPos.y, PosZ = localPos.z,
-                    Uv1U = localPos.x / uvScale, Uv1V = localPos.z / uvScale,
+                    Uv1U = uv.x / uvScale, Uv1V = uv.y / uvScale,
                     Uv2U = localPos.x / spanX, Uv2V = localPos.z / spanZ,
                     NormalX = n.x, NormalY = n.y, NormalZ = n.z,
                 });
