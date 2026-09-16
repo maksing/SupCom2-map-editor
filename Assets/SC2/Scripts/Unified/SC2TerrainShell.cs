@@ -4300,7 +4300,14 @@ public class SC2TerrainShell : ScriptableObject
         // uniform writes) rather than only under shaderMode==4, so toggling
         // into TexturedRNM later doesn't need this method to re-run first.
         if (data == _data)
-            runtime.SetRnmUvTransform(Vector2.zero, new Vector2(1024f, 1024f));
+            // data.GridWidth*CellSize/GridHeight*CellSize — NOT a hardcoded
+            // 1024 — matches SC2TerrainExporter/SC2RnmBakeService's own
+            // Uv2 span for the core (see their shared fix's comment): a
+            // hardcoded 1024 only ever happened to be correct for an
+            // exactly-1024-unit map, and otherwise showed the RNM basis
+            // preview sampling the wrong (too-small) fraction of the mask.
+            runtime.SetRnmUvTransform(Vector2.zero,
+                new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize)));
         else
         {
             // ComputeBounds returns WORLD-space bounds (matches

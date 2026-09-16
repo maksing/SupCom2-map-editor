@@ -504,6 +504,19 @@ public static class SC2TerrainExporter
         SC2TerrainUv1Unwrap.BuildProfiles(data.Heights, data.GridWidth, data.GridHeight, data.CellSize,
             out var coreUv1ProfileU, out var coreUv1ProfileV, data.Uv1HeightWeight);
 
+        // Core's own real world footprint for Uv2 (RNM/blend-mask lookup) —
+        // MUST match SC2TerrainRuntime.RebuildChunk's own uv2arr convention
+        // exactly (gx/GridWidth, gz/GridHeight — i.e. pos.x/coreSpanX here,
+        // since pos.x = gx*CellSize), or a painted mask lands at a
+        // different spot in-game than what the live preview showed. Was
+        // hardcoded pos.x/1024f, which only ever happened to be correct for
+        // an exactly-1024-unit map — any other size (this codebase already
+        // explicitly supports 512/2048/etc., see hfieldMapX's own comment
+        // below) sampled the wrong, too-small fraction of the mask, e.g. a
+        // 512 map only ever reads its mask's own bottom-left QUARTER.
+        var coreSpanX = Mathf.Max(1f, data.GridWidth * data.CellSize);
+        var coreSpanZ = Mathf.Max(1f, data.GridHeight * data.CellSize);
+
         for (var si = 0; si < build.Layers.Count; si++)
         {
             var builtLayer = build.Layers[si];
@@ -546,7 +559,7 @@ public static class SC2TerrainExporter
                 {
                     PosX=pos.x, PosY=pos.y, PosZ=pos.z,
                     Uv1U=uv1U[vi], Uv1V=uv1V[vi],
-                    Uv2U=pos.x/1024f, Uv2V=pos.z/1024f,
+                    Uv2U=pos.x/coreSpanX, Uv2V=pos.z/coreSpanZ,
                     NormalX=n.x, NormalY=n.y, NormalZ=n.z,
                     TangentX=tangent.x, TangentY=tangent.y, TangentZ=tangent.z,
                     BinormalX=binormal.x, BinormalY=binormal.y, BinormalZ=binormal.z,

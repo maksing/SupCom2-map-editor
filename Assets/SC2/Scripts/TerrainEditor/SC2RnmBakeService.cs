@@ -429,6 +429,14 @@ public static class SC2RnmBakeService
         // magnitude that normalizes away.
         SC2TerrainUv1Unwrap.BuildProfiles(data.Heights, data.GridWidth, data.GridHeight, data.CellSize,
             out var coreUv1ProfileU, out var coreUv1ProfileV, data.Uv1HeightWeight);
+        // Core's own real world footprint for Uv2 — see
+        // SC2TerrainExporter's identical fix for why this can't be a
+        // hardcoded 1024 (this bake rasterizes lighting BY Uv2 texel
+        // position — RasterizeTriangleGeometry's own p0/p1/p2 — so a wrong
+        // span here bakes real lighting into only a fraction of the mask,
+        // e.g. a 512 map's own bottom-left quarter).
+        var coreSpanX = Mathf.Max(1f, data.GridWidth * data.CellSize);
+        var coreSpanZ = Mathf.Max(1f, data.GridHeight * data.CellSize);
         for (var si = 0; si < build.Layers.Count; si++)
         {
             var builtLayer = build.Layers[si];
@@ -449,7 +457,7 @@ public static class SC2RnmBakeService
                 {
                     PosX = pos.x, PosY = pos.y, PosZ = pos.z,
                     Uv1U = uv.x / uv1Scale, Uv1V = uv.y / uv1Scale,
-                    Uv2U = pos.x / 1024f, Uv2V = pos.z / 1024f,
+                    Uv2U = pos.x / coreSpanX, Uv2V = pos.z / coreSpanZ,
                     NormalX = n.x, NormalY = n.y, NormalZ = n.z,
                 });
             }

@@ -1485,7 +1485,17 @@ public class SC2TerrainRuntime : IDisposable
         mat.SetTexture("_RnmArr", _rnmArray);
         mat.SetTexture("_RnmFallback", _rnmFallback != null ? _rnmFallback : GreyTexture());
         mat.SetVector ("_RnmUvOffset", new Vector4(0f, 0f, 0f, 0f));
-        mat.SetVector ("_RnmUvInvScale", new Vector4(1f / 1024f, 1f / 1024f, 0f, 0f));
+        // Default only — SetRnmUvTransform (called unconditionally by
+        // SC2TerrainShell.ApplyPreviewModeToChunksFor after every material
+        // rebuild) overwrites this with the real footprint immediately
+        // after. Still uses THIS runtime's own real GridWidth/GridHeight*
+        // CellSize rather than a hardcoded 1024 so a chunk rendered even
+        // one frame before that follow-up call (or on a code path that
+        // skips it) doesn't sample the wrong fraction of the RNM mask on a
+        // non-1024-unit map.
+        var defaultSpanX = Mathf.Max(1f, GridWidth * CellSize);
+        var defaultSpanZ = Mathf.Max(1f, GridHeight * CellSize);
+        mat.SetVector ("_RnmUvInvScale", new Vector4(1f / defaultSpanX, 1f / defaultSpanZ, 0f, 0f));
         mat.SetInt    ("_UseArrayTextures", SystemInfo.supports2DArrayTextures ? 1 : 0);
         mat.SetColor  ("_AmbientColor",Color.white);
         mat.SetInt    ("_PreviewMode", 0);
