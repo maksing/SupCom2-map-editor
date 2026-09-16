@@ -57,11 +57,11 @@ public class DecalsAuthoringTests
         {
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { -2f, 0f, -2f }, B = new[] { 2f, 0f, 2f }, C = new[] { 2f, 0f, -2f }
+                AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = -2f
             },
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { -2f, 0f, -2f }, B = new[] { -2f, 0f, 2f }, C = new[] { 2f, 0f, 2f }
+                AX = -2f, AY = 0f, AZ = -2f, BX = -2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = 2f
             }
         };
 
@@ -74,12 +74,12 @@ public class DecalsAuthoringTests
         Assert.Equal(first.Indices, second.Indices);
         Assert.All(first.Vertices, vertex =>
         {
-            Assert.InRange(vertex.TexCoord[0], 0f, 1f);
-            Assert.InRange(vertex.TexCoord[1], 0f, 1f);
-            Assert.Equal(0.5f, vertex.ScaleOffset[0], 5);
-            Assert.Equal(0.25f, vertex.ScaleOffset[1], 5);
-            Assert.Equal(0.25f, vertex.ScaleOffset[2], 5);
-            Assert.Equal(0.125f, vertex.ScaleOffset[3], 5);
+            Assert.InRange(vertex.TexCoordX, 0f, 1f);
+            Assert.InRange(vertex.TexCoordY, 0f, 1f);
+            Assert.Equal(0.5f, vertex.ScaleOffsetX, 5);
+            Assert.Equal(0.25f, vertex.ScaleOffsetY, 5);
+            Assert.Equal(0.25f, vertex.ScaleOffsetZ, 5);
+            Assert.Equal(0.125f, vertex.ScaleOffsetW, 5);
         });
     }
 
@@ -110,18 +110,17 @@ public class DecalsAuthoringTests
             AtlasEntryId = "entry", Position = new[] { 0f, 0f, 0f },
             SurfaceNormal = new[] { 0f, 1f, 0f }, Width = 2f, Length = 2f, ProjectionDepth = 2f
         });
-        var up = new[] { 0f, 1f, 0f };
         var source = new[]
         {
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { -2f, 0f, -2f }, B = new[] { 2f, 0f, -2f }, C = new[] { 2f, 0f, 2f },
-                NA = up, NB = up, NC = up
+                AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = -2f, CX = 2f, CY = 0f, CZ = 2f,
+                HasNormals = true, NAX = 0f, NAY = 1f, NAZ = 0f, NBX = 0f, NBY = 1f, NBZ = 0f, NCX = 0f, NCY = 1f, NCZ = 0f
             },
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { -2f, 0f, -2f }, B = new[] { 2f, 0f, 2f }, C = new[] { -2f, 1f, 2f }, // bent: C raised to y=1
-                NA = up, NB = up, NC = up
+                AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = 2f, CX = -2f, CY = 1f, CZ = 2f, // bent: C raised to y=1
+                HasNormals = true, NAX = 0f, NAY = 1f, NAZ = 0f, NBX = 0f, NBY = 1f, NBZ = 0f, NCX = 0f, NCY = 1f, NCZ = 0f
             }
         };
 
@@ -130,9 +129,9 @@ public class DecalsAuthoringTests
         Assert.NotEmpty(model.Vertices);
         Assert.All(model.Vertices, vertex =>
         {
-            Assert.Equal(0f, vertex.TangentXform2[0], 3);
-            Assert.Equal(1f, vertex.TangentXform2[1], 3);
-            Assert.Equal(0f, vertex.TangentXform2[2], 3);
+            Assert.Equal(0f, vertex.TangentXform2X, 3);
+            Assert.Equal(1f, vertex.TangentXform2Y, 3);
+            Assert.Equal(0f, vertex.TangentXform2Z, 3);
         });
     }
 
@@ -159,8 +158,8 @@ public class DecalsAuthoringTests
         });
         var source = new[]
         {
-            new SC2DecalSurfaceTriangle { A = new[] { -2f, 0f, -2f }, B = new[] { 2f, 0f, 2f }, C = new[] { 2f, 0f, -2f } },
-            new SC2DecalSurfaceTriangle { A = new[] { -2f, 0f, -2f }, B = new[] { -2f, 0f, 2f }, C = new[] { 2f, 0f, 2f } }
+            new SC2DecalSurfaceTriangle { AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = -2f },
+            new SC2DecalSurfaceTriangle { AX = -2f, AY = 0f, AZ = -2f, BX = -2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = 2f }
         };
 
         var model = SC2DecalGeometryBuilder.Build(document, source);
@@ -168,9 +167,9 @@ public class DecalsAuthoringTests
         Assert.NotEmpty(model.Vertices);
         Assert.All(model.Vertices, vertex =>
         {
-            Assert.Equal(0f, vertex.TangentXform2[0], 3);
-            Assert.Equal(1f, vertex.TangentXform2[1], 3);
-            Assert.Equal(0f, vertex.TangentXform2[2], 3);
+            Assert.Equal(0f, vertex.TangentXform2X, 3);
+            Assert.Equal(1f, vertex.TangentXform2Y, 3);
+            Assert.Equal(0f, vertex.TangentXform2Z, 3);
         });
     }
 
@@ -213,7 +212,7 @@ public class DecalsAuthoringTests
             // new backfaces-only threshold.
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { 0.5f, 0f, -0.5f }, B = new[] { 0.5f, 0f, 0.5f }, C = new[] { 0.51f, 1f, 0f }
+                AX = 0.5f, AY = 0f, AZ = -0.5f, BX = 0.5f, BY = 0f, BZ = 0.5f, CX = 0.51f, CY = 1f, CZ = 0f
             },
             // True overhang: tilted the OTHER way (C.x = 0.3, well past the
             // wall's own base back toward the decal center) so its real face
@@ -221,7 +220,7 @@ public class DecalsAuthoringTests
             // - must still be rejected.
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { 1.5f, 0f, -0.5f }, B = new[] { 1.5f, 0f, 0.5f }, C = new[] { 1.3f, 1f, 0f }
+                AX = 1.5f, AY = 0f, AZ = -0.5f, BX = 1.5f, BY = 0f, BZ = 0.5f, CX = 1.3f, CY = 1f, CZ = 0f
             }
         };
 
@@ -231,8 +230,8 @@ public class DecalsAuthoringTests
         // Only the near-vertical (but still front-facing) wall's 3 vertices
         // should survive; none of them come from x≈1.5 (the overhang).
         Assert.Equal(3, model.Vertices.Count);
-        Assert.All(model.Vertices, vertex => Assert.True(vertex.Position[0] < 1f,
-            $"vertex at x={vertex.Position[0]} came from the backfacing overhang triangle, which should have been rejected"));
+        Assert.All(model.Vertices, vertex => Assert.True(vertex.PositionX < 1f,
+            $"vertex at x={vertex.PositionX} came from the backfacing overhang triangle, which should have been rejected"));
     }
 
     [Fact]
@@ -259,11 +258,11 @@ public class DecalsAuthoringTests
         {
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { -2f, 0f, -2f }, B = new[] { 2f, 0f, 2f }, C = new[] { 2f, 0f, -2f }
+                AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = -2f
             },
             new SC2DecalSurfaceTriangle
             {
-                A = new[] { -2f, 0f, -2f }, B = new[] { -2f, 0f, 2f }, C = new[] { 2f, 0f, 2f }
+                AX = -2f, AY = 0f, AZ = -2f, BX = -2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = 2f
             }
         };
 
@@ -317,12 +316,12 @@ public class DecalsAuthoringTests
         {
             model.Vertices.Add(new DecalVertex
             {
-                Position = new[] { (float)x, 0f, (float)z },
-                TexCoord = new[] { x / (float)cells, z / (float)cells, 0f },
-                ScaleOffset = new[] { 1f, 1f, 0f, 0f },
-                TangentXform0 = new[] { 1f, 0f, 0f },
-                TangentXform1 = new[] { 0f, 0f, 1f },
-                TangentXform2 = new[] { 0f, 1f, 0f }
+                PositionX = x, PositionY = 0f, PositionZ = z,
+                TexCoordX = x / (float)cells, TexCoordY = z / (float)cells, TexCoordZ = 0f,
+                ScaleOffsetX = 1f, ScaleOffsetY = 1f, ScaleOffsetZ = 0f, ScaleOffsetW = 0f,
+                TangentXform0X = 1f, TangentXform0Y = 0f, TangentXform0Z = 0f,
+                TangentXform1X = 0f, TangentXform1Y = 0f, TangentXform1Z = 1f,
+                TangentXform2X = 0f, TangentXform2Y = 1f, TangentXform2Z = 0f
             });
         }
         for (var z = 0; z < cells; z++)

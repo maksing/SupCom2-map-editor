@@ -39,7 +39,7 @@ public static class DecalsSpatialBuilder
         var sourceToCanonical = new int[model.Vertices.Count];
         for (var i = 0; i < model.Vertices.Count; i++)
         {
-            var vertex = model.Vertices[i] ?? throw new InvalidOperationException($"Decal vertex {i} is null.");
+            var vertex = model.Vertices[i];
             var key = new DecalVertexKey(vertex);
             if (!canonicalByValue.TryGetValue(key, out var canonicalIndex))
             {
@@ -56,9 +56,9 @@ public static class DecalsSpatialBuilder
             var source = canonicalVertices[i];
             proxyVertices[i] = new TerrainVertex
             {
-                PosX = Component(source.Position, 0),
-                PosY = Component(source.Position, 1),
-                PosZ = Component(source.Position, 2),
+                PosX = source.PositionX,
+                PosY = source.PositionY,
+                PosZ = source.PositionZ,
                 // EdbTreeBuilder deduplicates terrain vertices by selected
                 // semantic fields. A canonical decal-vertex ID in UV1 keeps
                 // all 19 decal floats distinct while partitioning by position.
@@ -225,12 +225,12 @@ public static class DecalsSpatialBuilder
         {
             _bits = new int[19];
             var cursor = 0;
-            Add(vertex.Position, 3, _bits, ref cursor);
-            Add(vertex.TexCoord, 3, _bits, ref cursor);
-            Add(vertex.ScaleOffset, 4, _bits, ref cursor);
-            Add(vertex.TangentXform0, 3, _bits, ref cursor);
-            Add(vertex.TangentXform1, 3, _bits, ref cursor);
-            Add(vertex.TangentXform2, 3, _bits, ref cursor);
+            Add(vertex.PositionX, _bits, ref cursor); Add(vertex.PositionY, _bits, ref cursor); Add(vertex.PositionZ, _bits, ref cursor);
+            Add(vertex.TexCoordX, _bits, ref cursor); Add(vertex.TexCoordY, _bits, ref cursor); Add(vertex.TexCoordZ, _bits, ref cursor);
+            Add(vertex.ScaleOffsetX, _bits, ref cursor); Add(vertex.ScaleOffsetY, _bits, ref cursor); Add(vertex.ScaleOffsetZ, _bits, ref cursor); Add(vertex.ScaleOffsetW, _bits, ref cursor);
+            Add(vertex.TangentXform0X, _bits, ref cursor); Add(vertex.TangentXform0Y, _bits, ref cursor); Add(vertex.TangentXform0Z, _bits, ref cursor);
+            Add(vertex.TangentXform1X, _bits, ref cursor); Add(vertex.TangentXform1Y, _bits, ref cursor); Add(vertex.TangentXform1Z, _bits, ref cursor);
+            Add(vertex.TangentXform2X, _bits, ref cursor); Add(vertex.TangentXform2Y, _bits, ref cursor); Add(vertex.TangentXform2Z, _bits, ref cursor);
         }
 
         public bool Equals(DecalVertexKey other)
@@ -253,11 +253,7 @@ public static class DecalsSpatialBuilder
             }
         }
 
-        private static void Add(float[] values, int count, int[] destination, ref int cursor)
-        {
-            for (var i = 0; i < count; i++)
-                destination[cursor++] = BitConverter.SingleToInt32Bits(Component(values, i));
-        }
+        private static void Add(float value, int[] destination, ref int cursor) => destination[cursor++] = BitConverter.SingleToInt32Bits(value);
     }
 }
 }

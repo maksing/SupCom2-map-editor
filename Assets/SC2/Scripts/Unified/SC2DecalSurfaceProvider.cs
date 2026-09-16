@@ -8,6 +8,31 @@ public sealed class SC2DecalSurfaceProvider
 {
     private readonly RaycastHit[] _hits = new RaycastHit[128];
 
+    // Object.FindObjectsByType is a full scene scan — cheap once, but both
+    // Raycast (every mouse-move while placing/moving a decal) and Collect
+    // called it fresh every single time. Real cost: dragging a decal fires
+    // Raycast on every mouse-move event, and a fast drag can generate more
+    // of those per second than this scan (plus, for Raycast, a full
+    // unaccelerated per-triangle test against every collider-less
+    // SC2DecalProjectionSurface mesh found) could keep up with, making the
+    // decal visibly lag behind the cursor. Scene structure (which colliders/
+    // projection surfaces exist) essentially never changes mid-drag, so a
+    // short time-based cache is safe — bounded to SceneCacheSeconds stale
+    // at worst, well within normal editing feel.
+    private MeshCollider[] _cachedColliders;
+    private SC2DecalProjectionSurface[] _cachedSurfaces;
+    private double _sceneCacheExpiry;
+    private const double SceneCacheSeconds = 0.5;
+
+    private void EnsureSceneCache()
+    {
+        var now = Time.realtimeSinceStartupAsDouble;
+        if (_cachedColliders != null && now < _sceneCacheExpiry) return;
+        _cachedColliders = Object.FindObjectsByType<MeshCollider>(FindObjectsSortMode.None);
+        _cachedSurfaces = Object.FindObjectsByType<SC2DecalProjectionSurface>(FindObjectsSortMode.None);
+        _sceneCacheExpiry = now + SceneCacheSeconds;
+    }
+
     /// <summary>Optional — wired by the caller to the live playable core's
     /// own analytic height source (SC2TerrainShell.TryRaycastLiveHeightGrid,
     /// backed by SC2LiveHeightGrid), the SAME projection Costs/Objects
@@ -61,7 +86,8 @@ public sealed class SC2DecalSurfaceProvider
             if (skipWater && IsWaterHit(hit)) continue;
             best = hit; distance = hit.distance;
         }
-        foreach (var surface in Object.FindObjectsByType<SC2DecalProjectionSurface>(FindObjectsSortMode.None))
+        EnsureSceneCache();
+        foreach (var surface in _cachedSurfaces)
         {
             if (surface == null) continue;
             foreach (var filter in surface.GetComponentsInChildren<MeshFilter>(false))
@@ -127,13 +153,14 @@ public sealed class SC2DecalSurfaceProvider
         var combined = boundsList[0];
         for (var i = 1; i < boundsList.Count; i++) combined.Encapsulate(boundsList[i]);
 
-        foreach (var collider in Object.FindObjectsByType<MeshCollider>(FindObjectsSortMode.None))
+        EnsureSceneCache();
+        foreach (var collider in _cachedColliders)
         {
             if (collider == null || collider.sharedMesh == null || !collider.enabled || !IsProjectionSurface(collider.gameObject) || !collider.bounds.Intersects(combined)) continue;
             AddMesh(result, collider.sharedMesh, collider.transform.localToWorldMatrix, boundsList);
         }
 
-        foreach (var surface in Object.FindObjectsByType<SC2DecalProjectionSurface>(FindObjectsSortMode.None))
+        foreach (var surface in _cachedSurfaces)
             foreach (var filter in surface.GetComponentsInChildren<MeshFilter>(false))
                 if (filter != null && filter.sharedMesh != null && filter.GetComponent<Collider>() == null)
                     AddMesh(result, filter.sharedMesh, filter.transform.localToWorldMatrix, boundsList);
@@ -152,15 +179,87 @@ public sealed class SC2DecalSurfaceProvider
     /// of Unity's native Terrain API, since SC2TerrainRuntime's own chunk
     /// meshes have no queryable collider to gather real triangles from
     /// otherwise.</summary>
+    private const int MaxCellsPerAxis = 96;
+    private const int MinCellsPerAxis = 4;
+
+    /// <summary>Probe points per axis spread across the footprint (NOT
+    /// scaled by decal size) when estimating local terrain curvature. Cheap
+    /// even at the full 96-cell cap: a handful of extra samples against a
+    /// grid that would otherwise cost up to 9216 cells.</summary>
+    private const int RoughnessProbeCount = 5;
+
+    /// <summary>Fixed world-unit offset used to measure LOCAL curvature at
+    /// each probe point (a discrete second derivative: how far the center
+    /// sample sits from the average of its two neighbors this far away in
+    /// each axis). Deliberately NOT scaled by decal size — a large flat (or
+    /// uniformly sloped) decal must score just as "flat" as a small one, so
+    /// this has to measure how much the terrain bends per unit length, not
+    /// how much height it accumulates across the whole footprint (which
+    /// grows with footprint size for ANY given noise/undulation frequency,
+    /// even genuinely gentle terrain that needs no extra tessellation at
+    /// all — the real bug an earlier version of this had: a big decal on
+    /// gently rolling "flat-looking" ground always measured enough
+    /// accumulated deviation across its own large span to trip the
+    /// full-resolution threshold, even though the ground was no bumpier
+    /// per-unit-length than under a small decal that correctly got
+    /// downgraded).</summary>
+    private const float CurvatureProbeStep = 2f;
+
+    /// <summary>Below this much local curvature (world units), the ground is
+    /// "flat enough" that MinCellsPerAxis alone already conforms to it
+    /// visually — a flat plane or a uniform slope both score exactly 0 here
+    /// (three collinear samples), whatever the footprint's overall size.</summary>
+    private const float FlatCurvatureTolerance = 0.05f;
+
+    /// <summary>At/above this much local curvature, use the full resolution
+    /// the decal's own size would normally request (MaxCellsPerAxis-capped)
+    /// — genuinely rugged ground under a decal still gets the same fidelity
+    /// as before this optimization existed.</summary>
+    private const float FullResCurvatureThreshold = 1.5f;
+
+    /// <summary>Chooses how finely to tessellate the live terrain surface
+    /// under one decal placement — full resolution only where the ground
+    /// actually bends enough, per unit length, to need it. A fixed decal-
+    /// size-based cell count (the original, only, behavior) always paid for
+    /// up to 96x96 cells even under dead-flat ground, since it had no way
+    /// to know the difference — confirmed as one of the two dominant costs
+    /// in SC2DecalsShell.EnsurePreview's own measured rebuild timing,
+    /// especially painful during a Move/Rotate/Scale drag (re-tessellating
+    /// every single frame). Deliberately shared with the export path
+    /// (SC2DecalsExportService also calls Collect, hence AddLiveHeightGrid)
+    /// — a flatter decal footprint genuinely needs fewer triangles to look
+    /// right in the exported game data too, not just in the editor
+    /// preview.</summary>
+    private static int EstimateAdaptiveCellCount(System.Func<float, float, float> sampleHeight, float originX, float originZ, float side, int requestedCells)
+    {
+        if (requestedCells <= MinCellsPerAxis) return requestedCells;
+        var maxCurvature = 0f;
+        for (var iz = 0; iz < RoughnessProbeCount; iz++)
+        for (var ix = 0; ix < RoughnessProbeCount; ix++)
+        {
+            var x = originX + side * (ix + 0.5f) / RoughnessProbeCount;
+            var z = originZ + side * (iz + 0.5f) / RoughnessProbeCount;
+            var center = sampleHeight(x, z);
+            var curveX = Mathf.Abs(sampleHeight(x - CurvatureProbeStep, z) + sampleHeight(x + CurvatureProbeStep, z) - 2f * center);
+            var curveZ = Mathf.Abs(sampleHeight(x, z - CurvatureProbeStep) + sampleHeight(x, z + CurvatureProbeStep) - 2f * center);
+            var curvature = Mathf.Max(curveX, curveZ);
+            if (curvature > maxCurvature) maxCurvature = curvature;
+        }
+        if (maxCurvature <= FlatCurvatureTolerance) return MinCellsPerAxis;
+        var t = Mathf.Clamp01((maxCurvature - FlatCurvatureTolerance) / (FullResCurvatureThreshold - FlatCurvatureTolerance));
+        return Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(MinCellsPerAxis, requestedCells, t)), MinCellsPerAxis, requestedCells);
+    }
+
     private static void AddLiveHeightGrid(List<SC2DecalSurfaceTriangle> output, System.Func<float, float, float> sampleHeight, SC2DecalsDocument document)
     {
         foreach (var p in document.Placements)
         {
             if (p == null || !p.Enabled || p.Position == null || p.Position.Length < 3) continue;
             var side = Mathf.Sqrt(p.Width * p.Width + p.Length * p.Length);
-            var cellsX = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, side)), 4, 96);
-            var cellsZ = cellsX;
+            var requestedCells = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, side)), MinCellsPerAxis, MaxCellsPerAxis);
             var origin = new Vector3(p.Position[0] - side * .5f, 0, p.Position[2] - side * .5f);
+            var cellsX = EstimateAdaptiveCellCount(sampleHeight, origin.x, origin.z, side, requestedCells);
+            var cellsZ = cellsX;
             const float eps = 0.5f;
             Vector3 Pt(float x, float z) => new(x, sampleHeight(x, z), z);
             Vector3 Nm(float x, float z)
@@ -189,10 +288,18 @@ public sealed class SC2DecalSurfaceProvider
                 // it just backface-culls in anything that isn't rendering
                 // it double-sided, which is exactly "exports fine, invisible
                 // in the real game" with nothing else visibly wrong.
-                var t1 = Triangle(a, c, b); t1.NA = N(na); t1.NB = N(nc); t1.NC = N(nb); output.Add(t1);
-                var t2 = Triangle(a, d, c); t2.NA = N(na); t2.NB = N(nd); t2.NC = N(nc); output.Add(t2);
+                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); output.Add(t1);
+                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); output.Add(t2);
             }
         }
+    }
+
+    private static void SetNormals(ref SC2DecalSurfaceTriangle t, Vector3 na, Vector3 nb, Vector3 nc)
+    {
+        t.HasNormals = true;
+        t.NAX = na.x; t.NAY = na.y; t.NAZ = na.z;
+        t.NBX = nb.x; t.NBY = nb.y; t.NBZ = nb.z;
+        t.NCX = nc.x; t.NCY = nc.y; t.NCZ = nc.z;
     }
 
     private static void AddMesh(List<SC2DecalSurfaceTriangle> output, Mesh mesh, Matrix4x4 matrix, List<Bounds> wantedList)
@@ -216,11 +323,7 @@ public sealed class SC2DecalSurfaceProvider
             if (!IntersectsAny(wantedList, triangleBounds)) continue;
             var triangle = Triangle(a, b, c);
             if (hasNormals)
-            {
-                triangle.NA = N(matrix.MultiplyVector(normals[ia]));
-                triangle.NB = N(matrix.MultiplyVector(normals[ib]));
-                triangle.NC = N(matrix.MultiplyVector(normals[ic]));
-            }
+                SetNormals(ref triangle, matrix.MultiplyVector(normals[ia]), matrix.MultiplyVector(normals[ib]), matrix.MultiplyVector(normals[ic]));
             output.Add(triangle);
         }
     }
@@ -263,8 +366,8 @@ public sealed class SC2DecalSurfaceProvider
                 var na = NormalAt(terrain, x0, z0); var nb = NormalAt(terrain, x1, z0); var nc = NormalAt(terrain, x1, z1); var nd = NormalAt(terrain, x0, z1);
                 // Same winding fix as AddLiveHeightGrid above — see that
                 // method's own comment.
-                var t1 = Triangle(a, c, b); t1.NA = N(na); t1.NB = N(nc); t1.NC = N(nb); output.Add(t1);
-                var t2 = Triangle(a, d, c); t2.NA = N(na); t2.NB = N(nd); t2.NC = N(nc); output.Add(t2);
+                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); output.Add(t1);
+                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); output.Add(t2);
             }
         }
     }
@@ -279,9 +382,12 @@ public sealed class SC2DecalSurfaceProvider
         var z01 = size.z > 0.0001f ? Mathf.Clamp01(localZ / size.z) : 0f;
         return t.terrainData.GetInterpolatedNormal(x01, z01);
     }
-    private static SC2DecalSurfaceTriangle Triangle(Vector3 a, Vector3 b, Vector3 c) => new() { A = A(a), B = A(b), C = A(c) };
-    private static float[] A(Vector3 v) => new[] { v.x, v.y, v.z };
-    private static float[] N(Vector3 v) => new[] { v.x, v.y, v.z };
+    private static SC2DecalSurfaceTriangle Triangle(Vector3 a, Vector3 b, Vector3 c) => new()
+    {
+        AX = a.x, AY = a.y, AZ = a.z,
+        BX = b.x, BY = b.y, BZ = b.z,
+        CX = c.x, CY = c.y, CZ = c.z
+    };
     private static bool IsProjectionSurface(GameObject go) => go != null &&
         (go.GetComponentInParent<SC2DecalProjectionSurface>() != null || go.GetComponentInParent<Terrain>() != null);
 

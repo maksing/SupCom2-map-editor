@@ -5,20 +5,33 @@ using BdfIO.Formats.Decals;
 
 namespace SC2.MapEditor.Document
 {
-    public sealed class SC2DecalSurfaceTriangle
+    /// <summary>Value type, not a class — SC2DecalSurfaceProvider.Collect can
+    /// produce well over half a million of these in one call (a handful of
+    /// large decal placements, each tessellated into a dense terrain-height
+    /// grid). Flat float fields instead of float[3] arrays means a
+    /// List&lt;SC2DecalSurfaceTriangle&gt; stores every triangle inline in
+    /// one contiguous backing array — zero additional heap allocations per
+    /// triangle (the previous class + 6 separate float[3] arrays meant 7
+    /// allocations each, ~3.5M+ objects for a single realistic preview
+    /// rebuild — confirmed as one of the two dominant costs in
+    /// SC2DecalsShell.EnsurePreview's own measured timing, alongside
+    /// SC2DecalGeometryBuilder's clip pipeline).</summary>
+    public struct SC2DecalSurfaceTriangle
     {
-        public float[] A = new float[3];
-        public float[] B = new float[3];
-        public float[] C = new float[3];
+        public float AX, AY, AZ;
+        public float BX, BY, BZ;
+        public float CX, CY, CZ;
         /// <summary>Smooth per-vertex normals (mesh.normals — already
         /// averaged across every face sharing that vertex, exactly what the
-        /// terrain's own shading already uses), left null when a source has
-        /// none available. See BuildPlacement's own comment for why these
-        /// matter: without them, decal shading facets visibly at every
-        /// underlying triangle edge.</summary>
-        public float[] NA;
-        public float[] NB;
-        public float[] NC;
+        /// terrain's own shading already uses) — HasNormals is false when a
+        /// source has none available (NAX/NAY/... are meaningless then). See
+        /// BuildPlacement's own comment for why these matter: without them,
+        /// decal shading facets visibly at every underlying triangle
+        /// edge.</summary>
+        public bool HasNormals;
+        public float NAX, NAY, NAZ;
+        public float NBX, NBY, NBZ;
+        public float NCX, NCY, NCZ;
     }
 
     /// <summary>Deterministic orthographic projector shared by imported and
@@ -35,7 +48,10 @@ namespace SC2.MapEditor.Document
             public static V operator *(V a, double b) => new(a.X * b, a.Y * b, a.Z * b);
         }
 
-        private sealed class P { public V World; public V Local; }
+        /// <summary>Value type (not a class) — see BuildPlacement's own
+        /// comment on why avoiding a heap allocation per vertex/clip-step
+        /// matters here.</summary>
+        private struct P { public V World; public V Local; }
 
         /// <summary>Minimum Dot(sourceTriangleNormal, decalPlacementNormal)
         /// for a source triangle to be considered part of the surface a
@@ -67,10 +83,69 @@ namespace SC2.MapEditor.Document
             foreach (var placement in document.Placements.Where(p => p != null && p.Enabled))
             {
                 if (!entries.TryGetValue(placement.AtlasEntryId ?? "", out var entry)) continue;
-                BuildPlacement(model, placement, entry, triangles, document.AtlasWidth, document.AtlasHeight);
+                BuildPlacement(model, placement, entry, FilterTrianglesNearPlacement(triangles, placement), document.AtlasWidth, document.AtlasHeight);
             }
 
             return model;
+        }
+
+        /// <summary>Builds ONE placement's own clipped geometry in isolation,
+        /// with LOCAL indices starting at 0 (not offset into a shared
+        /// document-wide vertex list) — lets a caller (SC2DecalsShell.
+        /// EnsurePreview) cache each placement's fragment independently and
+        /// only recompute the ones actually affected by a change, instead of
+        /// re-running Build() for the WHOLE document (every placement) on
+        /// every single terrain edit regardless of whether the edit was
+        /// anywhere near most of them.</summary>
+        public static (List<DecalVertex> Vertices, List<int> Indices) BuildPlacementFragment(
+            SC2DecalPlacement placement, SC2DecalAtlasEntry entry, List<SC2DecalSurfaceTriangle> triangles, int atlasW, int atlasH)
+        {
+            var fragment = new DecalsModel();
+            BuildPlacement(fragment, placement, entry, FilterTrianglesNearPlacement(triangles, placement), atlasW, atlasH);
+            return (fragment.Vertices, fragment.Indices);
+        }
+
+        /// <summary>Cheap X/Z bounding-box pre-filter, run once per placement
+        /// before BuildPlacement's own expensive per-triangle clip/normal
+        /// math. Without this, every placement scanned the SAME shared
+        /// triangle list collected for the WHOLE document (every other
+        /// placement's own terrain patch included) — with N placements that
+        /// is O(triangles x N) instead of O(triangles), and on a real map it
+        /// dominated the whole preview rebuild (confirmed via SC2DecalsShell's
+        /// own EnsurePreview timing: ~1.1s spent here alone for just 4
+        /// placements / ~74k triangles, most of them irrelevant to any given
+        /// one). Only X/Z is checked (not the placement's projection depth)
+        /// so this can never incorrectly exclude a real triangle regardless
+        /// of how the placement's own surface normal is oriented — the exact
+        /// depth/angle clipping BuildPlacement already does per-triangle is
+        /// untouched, this only skips triangles nowhere near the footprint at
+        /// all. Diagonal (not Width/Length directly) is used as the half-
+        /// extent for the same reason SC2DecalSurfaceProvider.PlacementBoundsList
+        /// does — a rotated rectangle's true footprint reaches past an
+        /// unrotated box at its corners, so anything smaller could wrongly
+        /// drop real triangles.</summary>
+        private static List<SC2DecalSurfaceTriangle> FilterTrianglesNearPlacement(List<SC2DecalSurfaceTriangle> triangles, SC2DecalPlacement p)
+        {
+            if (p.Position == null || p.Position.Length < 3) return triangles;
+            var halfDiag = Math.Sqrt((double)p.Width * p.Width + (double)p.Length * p.Length) * 0.5;
+            double cx = p.Position[0], cz = p.Position[2];
+            var minX = cx - halfDiag; var maxX = cx + halfDiag;
+            var minZ = cz - halfDiag; var maxZ = cz + halfDiag;
+
+            var result = new List<SC2DecalSurfaceTriangle>();
+            foreach (var t in triangles)
+            {
+                var triMinX = Math.Min(t.AX, Math.Min(t.BX, t.CX));
+                if (triMinX > maxX) continue;
+                var triMaxX = Math.Max(t.AX, Math.Max(t.BX, t.CX));
+                if (triMaxX < minX) continue;
+                var triMinZ = Math.Min(t.AZ, Math.Min(t.BZ, t.CZ));
+                if (triMinZ > maxZ) continue;
+                var triMaxZ = Math.Max(t.AZ, Math.Max(t.BZ, t.CZ));
+                if (triMaxZ < minZ) continue;
+                result.Add(t);
+            }
+            return result;
         }
 
         private static void BuildPlacement(DecalsModel output, SC2DecalPlacement p, SC2DecalAtlasEntry e,
@@ -89,14 +164,31 @@ namespace SC2.MapEditor.Document
             var halfL = Math.Max(0.0001, p.Length * 0.5);
             var depth = Math.Max(0.0001, p.ProjectionDepth);
 
+            // Reused across every triangle in this placement instead of a
+            // fresh List<P> per Clip() call (the previous approach) — a
+            // convex polygon clipped against one half-plane can gain at most
+            // one vertex, so starting from a triangle (3) and clipping
+            // against 6 planes below can never exceed 3+6=9 vertices, making
+            // two fixed 9-slot buffers always enough. Confirmed real cost:
+            // on a map with tens of thousands of source triangles per
+            // placement, the old version allocated a new List<P> (and, since
+            // P was a class, a new P object per emitted vertex) six times
+            // PER TRIANGLE — hundreds of thousands of small heap allocations
+            // per preview rebuild, one of the two dominant costs in
+            // SC2DecalsShell.EnsurePreview's measured rebuild time. Per the
+            // SAME GC-pause behavior already diagnosed for SC2LiveHeightGrid,
+            // a stall like this isn't fixed by moving the work elsewhere,
+            // only by allocating less.
+            var bufA = new P[9];
+            var bufB = new P[9];
+
             foreach (var t in triangles)
             {
-                if (t?.A == null || t.B == null || t.C == null) continue;
-                var worldA = Vec(t.A, 0, 0, 0); var worldB = Vec(t.B, 0, 0, 0); var worldC = Vec(t.C, 0, 0, 0);
-                var hasVertexNormals = t.NA != null && t.NB != null && t.NC != null;
-                var normalA = hasVertexNormals ? Normalize(Vec(t.NA, 0, 1, 0)) : default;
-                var normalB = hasVertexNormals ? Normalize(Vec(t.NB, 0, 1, 0)) : default;
-                var normalC = hasVertexNormals ? Normalize(Vec(t.NC, 0, 1, 0)) : default;
+                var worldA = new V(t.AX, t.AY, t.AZ); var worldB = new V(t.BX, t.BY, t.BZ); var worldC = new V(t.CX, t.CY, t.CZ);
+                var hasVertexNormals = t.HasNormals;
+                var normalA = hasVertexNormals ? Normalize(new V(t.NAX, t.NAY, t.NAZ)) : default;
+                var normalB = hasVertexNormals ? Normalize(new V(t.NBX, t.NBY, t.NBZ)) : default;
+                var normalC = hasVertexNormals ? Normalize(new V(t.NCX, t.NCY, t.NCZ)) : default;
                 var rawFlatNormal = Normalize(Cross(worldB - worldA, worldC - worldA));
 
                 // A real bug: on
@@ -133,21 +225,26 @@ namespace SC2.MapEditor.Document
                 // the source had no per-vertex normals at all (see below).
                 var flatFaceNormal = Dot(rawFlatNormal, normal) < 0 ? rawFlatNormal * -1 : rawFlatNormal;
 
-                var polygon = new List<P>(3) { Point(worldA), Point(worldB), Point(worldC) };
                 P Point(V world)
                 {
                     var d = world - center;
                     return new P { World = world, Local = new V(Dot(d, right) / halfW, Dot(d, normal) / depth, Dot(d, forward) / halfL) };
                 }
 
-                polygon = Clip(polygon, q => q.Local.X + 1, 0); polygon = Clip(polygon, q => 1 - q.Local.X, 0);
-                polygon = Clip(polygon, q => q.Local.Z + 1, 0); polygon = Clip(polygon, q => 1 - q.Local.Z, 0);
-                polygon = Clip(polygon, q => q.Local.Y + 0.5, 0); polygon = Clip(polygon, q => 0.5 - q.Local.Y, 0);
-                if (polygon.Count < 3) continue;
+                bufA[0] = Point(worldA); bufA[1] = Point(worldB); bufA[2] = Point(worldC);
+                var count = 3;
+                count = ClipInto(bufA, count, bufB, q => q.Local.X + 1); count = ClipInto(bufB, count, bufA, q => 1 - q.Local.X);
+                count = ClipInto(bufA, count, bufB, q => q.Local.Z + 1); count = ClipInto(bufB, count, bufA, q => 1 - q.Local.Z);
+                count = ClipInto(bufA, count, bufB, q => q.Local.Y + 0.5); count = ClipInto(bufB, count, bufA, q => 0.5 - q.Local.Y);
+                if (count < 3) continue;
+                // Final result lives in bufA[0..count) — an even number
+                // (6) of ClipInto calls above always leaves the result back
+                // in bufA.
 
                 var baseIndex = output.Vertices.Count;
-                foreach (var q in polygon)
+                for (var qi = 0; qi < count; qi++)
                 {
+                    var q = bufA[qi];
                     // Confirmed real bug — a visibly faceted decal on a rock
                     // surface, in both
                     // the editor and the exported game data: this used to
@@ -177,33 +274,43 @@ namespace SC2.MapEditor.Document
                     var world = q.World + shadingNormal * p.HeightOffset;
                     output.Vertices.Add(new DecalVertex
                     {
-                        Position = F(world),
-                        TexCoord = new[] { (float)(q.Local.X * 0.5 + 0.5), (float)(q.Local.Z * 0.5 + 0.5), (float)(q.Local.Y + 0.5) },
-                        ScaleOffset = new[] { e.Width / (float)atlasW, e.Height / (float)atlasH, e.X / (float)atlasW, e.Y / (float)atlasH },
-                        TangentXform0 = F(tangent), TangentXform1 = F(binormal), TangentXform2 = F(shadingNormal)
+                        PositionX = (float)world.X, PositionY = (float)world.Y, PositionZ = (float)world.Z,
+                        TexCoordX = (float)(q.Local.X * 0.5 + 0.5), TexCoordY = (float)(q.Local.Z * 0.5 + 0.5), TexCoordZ = (float)(q.Local.Y + 0.5),
+                        ScaleOffsetX = e.Width / (float)atlasW, ScaleOffsetY = e.Height / (float)atlasH, ScaleOffsetZ = e.X / (float)atlasW, ScaleOffsetW = e.Y / (float)atlasH,
+                        TangentXform0X = (float)tangent.X, TangentXform0Y = (float)tangent.Y, TangentXform0Z = (float)tangent.Z,
+                        TangentXform1X = (float)binormal.X, TangentXform1Y = (float)binormal.Y, TangentXform1Z = (float)binormal.Z,
+                        TangentXform2X = (float)shadingNormal.X, TangentXform2Y = (float)shadingNormal.Y, TangentXform2Z = (float)shadingNormal.Z
                     });
                 }
-                for (var i = 1; i + 1 < polygon.Count; i++)
+                for (var i = 1; i + 1 < count; i++)
                 { output.Indices.Add(baseIndex); output.Indices.Add(baseIndex + i); output.Indices.Add(baseIndex + i + 1); }
             }
         }
 
-        private static List<P> Clip(List<P> input, Func<P, double> distance, double epsilon)
+        /// <summary>Sutherland-Hodgman half-plane clip against a fixed
+        /// output buffer instead of allocating a List — see BuildPlacement's
+        /// own comment on why. `output` must be a different array than
+        /// `input` (the two 9-slot buffers are ping-ponged by the caller);
+        /// writing into the same array while reading it would corrupt
+        /// not-yet-processed input entries.</summary>
+        private static int ClipInto(P[] input, int count, P[] output, Func<P, double> distance)
         {
-            var result = new List<P>(); if (input.Count == 0) return result;
-            var previous = input[input.Count - 1]; var pd = distance(previous); var pin = pd >= -epsilon;
-            foreach (var current in input)
+            if (count == 0) return 0;
+            var outCount = 0;
+            var previous = input[count - 1]; var pd = distance(previous); var pin = pd >= 0;
+            for (var i = 0; i < count; i++)
             {
-                var cd = distance(current); var cin = cd >= -epsilon;
+                var current = input[i];
+                var cd = distance(current); var cin = cd >= 0;
                 if (cin != pin)
                 {
                     var t = pd / (pd - cd);
-                    result.Add(new P { World = previous.World + (current.World - previous.World) * t, Local = previous.Local + (current.Local - previous.Local) * t });
+                    output[outCount++] = new P { World = previous.World + (current.World - previous.World) * t, Local = previous.Local + (current.Local - previous.Local) * t };
                 }
-                if (cin) result.Add(current);
+                if (cin) output[outCount++] = current;
                 previous = current; pd = cd; pin = cin;
             }
-            return result;
+            return outCount;
         }
 
         /// <summary>Interpolates the original triangle's smooth per-vertex
@@ -228,7 +335,6 @@ namespace SC2.MapEditor.Document
         }
 
         private static V Vec(float[] a, double x, double y, double z) => a != null && a.Length >= 3 ? new V(a[0], a[1], a[2]) : new V(x, y, z);
-        private static float[] F(V v) => new[] { (float)v.X, (float)v.Y, (float)v.Z };
         private static double Dot(V a, V b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
         private static V Cross(V a, V b) => new(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
         private static V Normalize(V v) { var l = Math.Sqrt(Dot(v, v)); return l > 1e-12 ? v * (1 / l) : new V(0, 1, 0); }

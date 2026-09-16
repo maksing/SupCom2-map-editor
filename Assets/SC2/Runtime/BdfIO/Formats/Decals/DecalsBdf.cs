@@ -64,14 +64,22 @@ namespace BdfIO.Formats.Decals
 ///   int32[IndexCount] — plain 32-bit indices, 3 per triangle (already
 ///     triangulated)
 /// </summary>
-public sealed class DecalVertex
+/// <summary>Value type, not a class — a single decal preview rebuild
+/// (SC2DecalGeometryBuilder.BuildPlacement) can emit tens of thousands of
+/// these per stroke. Flat float fields instead of six separate float[]
+/// arrays means a List&lt;DecalVertex&gt; stores every vertex inline in one
+/// contiguous backing array, avoiding what was otherwise 7 heap allocations
+/// (1 object + 6 arrays) per vertex — confirmed as one of the two dominant
+/// costs in that rebuild's own measured timing, alongside
+/// SC2DecalSurfaceTriangle's identical fix on the input side.</summary>
+public struct DecalVertex
 {
-    public float[] Position = new float[3];
-    public float[] TexCoord = new float[3];
-    public float[] ScaleOffset = new float[4];
-    public float[] TangentXform0 = new float[3];
-    public float[] TangentXform1 = new float[3];
-    public float[] TangentXform2 = new float[3];
+    public float PositionX, PositionY, PositionZ;
+    public float TexCoordX, TexCoordY, TexCoordZ;
+    public float ScaleOffsetX, ScaleOffsetY, ScaleOffsetZ, ScaleOffsetW;
+    public float TangentXform0X, TangentXform0Y, TangentXform0Z;
+    public float TangentXform1X, TangentXform1Y, TangentXform1Z;
+    public float TangentXform2X, TangentXform2Y, TangentXform2Z;
 }
 
 public sealed class DecalsModel
@@ -161,12 +169,12 @@ public static class DecalsBdf
                 if (b + VertexStride > data.Length) break;
                 model.Vertices.Add(new DecalVertex
                 {
-                    Position = new[] { r.PeekFloatAt(b), r.PeekFloatAt(b + 4), r.PeekFloatAt(b + 8) },
-                    TexCoord = new[] { r.PeekFloatAt(b + 12), r.PeekFloatAt(b + 16), r.PeekFloatAt(b + 20) },
-                    ScaleOffset = new[] { r.PeekFloatAt(b + 24), r.PeekFloatAt(b + 28), r.PeekFloatAt(b + 32), r.PeekFloatAt(b + 36) },
-                    TangentXform0 = new[] { r.PeekFloatAt(b + 40), r.PeekFloatAt(b + 44), r.PeekFloatAt(b + 48) },
-                    TangentXform1 = new[] { r.PeekFloatAt(b + 52), r.PeekFloatAt(b + 56), r.PeekFloatAt(b + 60) },
-                    TangentXform2 = new[] { r.PeekFloatAt(b + 64), r.PeekFloatAt(b + 68), r.PeekFloatAt(b + 72) }
+                    PositionX = r.PeekFloatAt(b), PositionY = r.PeekFloatAt(b + 4), PositionZ = r.PeekFloatAt(b + 8),
+                    TexCoordX = r.PeekFloatAt(b + 12), TexCoordY = r.PeekFloatAt(b + 16), TexCoordZ = r.PeekFloatAt(b + 20),
+                    ScaleOffsetX = r.PeekFloatAt(b + 24), ScaleOffsetY = r.PeekFloatAt(b + 28), ScaleOffsetZ = r.PeekFloatAt(b + 32), ScaleOffsetW = r.PeekFloatAt(b + 36),
+                    TangentXform0X = r.PeekFloatAt(b + 40), TangentXform0Y = r.PeekFloatAt(b + 44), TangentXform0Z = r.PeekFloatAt(b + 48),
+                    TangentXform1X = r.PeekFloatAt(b + 52), TangentXform1Y = r.PeekFloatAt(b + 56), TangentXform1Z = r.PeekFloatAt(b + 60),
+                    TangentXform2X = r.PeekFloatAt(b + 64), TangentXform2Y = r.PeekFloatAt(b + 68), TangentXform2Z = r.PeekFloatAt(b + 72)
                 });
             }
         }
@@ -236,8 +244,12 @@ public static class DecalsBdf
 
             foreach (var v in model.Vertices)
             {
-                WriteVec(w, v.Position, 3); WriteVec(w, v.TexCoord, 3); WriteVec(w, v.ScaleOffset, 4);
-                WriteVec(w, v.TangentXform0, 3); WriteVec(w, v.TangentXform1, 3); WriteVec(w, v.TangentXform2, 3);
+                w.WriteFloat(v.PositionX); w.WriteFloat(v.PositionY); w.WriteFloat(v.PositionZ);
+                w.WriteFloat(v.TexCoordX); w.WriteFloat(v.TexCoordY); w.WriteFloat(v.TexCoordZ);
+                w.WriteFloat(v.ScaleOffsetX); w.WriteFloat(v.ScaleOffsetY); w.WriteFloat(v.ScaleOffsetZ); w.WriteFloat(v.ScaleOffsetW);
+                w.WriteFloat(v.TangentXform0X); w.WriteFloat(v.TangentXform0Y); w.WriteFloat(v.TangentXform0Z);
+                w.WriteFloat(v.TangentXform1X); w.WriteFloat(v.TangentXform1Y); w.WriteFloat(v.TangentXform1Z);
+                w.WriteFloat(v.TangentXform2X); w.WriteFloat(v.TangentXform2Y); w.WriteFloat(v.TangentXform2Z);
             }
             foreach (var idx in model.Indices)
                 w.WriteInt32(idx);
@@ -258,12 +270,6 @@ public static class DecalsBdf
         BitConverter.GetBytes(0u).CopyTo(trailing, 8);
 
         return (w.ToArray(), offsetTable.ToArray(), 2u, trailing);
-    }
-
-    private static void WriteVec(BdfWriter w, float[] values, int expected)
-    {
-        for (var i = 0; i < expected; i++)
-            w.WriteFloat(i < values.Length ? values[i] : 0f);
     }
 
     private static byte[] RebaseExtraData(DecalsModel model, int newStart)

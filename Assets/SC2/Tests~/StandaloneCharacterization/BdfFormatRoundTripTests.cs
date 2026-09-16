@@ -207,11 +207,20 @@ public class BdfFormatRoundTripTests
             // floats round-trip exactly through WriteFloat/PeekFloatAt (same
             // IEEE 754 bit pattern in and out), so an exact equality check
             // (not an epsilon-tolerant one) is the right assertion here.
-            Assert.Equal(model.Vertices[0].Position, reModel.Vertices[0].Position);
-            Assert.Equal(model.Vertices[0].ScaleOffset, reModel.Vertices[0].ScaleOffset);
+            Assert.Equal(model.Vertices[0].PositionX, reModel.Vertices[0].PositionX);
+            Assert.Equal(model.Vertices[0].PositionY, reModel.Vertices[0].PositionY);
+            Assert.Equal(model.Vertices[0].PositionZ, reModel.Vertices[0].PositionZ);
+            Assert.Equal(model.Vertices[0].ScaleOffsetX, reModel.Vertices[0].ScaleOffsetX);
+            Assert.Equal(model.Vertices[0].ScaleOffsetY, reModel.Vertices[0].ScaleOffsetY);
+            Assert.Equal(model.Vertices[0].ScaleOffsetZ, reModel.Vertices[0].ScaleOffsetZ);
+            Assert.Equal(model.Vertices[0].ScaleOffsetW, reModel.Vertices[0].ScaleOffsetW);
             var last = model.Vertices.Count - 1;
-            Assert.Equal(model.Vertices[last].Position, reModel.Vertices[last].Position);
-            Assert.Equal(model.Vertices[last].TangentXform2, reModel.Vertices[last].TangentXform2);
+            Assert.Equal(model.Vertices[last].PositionX, reModel.Vertices[last].PositionX);
+            Assert.Equal(model.Vertices[last].PositionY, reModel.Vertices[last].PositionY);
+            Assert.Equal(model.Vertices[last].PositionZ, reModel.Vertices[last].PositionZ);
+            Assert.Equal(model.Vertices[last].TangentXform2X, reModel.Vertices[last].TangentXform2X);
+            Assert.Equal(model.Vertices[last].TangentXform2Y, reModel.Vertices[last].TangentXform2Y);
+            Assert.Equal(model.Vertices[last].TangentXform2Z, reModel.Vertices[last].TangentXform2Z);
         }
     }
 }

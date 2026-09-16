@@ -32,6 +32,12 @@ public sealed class SC2DecalsShell : IDisposable
     private Material _previewMaterial;
     private long _renderedRevision = -1;
     private int _renderedTerrainVersion = -1;
+    // Per-placement preview-mesh cache — see EnsurePreview's own doc
+    // comment and MarkPreviewDirtyInRadius for why this exists (avoiding a
+    // full Collect+GeometryBuilder re-run for every placement on every
+    // single terrain edit, most of which are nowhere near most decals).
+    private readonly Dictionary<string, (List<DecalVertex> Vertices, List<int> Indices)> _placementFragmentCache = new();
+    private readonly HashSet<string> _dirtyPlacementIds = new();
     private int _selectedEntry = -1;
     private int _selectedPlacement = -1;
     private Vector2 _catalogScroll;
@@ -906,7 +912,15 @@ public sealed class SC2DecalsShell : IDisposable
     private void TransformChanged()
     {
         _transformVersion++;
-        _renderedRevision = -1;
+        // Deliberately NOT touching _renderedRevision here (unlike Commit/
+        // CancelTransform, which really do need a full rebuild) — bumping
+        // _transformVersion alone is already enough to make EnsurePreview
+        // see a change. Forcing _renderedRevision too used to make every
+        // single mouse-move during a Move/Rotate/Scale drag look exactly
+        // like a full document edit, so EnsurePreview re-ran Collect+
+        // GeometryBuilder for EVERY placement on every drag frame instead
+        // of just the one (plus symmetry siblings) actually being dragged —
+        // the real cause of decal transform-editing feeling sluggish.
         RepaintHost?.Invoke();
     }
 
@@ -959,7 +973,12 @@ public sealed class SC2DecalsShell : IDisposable
         // sites), a decal's projected mesh kept rendering against whatever
         // terrain shape existed the last time this ran, even after the
         // ground under it had been reshaped.
-        if (Doc == null || (_renderedRevision == _session.Document.Revision && _renderedTransformVersion == _transformVersion && _renderedTerrainVersion == SC2TerrainShell.TerrainGeometryVersion)) return;
+        if (Doc == null) return;
+        var revisionChanged = _renderedRevision != _session.Document.Revision;
+        var transformChanged = _renderedTransformVersion != _transformVersion;
+        var terrainChanged = _renderedTerrainVersion != SC2TerrainShell.TerrainGeometryVersion;
+        if (!revisionChanged && !transformChanged && !terrainChanged) return;
+
         var previewDocument = Doc;
         if (_transformPreview != null && _selectedPlacement >= 0 && _selectedPlacement < Doc.Placements.Count)
         {
@@ -977,7 +996,157 @@ public sealed class SC2DecalsShell : IDisposable
         {
             _transformGroupPreview = null;
         }
-        var model = SC2DecalGeometryBuilder.Build(previewDocument, _surfaces.Collect(previewDocument, _surfaces.LiveTerrainSampleHeight));
+
+        // Matches SC2DecalGeometryBuilder.Build's own top-level guard (an
+        // empty model when the atlas is missing/invalid) — without this,
+        // a still-populated _placementFragmentCache from before the atlas
+        // became invalid would keep getting merged into the preview mesh
+        // below, since the per-placement rebuild loop skips entirely in
+        // this case and never touches the cache.
+        if (previewDocument.AtlasWidth <= 0 || previewDocument.AtlasHeight <= 0)
+        {
+            _placementFragmentCache.Clear();
+            if (_previewMesh != null) { UnityEngine.Object.Destroy(_previewMesh); _previewMesh = null; }
+            if (_previewRoot != null) _previewRoot.GetComponent<MeshFilter>().sharedMesh = null;
+            Doc.VertexCount = 0; Doc.IndexCount = 0;
+            if (_transformPreview == null) Doc.SpatialState = SC2DecalsSpatialState.Current;
+            _renderedRevision = _session.Document.Revision; _renderedTransformVersion = _transformVersion; _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
+            _dirtyPlacementIds.Clear();
+            return;
+        }
+
+        // See SC2LiveHeightGrid.EnsureFreshImmediate's own doc comment: this
+        // method runs in the SAME frame a stroke's MouseUp bumps
+        // TerrainGeometryVersion, well before the live height grid's normal
+        // debounce window could ever elapse — without this, Collect below
+        // (via SampleLiveHeightGrid) always read the PREVIOUS stroke's
+        // terrain shape, one stroke behind.
+        if (terrainChanged) _terrainShell?.RefreshLiveHeightGridImmediate();
+
+        // A terrain-only change (no authored edit) can be scoped to just the
+        // placements MarkPreviewDirtyInRadius actually flagged (a recent
+        // brush stroke's own touched radius). An active transform drag
+        // (Move/Rotate/Scale, TransformChanged firing on every mouse-move)
+        // can similarly be scoped to just the ONE placement being dragged
+        // plus any symmetry-group siblings SyncSymmetryGroup mirrors it onto
+        // below — the only other placements a drag frame can possibly touch.
+        // Confirmed real cost: before this, every single drag frame redid
+        // Collect+GeometryBuilder for EVERY placement in the document, not
+        // just the dragged one, making decal Move/Rotate/Scale visibly
+        // sluggish on any map with more than a couple of decals. A real
+        // authored edit (Commit) always falls back to recomputing everyone,
+        // since it can change literally anything (added/removed/reordered
+        // placements, atlas entries, etc.) with no cheap way to know just
+        // what changed.
+        var fullRebuild = revisionChanged || _placementFragmentCache.Count == 0;
+        HashSet<string> toRebuild = null;
+        if (!fullRebuild)
+        {
+            toRebuild = new HashSet<string>();
+            if (transformChanged)
+            {
+                if (_transformPreview != null && _selectedPlacement >= 0 && _selectedPlacement < previewDocument.Placements.Count
+                    && previewDocument.Placements[_selectedPlacement]?.Id != null)
+                {
+                    var dragged = previewDocument.Placements[_selectedPlacement];
+                    toRebuild.Add(dragged.Id);
+                    if (!string.IsNullOrEmpty(dragged.SymmetryGroupId))
+                        foreach (var p in previewDocument.Placements)
+                            if (p?.Id != null && p.SymmetryGroupId == dragged.SymmetryGroupId) toRebuild.Add(p.Id);
+                }
+                else
+                {
+                    // transformVersion changed with no active drag to scope
+                    // to — shouldn't normally happen (Commit/CancelTransform
+                    // both also bump the real document Revision, which
+                    // already forces fullRebuild above) — fall back to the
+                    // always-correct full rebuild rather than guess.
+                    fullRebuild = true;
+                }
+            }
+            if (!fullRebuild && terrainChanged)
+                foreach (var p in previewDocument.Placements)
+                    if (p?.Id != null && _dirtyPlacementIds.Contains(p.Id)) toRebuild.Add(p.Id);
+
+            if (!fullRebuild && toRebuild.Count == 0)
+            {
+                // Nothing actually affected any decal (terrain changed
+                // nowhere near one) — nothing to rebuild; just record the
+                // new versions so this becomes a no-op again next call.
+                _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
+                _renderedTransformVersion = _transformVersion;
+                _dirtyPlacementIds.Clear();
+                return;
+            }
+        }
+
+        var swCollect = System.Diagnostics.Stopwatch.StartNew();
+        List<SC2DecalSurfaceTriangle> surfaceTriangles;
+        if (fullRebuild)
+        {
+            surfaceTriangles = _surfaces.Collect(previewDocument, _surfaces.LiveTerrainSampleHeight);
+        }
+        else
+        {
+            // A lightweight subset document — Collect()/AddLiveHeightGrid
+            // only ever READ placements, so reusing the same Entries list
+            // and placement objects (no deep clone) is safe, and keeps
+            // Collect's own per-placement tessellation work scoped to just
+            // the handful actually dirty instead of every placement in the
+            // document.
+            var scoped = new SC2DecalsDocument
+            {
+                AtlasWidth = previewDocument.AtlasWidth,
+                AtlasHeight = previewDocument.AtlasHeight,
+                Entries = previewDocument.Entries,
+                Placements = previewDocument.Placements.Where(p => p?.Id != null && toRebuild.Contains(p.Id)).ToList()
+            };
+            surfaceTriangles = _surfaces.Collect(scoped, _surfaces.LiveTerrainSampleHeight);
+        }
+        var swCollectMs = swCollect.ElapsedMilliseconds;
+
+        var swBuild = System.Diagnostics.Stopwatch.StartNew();
+        var rebuiltCount = 0;
+        // AtlasWidth/AtlasHeight are already confirmed > 0 by the guard
+        // above (this method returns before reaching here otherwise).
+        var entries = previewDocument.Entries.Where(e => e != null).ToDictionary(e => e.Id, e => e);
+        foreach (var placement in previewDocument.Placements)
+        {
+            if (placement?.Id == null) continue;
+            if (!fullRebuild && !toRebuild.Contains(placement.Id)) continue; // keep cached fragment as-is
+            if (!placement.Enabled || !entries.TryGetValue(placement.AtlasEntryId ?? "", out var entry))
+            {
+                _placementFragmentCache.Remove(placement.Id);
+                continue;
+            }
+            _placementFragmentCache[placement.Id] = SC2DecalGeometryBuilder.BuildPlacementFragment(
+                placement, entry, surfaceTriangles, previewDocument.AtlasWidth, previewDocument.AtlasHeight);
+            rebuiltCount++;
+        }
+        if (fullRebuild)
+        {
+            // Drop cache entries for placements no longer in this preview's
+            // Id set (deleted since the last full rebuild) — otherwise a
+            // removed decal's fragment lingers in the cache forever.
+            var liveIds = new HashSet<string>(previewDocument.Placements.Where(p => p?.Id != null).Select(p => p.Id));
+            foreach (var staleId in _placementFragmentCache.Keys.Where(id => !liveIds.Contains(id)).ToList())
+                _placementFragmentCache.Remove(staleId);
+        }
+        var swBuildMs = swBuild.ElapsedMilliseconds;
+        SC2Log.Log($"[SC2DecalsShell] EnsurePreview rebuild: placements={previewDocument.Placements.Count}, rebuilt={rebuiltCount}, surfaceTriangles={surfaceTriangles.Count}, Collect={swCollectMs}ms, GeometryBuilder.Build={swBuildMs}ms");
+
+        // Merge every placement's cached (freshly rebuilt or reused)
+        // fragment into one combined model — SC2DecalsBdfImporter.BuildMesh
+        // still wants one flat Mesh for the whole document.
+        var model = new DecalsModel { DiffuseAtlasPath = previewDocument.DiffuseAtlasPath ?? "", NormalAtlasPath = previewDocument.NormalAtlasPath ?? "" };
+        foreach (var placement in previewDocument.Placements)
+        {
+            if (placement?.Id == null || !_placementFragmentCache.TryGetValue(placement.Id, out var fragment)) continue;
+            var baseIndex = model.Vertices.Count;
+            model.Vertices.AddRange(fragment.Vertices);
+            foreach (var idx in fragment.Indices) model.Indices.Add(baseIndex + idx);
+        }
+
         if (_previewRoot == null)
         {
             _previewRoot = new GameObject("SC2_Decals_AuthoredPreview") { hideFlags = HideFlags.DontSave };
@@ -990,6 +1159,7 @@ public sealed class SC2DecalsShell : IDisposable
         Doc.VertexCount = model.Vertices.Count; Doc.IndexCount = model.Indices.Count;
         if (_transformPreview == null) Doc.SpatialState = SC2DecalsSpatialState.Current;
         _renderedRevision = _session.Document.Revision; _renderedTransformVersion = _transformVersion; _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
+        _dirtyPlacementIds.Clear();
     }
 
     // Keyed on the blob's ContentHash (falling back to the plain path when
@@ -1294,6 +1464,45 @@ public sealed class SC2DecalsShell : IDisposable
         }
         if (touched) { _renderedRevision = -1; RepaintHost?.Invoke(); }
     }
+
+    /// <summary>Wired to SC2TerrainShell.HeightBrushApplied alongside
+    /// ReprojectAlignedDecalsInRadius above — marks just the placements
+    /// whose footprint this stroke could plausibly reach as needing their
+    /// own preview-mesh fragment rebuilt on the next EnsurePreview call,
+    /// instead of EnsurePreview blindly re-running Collect+GeometryBuilder
+    /// for EVERY placement on every single terrain edit (confirmed the
+    /// dominant remaining cost in EnsurePreview's own measured rebuild
+    /// timing). Cheap — only updates a HashSet here (a handful of bounds
+    /// checks); the actual expensive work still only happens inside
+    /// EnsurePreview, still gated by SC2TerrainShell.TerrainGeometryVersion
+    /// the same as before (once per completed stroke, not once per brush
+    /// stamp — this can fire many times per stroke without cost).
+    ///
+    /// Only meaningful when EnsurePreview ends up taking its "terrain
+    /// changed only" branch (see its own doc comment) — an authored edit or
+    /// an active transform drag always falls back to rebuilding everyone
+    /// regardless of this set, since either can touch placements this
+    /// radius check has no way to know about (e.g. a whole symmetry group
+    /// moving together).</summary>
+    public void MarkPreviewDirtyInRadius(Vector3 center, float radius)
+    {
+        if (Doc?.Placements == null) return;
+        foreach (var p in Doc.Placements)
+        {
+            if (p?.Id == null || p.Position == null || p.Position.Length < 3) continue;
+            // Same rotation-safe diagonal bound SC2DecalSurfaceProvider.
+            // PlacementBoundsList/SC2DecalGeometryBuilder.
+            // FilterTrianglesNearPlacement already use — never too small,
+            // so this can only over-mark (a placement gets rebuilt for no
+            // visible reason), never under-mark (a genuinely affected
+            // placement silently going stale).
+            var halfDiag = 0.5f * Mathf.Sqrt(p.Width * p.Width + p.Length * p.Length);
+            var dx = p.Position[0] - center.x; var dz = p.Position[2] - center.z;
+            if (Mathf.Sqrt(dx * dx + dz * dz) <= radius + halfDiag)
+                _dirtyPlacementIds.Add(p.Id);
+        }
+    }
+
     private bool TryEntry(out SC2DecalAtlasEntry e) { e = null; if (_selectedEntry < 0 || _selectedEntry >= Doc.Entries.Count) return false; e = Doc.Entries[_selectedEntry]; return true; }
     private Rect AtlasUv(SC2DecalAtlasEntry e) => Doc.AtlasWidth > 0 && Doc.AtlasHeight > 0 ? new Rect(e.X / (float)Doc.AtlasWidth, 1f - (e.Y + e.Height) / (float)Doc.AtlasHeight, e.Width / (float)Doc.AtlasWidth, e.Height / (float)Doc.AtlasHeight) : new Rect(0, 0, 1, 1);
     private void ClampRect(SC2DecalAtlasEntry e) { e.X = Mathf.Clamp(e.X, 0, Mathf.Max(0, Doc.AtlasWidth - 1)); e.Y = Mathf.Clamp(e.Y, 0, Mathf.Max(0, Doc.AtlasHeight - 1)); e.Width = Mathf.Clamp(e.Width, 1, Mathf.Max(1, Doc.AtlasWidth - e.X)); e.Height = Mathf.Clamp(e.Height, 1, Mathf.Max(1, Doc.AtlasHeight - e.Y)); }

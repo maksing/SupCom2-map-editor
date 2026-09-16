@@ -20,6 +20,11 @@ public sealed partial class SC2GameViewEditorUI
         // AlignToSurface decals following live Geometry-mode sculpting
         // instead of only ever aligning once at placement/edit time.
         _terrainShell.HeightBrushApplied += (center, radius) => _decalsShell?.ReprojectAlignedDecalsInRadius(center, radius);
+        // See SC2DecalsShell.MarkPreviewDirtyInRadius's own doc comment —
+        // lets EnsurePreview's terrain-change rebuild scope itself to just
+        // the placements a stroke actually reached, instead of redoing
+        // every placement's own Collect+GeometryBuilder work on every edit.
+        _terrainShell.HeightBrushApplied += (center, radius) => _decalsShell?.MarkPreviewDirtyInRadius(center, radius);
     }
 
     private void DrawDecalsInspector()

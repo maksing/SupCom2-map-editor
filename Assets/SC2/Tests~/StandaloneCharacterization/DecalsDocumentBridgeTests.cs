@@ -26,30 +26,30 @@ public class DecalsDocumentBridgeTests
         {
             model.Vertices.Add(new DecalVertex
             {
-                Position = new[] { 1f, 2f, 3f },
-                TexCoord = new[] { 0.1f, 0.2f, 0.3f },
-                ScaleOffset = new[] { 0.5f, 0.5f, 0.25f, 0.25f },
-                TangentXform0 = new[] { 1f, 0f, 0f },
-                TangentXform1 = new[] { 0f, 1f, 0f },
-                TangentXform2 = new[] { 0f, 0f, 1f },
+                PositionX = 1f, PositionY = 2f, PositionZ = 3f,
+                TexCoordX = 0.1f, TexCoordY = 0.2f, TexCoordZ = 0.3f,
+                ScaleOffsetX = 0.5f, ScaleOffsetY = 0.5f, ScaleOffsetZ = 0.25f, ScaleOffsetW = 0.25f,
+                TangentXform0X = 1f, TangentXform0Y = 0f, TangentXform0Z = 0f,
+                TangentXform1X = 0f, TangentXform1Y = 1f, TangentXform1Z = 0f,
+                TangentXform2X = 0f, TangentXform2Y = 0f, TangentXform2Z = 1f,
             });
             model.Vertices.Add(new DecalVertex
             {
-                Position = new[] { 4f, 5f, 6f },
-                TexCoord = new[] { 0.4f, 0.5f, 0.6f },
-                ScaleOffset = new[] { 0.5f, 0.5f, 0.75f, 0.75f },
-                TangentXform0 = new[] { 1f, 0f, 0f },
-                TangentXform1 = new[] { 0f, 1f, 0f },
-                TangentXform2 = new[] { 0f, 0f, 1f },
+                PositionX = 4f, PositionY = 5f, PositionZ = 6f,
+                TexCoordX = 0.4f, TexCoordY = 0.5f, TexCoordZ = 0.6f,
+                ScaleOffsetX = 0.5f, ScaleOffsetY = 0.5f, ScaleOffsetZ = 0.75f, ScaleOffsetW = 0.75f,
+                TangentXform0X = 1f, TangentXform0Y = 0f, TangentXform0Z = 0f,
+                TangentXform1X = 0f, TangentXform1Y = 1f, TangentXform1Z = 0f,
+                TangentXform2X = 0f, TangentXform2Y = 0f, TangentXform2Z = 1f,
             });
             model.Vertices.Add(new DecalVertex
             {
-                Position = new[] { 7f, 8f, 9f },
-                TexCoord = new[] { 0.7f, 0.8f, 0.9f },
-                ScaleOffset = new[] { 0.5f, 0.5f, 0f, 0f },
-                TangentXform0 = new[] { 1f, 0f, 0f },
-                TangentXform1 = new[] { 0f, 1f, 0f },
-                TangentXform2 = new[] { 0f, 0f, 1f },
+                PositionX = 7f, PositionY = 8f, PositionZ = 9f,
+                TexCoordX = 0.7f, TexCoordY = 0.8f, TexCoordZ = 0.9f,
+                ScaleOffsetX = 0.5f, ScaleOffsetY = 0.5f, ScaleOffsetZ = 0f, ScaleOffsetW = 0f,
+                TangentXform0X = 1f, TangentXform0Y = 0f, TangentXform0Z = 0f,
+                TangentXform1X = 0f, TangentXform1Y = 1f, TangentXform1Z = 0f,
+                TangentXform2X = 0f, TangentXform2Y = 0f, TangentXform2Z = 1f,
             });
             model.Indices.AddRange(new[] { 0, 1, 2 });
             model.ExtraDataRaw = new byte[] { 1, 2, 3, 4 };

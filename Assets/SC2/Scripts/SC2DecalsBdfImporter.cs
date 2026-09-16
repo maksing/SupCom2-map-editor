@@ -109,12 +109,12 @@ public static class SC2DecalsBdfImporter
         for (var i = 0; i < count; i++)
         {
             var v = model.Vertices[i];
-            positions[i] = new Vector3(v.Position[0], v.Position[1], v.Position[2]);
-            texCoord0[i] = new Vector3(v.TexCoord[0], v.TexCoord[1], v.TexCoord[2]);
-            scaleOffset[i] = new Vector4(v.ScaleOffset[0], v.ScaleOffset[1], v.ScaleOffset[2], v.ScaleOffset[3]);
-            tangents[i] = new Vector4(v.TangentXform0[0], v.TangentXform0[1], v.TangentXform0[2], 1f);
-            binormals[i] = new Vector3(v.TangentXform1[0], v.TangentXform1[1], v.TangentXform1[2]);
-            normals[i] = new Vector3(v.TangentXform2[0], v.TangentXform2[1], v.TangentXform2[2]);
+            positions[i] = new Vector3(v.PositionX, v.PositionY, v.PositionZ);
+            texCoord0[i] = new Vector3(v.TexCoordX, v.TexCoordY, v.TexCoordZ);
+            scaleOffset[i] = new Vector4(v.ScaleOffsetX, v.ScaleOffsetY, v.ScaleOffsetZ, v.ScaleOffsetW);
+            tangents[i] = new Vector4(v.TangentXform0X, v.TangentXform0Y, v.TangentXform0Z, 1f);
+            binormals[i] = new Vector3(v.TangentXform1X, v.TangentXform1Y, v.TangentXform1Z);
+            normals[i] = new Vector3(v.TangentXform2X, v.TangentXform2Y, v.TangentXform2Z);
         }
 
         var mesh = new Mesh
