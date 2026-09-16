@@ -736,6 +736,12 @@ public class SC2GeometryMode
             // claimed — it just didn't cover the whole block before.
             if (!_isPainting) return;
 
+            // Ad-hoc timing instrumentation (SC2Log) — a quick, no-rebuild-
+            // needed alternative to the Unity Profiler for diagnosing which
+            // step of a completed stroke's MouseUp costs what. See
+            // Logs/SC2TerrainEditor.log (SC2 > Open Log File).
+            var swMouseUp = System.Diagnostics.Stopwatch.StartNew();
+
             // Real Smart Export dirty-
             // tracking for terrain geometry — sculpting has always mutated
             // Data.Heights directly with zero signal to the session
@@ -756,15 +762,27 @@ public class SC2GeometryMode
             // Sculpting a completed stroke is exactly as real a change
             // as any of those.
             _win.InvalidateLiveHeightGrid();
+            var swAfterDirty = swMouseUp.ElapsedMilliseconds;
             _isPainting = false;
+
+            var swHeights = System.Diagnostics.Stopwatch.StartNew();
             Data.Heights = _win.ActiveRuntime.GetHeightsCopy();
+            var swHeightsMs = swHeights.ElapsedMilliseconds;
+
+            var swSetDirty = System.Diagnostics.Stopwatch.StartNew();
             EditorUtility.SetDirty(Data);
+            var swSetDirtyMs = swSetDirty.ElapsedMilliseconds;
+
             SC2TerrainShell.BumpTerrainGeometryVersion();
+
             // Keeps the background's own seam skirt glued to a completed
             // background stroke — a no-op when the active surface is the
             // core (RefreshBackgroundRuntime itself checks whether the
-            // background even exists/needs rebuilding).
+            // background even exists/needs rebuilding). Logs its own
+            // internal breakdown separately (see its own doc comment).
             if (Data != _win.Data) _win.RefreshBackgroundRuntime();
+
+            SC2Log.Log($"[SC2GeometryMode] MouseUp: MarkDirty+InvalidateLiveHeightGrid={swAfterDirty}ms, GetHeightsCopy={swHeightsMs}ms, EditorUtility.SetDirty={swSetDirtyMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
             return;
         }
         if (down)

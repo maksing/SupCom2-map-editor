@@ -38,12 +38,25 @@ public static class SC2TerrainLayerBuilder
     /// to lock the core's true outer perimeter and the background's own
     /// boundary ring (see SC2TerrainSimplifier.FindOuterPerimeterVertices
     /// and SC2BackgroundTerrain). Null/empty for every pre-existing
-    /// caller, so behavior is unchanged unless a caller opts in.</summary>
+    /// caller, so behavior is unchanged unless a caller opts in.
+    /// skipSimplification: forces every pair through Simplify's own
+    /// ratio&lt;=0 fast path (a plain repack, no decimation) regardless of
+    /// the pair's own configured SimplifyRatio, and skips computing real
+    /// per-vertex normals (a throwaway zero-filled array instead) — for a
+    /// caller that only wants accurate, full-resolution triangle POSITIONS
+    /// (SC2LiveHeightGrid's rebuild, via SC2HfieldProjectionService.Project,
+    /// which rasterizes positions only and never reads normals) rather than
+    /// a reduced export-shaped mesh. SimplifyRatio/normals only exist to
+    /// serve the shipped game mesh's own triangle budget and shading — real
+    /// export/Collision2/RNM-bake callers must keep getting the genuine
+    /// simplified+shaded result, so this defaults to false and only
+    /// SC2LiveHeightGrid opts in.</summary>
     public static SC2TerrainBuildResult Build(
         SC2TerrainData data,
         bool sortByTriangleCount,
         System.Action<string, float> progress,
-        HashSet<int> additionalLockedVertices)
+        HashSet<int> additionalLockedVertices,
+        bool skipSimplification = false)
     {
         var result = new SC2TerrainBuildResult();
         // ImportOnlyMode: the live plane must contribute
@@ -63,12 +76,17 @@ public static class SC2TerrainLayerBuilder
         result.SourceTriangleCount = triLimit;
 
         var hasAdditionalLocks = additionalLockedVertices != null && additionalLockedVertices.Count > 0;
-        var needsBoundary = hasAdditionalLocks;
-        for (var i = 0; i < data.Pairs.Count; i++)
-            if (data.Pairs[i].SimplifyRatio > 0f) { needsBoundary = true; break; }
+        // Boundary-locking only matters to the real decimation path
+        // (SimplifyByComponents/SimplifyByVertexClustering) — Repack (what
+        // every pair takes when skipSimplification forces ratio 0) never
+        // reads it, so skip finding it at all in that mode.
+        var needsBoundary = !skipSimplification && hasAdditionalLocks;
+        if (!skipSimplification)
+            for (var i = 0; i < data.Pairs.Count; i++)
+                if (data.Pairs[i].SimplifyRatio > 0f) { needsBoundary = true; break; }
         progress?.Invoke(needsBoundary ? "Finding locked pair boundaries" : "Counting pair triangles", 0.03f);
         var boundary = needsBoundary ? SC2TerrainSimplifier.FindBoundaryVertices(data) : new HashSet<int>();
-        if (hasAdditionalLocks)
+        if (needsBoundary && hasAdditionalLocks)
             foreach (var v in additionalLockedVertices)
                 boundary.Add(v);
         result.LockedVertexCount = boundary.Count;
@@ -84,8 +102,9 @@ public static class SC2TerrainLayerBuilder
         // lighting seam running along every texture-pair boundary line —
         // reported in-game as grid-aligned bright stripes, visible wherever
         // a shader (e.g. the construction/build effect) is sensitive to
-        // normal discontinuities.
-        var globalNormals = SC2TerrainSimplifier.ComputeGlobalNormals(allVerts, allTris, triLimit);
+        // normal discontinuities. Skipped for skipSimplification callers —
+        // see this method's own doc comment on why they never read normals.
+        var globalNormals = skipSimplification ? new Vector3[allVerts.Length] : SC2TerrainSimplifier.ComputeGlobalNormals(allVerts, allTris, triLimit);
 
         progress?.Invoke("Counting pair triangles", 0.08f);
         var pairTriCount = new int[data.Pairs.Count];
@@ -131,7 +150,7 @@ public static class SC2TerrainLayerBuilder
             var pi = order[oi];
             var count = pairTriCount[pi];
             progress?.Invoke($"Simplifying pair {oi + 1}/{order.Count}: {data.Pairs[pi].Name}", 0.45f + 0.45f * oi / Mathf.Max(1, order.Count));
-            var mesh = SC2TerrainSimplifier.Simplify(allVerts, globalNormals, pairTris[pi], pairOrig[pi], boundary, data.Pairs[pi].SimplifyRatio);
+            var mesh = SC2TerrainSimplifier.Simplify(allVerts, globalNormals, pairTris[pi], pairOrig[pi], boundary, skipSimplification ? 0f : data.Pairs[pi].SimplifyRatio);
             result.Layers.Add(new SC2TerrainBuiltLayer
             {
                 PairIndex = pi,

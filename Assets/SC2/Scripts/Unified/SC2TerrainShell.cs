@@ -305,11 +305,27 @@ public class SC2TerrainShell : ScriptableObject
     /// isn't built yet (EnsureBackgroundRuntime is called first).</summary>
     internal void RefreshBackgroundRuntime()
     {
+        // Ad-hoc timing instrumentation (SC2Log, same pattern
+        // SC2PaintMode.HandleAssign's own MouseUp timer already uses) — a
+        // quick, no-rebuild-needed alternative to the Unity Profiler for
+        // diagnosing which step of a stroke's MouseUp costs what. See
+        // Logs/SC2TerrainEditor.log (SC2 > Open Log File).
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         EnsureBackgroundRuntime();
-        if (_bgRuntime == null || _data?.BackgroundTerrainData == null) return;
+        var swAfterEnsure = sw.ElapsedMilliseconds;
+        if (_bgRuntime == null || _data?.BackgroundTerrainData == null)
+        {
+            SC2Log.Log($"[SC2TerrainShell] RefreshBackgroundRuntime: EnsureBackgroundRuntime={swAfterEnsure}ms, no background — total={sw.ElapsedMilliseconds}ms");
+            return;
+        }
         var bg = _data.BackgroundTerrainData;
+        var swApplyStart = System.Diagnostics.Stopwatch.StartNew();
         ApplyPreviewModeToChunksFor(_bgRuntime, bg);
+        var swApplyMs = swApplyStart.ElapsedMilliseconds;
+        var swSeamStart = System.Diagnostics.Stopwatch.StartNew();
         SC2BackgroundSeamSkirt.Rebuild(_data, this);
+        var swSeamMs = swSeamStart.ElapsedMilliseconds;
+        SC2Log.Log($"[SC2TerrainShell] RefreshBackgroundRuntime: EnsureBackgroundRuntime={swAfterEnsure}ms, ApplyPreviewModeToChunksFor={swApplyMs}ms, SeamSkirt.Rebuild={swSeamMs}ms, total={sw.ElapsedMilliseconds}ms");
     }
 
     private void DestroyBackgroundRuntime()
@@ -1762,7 +1778,7 @@ public class SC2TerrainShell : ScriptableObject
                 // Warm the live height grid here too, same debounce timing
                 // as the preview mesh - so the first paint click after an
                 // edit doesn't pay the rebuild cost synchronously mid-drag.
-                _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport?.Invoke());
+                _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport);
                 Repaint();
 #if UNITY_EDITOR
                 SceneView.RepaintAll();
@@ -3571,13 +3587,21 @@ public class SC2TerrainShell : ScriptableObject
     /// geometry - import add/remove/undo/redo, ImportOnlyMode toggle.</summary>
     public void InvalidateLiveHeightGrid() => _liveHeightGrid.MarkDirty();
 
+    /// <summary>See SC2LiveHeightGrid.EnsureFreshImmediate's own doc
+    /// comment — forces the live height grid to reflect the CURRENT terrain
+    /// right now instead of MarkDirty's normal debounce window, for a
+    /// consumer (SC2DecalsShell.EnsurePreview) that queries it the same
+    /// frame a stroke completes and cannot tolerate serving one-stroke-
+    /// stale data.</summary>
+    public void RefreshLiveHeightGridImmediate() => _liveHeightGrid.EnsureFreshImmediate(_data, GetImportedTerrainsForExport);
+
     /// <summary>Ensures the grid is fresh (cheap no-op if not dirty) and
     /// ray-marches it - the single height-query entry point every caller
     /// (Costs, and eventually Objects/drag) should use instead of picking
     /// between TryRaycastImportedTerrain/RaycastTerrainHeight themselves.</summary>
     public bool TryRaycastLiveHeightGrid(Ray ray, out Vector3 hit)
     {
-        _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport?.Invoke());
+        _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport);
         return _liveHeightGrid.TryRaycast(ray, out hit);
     }
 
@@ -3642,7 +3666,7 @@ public class SC2TerrainShell : ScriptableObject
     /// fully-imported map).</summary>
     public float SampleLiveHeightGrid(float x, float z)
     {
-        _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport?.Invoke());
+        _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport);
         return _liveHeightGrid.SampleHeight(x, z);
     }
 
@@ -3657,7 +3681,7 @@ public class SC2TerrainShell : ScriptableObject
     /// terrain to project.</summary>
     public bool TryGetLiveHeightGridSnapshot(out ushort[] heightmap128, out int mapX, out int mapY)
     {
-        _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport?.Invoke());
+        _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport);
         var model = _liveHeightGrid.Model;
         if (model?.Heightmap == null)
         {

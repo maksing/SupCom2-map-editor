@@ -998,10 +998,33 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         catch (System.Exception ex) { Debug.LogError("[SC2 LateUpdate] SC2ObjectMarkerRenderer.DrawAllBatches threw: " + ex); }
     }
 
+    // Ad-hoc main-thread stall watchdog (SC2Log) — user confirmed a real
+    // stutter is still there even after moving SC2LiveHeightGrid's rebuild
+    // off the main thread, so the actual freeze must be something that
+    // stalls the WHOLE process (e.g. a GC pause triggered by that
+    // background work's own allocation burst — .NET collections are
+    // process-wide, not per-thread) rather than a synchronous call on this
+    // thread specifically. Logs any Update()-to-Update() gap over
+    // FrameStallThresholdMs with a timestamp, so it can be lined up against
+    // SC2LiveHeightGrid's own "Background rebuild finished"/GC-delta log
+    // line (both go through SC2Log, whose file writer timestamps every
+    // line — see Logs/SC2TerrainEditor.log, unlike Player.log).
+    private const double FrameStallThresholdMs = 50.0;
+    private double _lastFrameWatchdogTime = -1;
+
     private void Update()
     {
         if (!Application.isPlaying)
             return;
+
+        var frameNow = Time.realtimeSinceStartupAsDouble;
+        if (_lastFrameWatchdogTime >= 0)
+        {
+            var frameDeltaMs = (frameNow - _lastFrameWatchdogTime) * 1000.0;
+            if (frameDeltaMs > FrameStallThresholdMs)
+                SC2Log.Log($"[FrameWatchdog] Main thread stalled for {frameDeltaMs:F0}ms.");
+        }
+        _lastFrameWatchdogTime = frameNow;
 #if !UNITY_EDITOR
         // See HandleWantsToQuit/ScheduleForceQuit's own comments — the
         // user already answered Save/Don't Save, so this fires unconditionally

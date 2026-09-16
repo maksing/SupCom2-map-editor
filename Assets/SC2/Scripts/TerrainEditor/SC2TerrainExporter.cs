@@ -2602,7 +2602,12 @@ public static class SC2TerrainExporter
     /// imported geometry. Callers that don't pass importedTerrains keep the
     /// old live-painted-terrain-only behavior.
     /// </summary>
-    public static TerrainModel BuildPreviewGeometryModel(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains = null, SC2MapSession session = null)
+    /// <param name="skipSimplification">Forwarded to SC2TerrainLayerBuilder.
+    /// Build — see that parameter's own doc comment. Real callers (the
+    /// actual export, Collision2 preview) need the genuine simplified mesh
+    /// and must leave this false; SC2LiveHeightGrid's rebuild is the only
+    /// caller that only needs accurate triangle positions and opts in.</param>
+    public static TerrainModel BuildPreviewGeometryModel(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains = null, SC2MapSession session = null, bool skipSimplification = false)
     {
         var model = new TerrainModel { Version = 6 };
         if (data == null)
@@ -2612,7 +2617,19 @@ public static class SC2TerrainExporter
         // on its own for every case that should contribute zero live
         // geometry (not initialized, ImportOnlyMode, no pairs painted) - no
         // separate early-return needed here, the loop below just won't run.
-        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null);
+        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null, null, skipSimplification);
+        // Pre-size instead of letting List<T>.Add grow these by repeated
+        // doubling — build.BuiltVertexCount/BuiltTriangleCount already give
+        // the EXACT final count before a single element is added, so this
+        // is one correctly-sized allocation instead of ~log2(n) of them,
+        // each copying everything added so far. Measured as a real
+        // contributor to a large map's per-stroke GC pressure (confirmed
+        // via SC2LiveHeightGrid's own GC.CollectionCount instrumentation —
+        // see that class's own doc comment on why skipSimplification alone
+        // wasn't enough to keep the background rebuild's allocation burst
+        // from still stalling the whole process via GC pauses).
+        model.Vertices.Capacity = Mathf.Max(model.Vertices.Capacity, build.BuiltVertexCount);
+        model.Triangles.Capacity = Mathf.Max(model.Triangles.Capacity, build.BuiltTriangleCount);
         foreach (var builtLayer in build.Layers)
         {
             var pi = builtLayer.PairIndex;

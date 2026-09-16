@@ -576,20 +576,28 @@ public class SC2PaintMode
                 // raw height.
                 _win.InvalidateLiveHeightGrid();
             }
+            var swAfterDirty = swMouseUp.ElapsedMilliseconds;
             _isPainting = false;
             // Non-blocking readback — async GPU request, no SceneView hang.
+            var swSync = System.Diagnostics.Stopwatch.StartNew();
             var syncNow = EditorApplication.timeSinceStartup;
             if (syncNow - _lastSyncTime >= kSyncThrottle)
             {
                 _lastSyncTime = syncNow;
                 SyncPairMapToCPUAsync();
             }
+            var swSyncMs = swSync.ElapsedMilliseconds;
+
+            var swMarkDirty = System.Diagnostics.Stopwatch.StartNew();
             _win.MarkDirtyAndRepaint();
+            var swMarkDirtyMs = swMarkDirty.ElapsedMilliseconds;
+
             // Same as SC2GeometryMode's own MouseUp — keeps the background's
             // seam skirt glued after a completed Paint Pair stroke on it;
-            // no-op when the active surface is the core.
+            // no-op when the active surface is the core. Logs its own
+            // internal breakdown separately (see its own doc comment).
             if (Data != _win.Data) _win.RefreshBackgroundRuntime();
-            SC2Log.Log($"[SC2PaintMode] HandleAssign MouseUp returned in {swMouseUp.ElapsedMilliseconds}ms");
+            SC2Log.Log($"[SC2PaintMode] HandleAssign MouseUp: MarkDirty+InvalidateLiveHeightGrid={swAfterDirty}ms, SyncPairMapToCPUAsync={swSyncMs}ms, MarkDirtyAndRepaint={swMarkDirtyMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
             return;
         }
         if (down)
@@ -665,19 +673,32 @@ public class SC2PaintMode
             // _selectMode concept here, every completed Blend stroke is a
             // real paint, so this gate alone is enough.
             if (!_isPainting) return;
+            // Ad-hoc timing instrumentation (SC2Log) — see SC2GeometryMode's
+            // own matching MouseUp comment. Logs.../SC2TerrainEditor.log.
+            var swMouseUp = System.Diagnostics.Stopwatch.StartNew();
             _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
             _isPainting = false;
+
+            var swFlush = System.Diagnostics.Stopwatch.StartNew();
             if (_win.ActiveRuntime != null)
                 _win.ActiveRuntime.FlushActiveBlendGroup(Data);
+            var swFlushMs = swFlush.ElapsedMilliseconds;
+
+            var swSetDirty = System.Diagnostics.Stopwatch.StartNew();
             EditorUtility.SetDirty(Data);
+            var swSetDirtyMs = swSetDirty.ElapsedMilliseconds;
+
             // Same as SC2GeometryMode's own MouseUp — keeps the background's
             // seam skirt glued after a completed Paint Blend stroke on it
             // (also refreshes its own RnmMaskTexture, which the chunk
             // runtime doesn't use but the seam skirt's shared material
             // does not depend on either — SC2TerrainRuntime.SharedChunkMat
             // samples BlendRT directly); no-op when active surface is core.
+            // Logs its own internal breakdown separately (see its own doc
+            // comment).
             if (Data != _win.Data) _win.RefreshBackgroundRuntime();
             _win.Repaint();
+            SC2Log.Log($"[SC2PaintMode] HandleRnm MouseUp: FlushActiveBlendGroup={swFlushMs}ms, EditorUtility.SetDirty={swSetDirtyMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
             return;
         }
         if (down)
