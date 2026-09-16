@@ -35,7 +35,8 @@ namespace SC2.MapEditor.Document
             IReadOnlyList<SC2ObjSymmetryGroup> symmetryGroups,
             int nextObjectId,
             string saveLuaTextOriginal = "",
-            string scenarioLuaTextOriginal = "")
+            string scenarioLuaTextOriginal = "",
+            IReadOnlyList<SC2ObjReferenceUnit> referenceUnits = null)
         {
             if (props == null) throw new ArgumentNullException(nameof(props));
             if (markers == null) throw new ArgumentNullException(nameof(markers));
@@ -59,6 +60,7 @@ namespace SC2.MapEditor.Document
                 NextObjectId = nextObjectId,
                 SaveLuaTextOriginal = saveLuaTextOriginal ?? "",
                 ScenarioLuaTextOriginal = scenarioLuaTextOriginal ?? "",
+                ReferenceUnits = referenceUnits != null ? new List<SC2ObjReferenceUnit>(referenceUnits) : new List<SC2ObjReferenceUnit>(),
             };
         }
     }

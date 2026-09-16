@@ -95,6 +95,7 @@ namespace SC2.MapEditor.Document
             data.ObjZones = objects.Zones;
             data.ObjChains = objects.Chains;
             data.ObjSymmetryGroups = objects.SymmetryGroups;
+            data.ObjReferenceUnits = objects.ReferenceUnits;
             data.NextObjectId = Mathf.Max(1, objects.NextObjectId);
             data.ObjSaveLuaTextOriginal = objects.SaveLuaTextOriginal;
             data.ObjScenarioLuaTextOriginal = objects.ScenarioLuaTextOriginal;

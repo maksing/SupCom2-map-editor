@@ -2549,7 +2549,7 @@ public class SC2TerrainShell : ScriptableObject
     /// still exactly right for a preview that must NOT track the surface
     /// (e.g. SC2GeometryMode's SetHeight-tool preview, which shows the flat
     /// target height plane by design).</summary>
-    public static void DrawGameViewBrush(Camera camera, Rect viewportRect, Vector3 worldPosition, float radius, Color outer, Color inner, float innerRadius = 0f, Func<float, float, float> sampleHeight = null)
+    public static void DrawGameViewBrush(Camera camera, Rect viewportRect, Vector3 worldPosition, float radius, Color outer, Color inner, float innerRadius = 0f, Func<float, float, float> sampleHeight = null, bool clipToViewport = false)
     {
         if (Event.current.type != EventType.Repaint || camera == null)
             return;
@@ -2572,12 +2572,25 @@ public class SC2TerrainShell : ScriptableObject
         var previousGuiColor = GUI.color;
         var previousGuiEnabled = GUI.enabled;
         GUI.enabled = true;
-        DrawGuiCircle(center, screenRadius, outer, 48);
+        // A mouse-following brush cursor never needs this (the mouse, and
+        // so the cursor, is only ever drawn while inside the viewport to
+        // begin with) — but a reference unit's static intel ring is sized
+        // from real game data (up to several hundred world units) and often
+        // extends well past the viewport into a side panel. DrawGuiCircle
+        // draws one big textured quad with no clipping of its own, so
+        // without this it painted straight over whichever panel the ring's
+        // bounding box overlapped. GUI.BeginGroup clips its children AND
+        // remaps their coordinates to be relative to the group's own
+        // top-left, hence the `- viewportRect.position` below.
+        if (clipToViewport) GUI.BeginGroup(viewportRect);
+        var drawCenter = clipToViewport ? center - viewportRect.position : center;
+        DrawGuiCircle(drawCenter, screenRadius, outer, 48);
         if (innerRadius > 0.5f)
         {
             var innerEdge = WorldToGameGui(camera, viewportRect, worldPosition + Vector3.right * innerRadius);
-            DrawGuiCircle(center, Mathf.Max(3f, Vector2.Distance(center, innerEdge)), inner, 48);
+            DrawGuiCircle(drawCenter, Mathf.Max(3f, Vector2.Distance(center, innerEdge)), inner, 48);
         }
+        if (clipToViewport) GUI.EndGroup();
         GUI.color = previousGuiColor;
         GUI.enabled = previousGuiEnabled;
     }
@@ -2626,6 +2639,11 @@ public class SC2TerrainShell : ScriptableObject
     }
 
     private const int BrushRingSegments = 48;
+    // How many neighbors on each side get averaged into every ring vertex's
+    // height (see the smoothing pass below) — small enough to still track
+    // real hills/valleys, large enough to absorb a single noisy/spiky sample
+    // from jagged procedural terrain.
+    private const int RingHeightSmoothingRadius = 2;
 
     private static void DrawTerrainHuggingRing(Camera camera, Rect viewportRect, Vector3 center, float radius, Color color, Func<float, float, float> sampleHeight)
     {
@@ -2633,21 +2651,92 @@ public class SC2TerrainShell : ScriptableObject
         var previousGuiEnabled = GUI.enabled;
         GUI.enabled = true;
 
+        // Sample every vertex's raw terrain height first, then smooth with a
+        // small circular moving average before projecting to screen —
+        // a reference unit's ring can span a couple hundred world units of
+        // real (often noise-generated, intentionally jagged) procedural
+        // terrain, and connecting BrushRingSegments independently-sampled
+        // heights with straight segments turned every sharp local spike/
+        // cliff into a visible flat chord cutting across the ring instead of
+        // a smooth curve. Averaging each height with its neighbors keeps the
+        // ring tracking the terrain's overall shape (hills/valleys) without
+        // being whipsawed by single-sample noise.
+        Span<float> rawHeight = stackalloc float[BrushRingSegments];
+        for (var i = 0; i < BrushRingSegments; i++)
+        {
+            var angle = i / (float)BrushRingSegments * Mathf.PI * 2f;
+            rawHeight[i] = sampleHeight(center.x + Mathf.Cos(angle) * radius, center.z + Mathf.Sin(angle) * radius);
+        }
+        Span<float> smoothHeight = stackalloc float[BrushRingSegments];
+        for (var i = 0; i < BrushRingSegments; i++)
+        {
+            var sum = 0f;
+            for (var k = -RingHeightSmoothingRadius; k <= RingHeightSmoothingRadius; k++)
+                sum += rawHeight[((i + k) % BrushRingSegments + BrushRingSegments) % BrushRingSegments];
+            smoothHeight[i] = sum / (RingHeightSmoothingRadius * 2 + 1);
+        }
+
         Vector2? previousPoint = null;
         for (var i = 0; i <= BrushRingSegments; i++)
         {
-            var angle = (i % BrushRingSegments) / (float)BrushRingSegments * Mathf.PI * 2f;
+            var idx = i % BrushRingSegments;
+            var angle = idx / (float)BrushRingSegments * Mathf.PI * 2f;
             var worldX = center.x + Mathf.Cos(angle) * radius;
             var worldZ = center.z + Mathf.Sin(angle) * radius;
-            var worldPoint = new Vector3(worldX, sampleHeight(worldX, worldZ), worldZ);
+            var worldPoint = new Vector3(worldX, smoothHeight[idx], worldZ);
             var screenPoint = WorldToGameGui(camera, viewportRect, worldPoint);
-            if (previousPoint.HasValue)
-                DrawGuiLineSegment(previousPoint.Value, screenPoint, color, 2f);
+            // The camera renders behind the WHOLE Game View — the left/right
+            // panels and header are just opaque UI drawn on top of part of
+            // that same image — so a ring segment outside viewportRect still
+            // has a valid (but off-limits) GUI position. A brush cursor never
+            // hit this (mouse-bound, so it stays near the middle of the
+            // viewport), but a reference unit's large, static intel ring
+            // easily extends past the viewport into a side panel, so each
+            // segment is clipped here instead of drawn straight over it.
+            if (previousPoint.HasValue
+                && ClipSegmentToViewport(viewportRect, previousPoint.Value, screenPoint, out var clippedA, out var clippedB))
+                DrawGuiLineSegment(clippedA, clippedB, color, 2f);
             previousPoint = screenPoint;
         }
 
         GUI.color = previousGuiColor;
         GUI.enabled = previousGuiEnabled;
+    }
+
+    /// <summary>Liang-Barsky line-vs-rect clip, shared by every GUI overlay
+    /// that draws world-space lines over the Game View — the camera renders
+    /// the FULL view, and side panels/header are just opaque UI drawn on top
+    /// of part of that same image, so a line endpoint outside viewportRect
+    /// is still a valid (but off-limits) GUI position that would otherwise
+    /// paint straight over that panel. Promoted here from
+    /// SC2GameViewEditorUI's own (functionally identical) private copy,
+    /// originally written for the Measure tool, so DrawTerrainHuggingRing's
+    /// large static rings can reuse the exact same algorithm instead of a
+    /// second copy.</summary>
+    public static bool ClipSegmentToViewport(Rect viewportRect, Vector2 a, Vector2 b, out Vector2 clippedA, out Vector2 clippedB)
+    {
+        var dx = b.x - a.x; var dy = b.y - a.y;
+        float t0 = 0f, t1 = 1f;
+        var p0 = -dx; var q0 = a.x - viewportRect.xMin;
+        var p1 = dx; var q1 = viewportRect.xMax - a.x;
+        var p2 = -dy; var q2 = a.y - viewportRect.yMin;
+        var p3 = dy; var q3 = viewportRect.yMax - a.y;
+        for (var i = 0; i < 4; i++)
+        {
+            var p = i == 0 ? p0 : i == 1 ? p1 : i == 2 ? p2 : p3;
+            var q = i == 0 ? q0 : i == 1 ? q1 : i == 2 ? q2 : q3;
+            if (Mathf.Approximately(p, 0f))
+            {
+                if (q < 0f) { clippedA = a; clippedB = b; return false; }
+                continue;
+            }
+            var r = q / p;
+            if (p < 0f) { if (r > t1) { clippedA = a; clippedB = b; return false; } if (r > t0) t0 = r; }
+            else { if (r < t0) { clippedA = a; clippedB = b; return false; } if (r < t1) t1 = r; }
+        }
+        clippedA = new Vector2(a.x + dx * t0, a.y + dy * t0);
+        clippedB = new Vector2(a.x + dx * t1, a.y + dy * t1);
+        return true;
     }
 
     /// <summary>Build-safe line segment (no UnityEditor.Handles dependency,

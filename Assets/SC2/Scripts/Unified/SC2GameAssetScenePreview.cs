@@ -165,6 +165,18 @@ public static class SC2GameAssetScenePreview
             batch.Instances[key] = BuildMatrix(unit.Position, Quaternion.Euler(unit.OrientationEuler), batch.UniformScale);
         }
 
+        // Reference units (SC2ObjReferenceUnit) share this same
+        // InstanceKey(true, id) space with real ObjUnits — safe, since both
+        // draw their id from the same SC2TerrainData.AllocateObjectId()
+        // counter and can never collide.
+        foreach (var refUnit in data.ObjReferenceUnits)
+        {
+            var key = new InstanceKey(true, refUnit.Id);
+            if (!TryGetBatch(key, out var batch)) continue;
+            alive.Add(key);
+            batch.Instances[key] = BuildMatrix(refUnit.Position, Quaternion.Euler(refUnit.OrientationEuler), batch.UniformScale);
+        }
+
         foreach (var key in InstanceAssetId.Keys.Where(key => !alive.Contains(key)).ToArray()) Remove(key);
     }
 

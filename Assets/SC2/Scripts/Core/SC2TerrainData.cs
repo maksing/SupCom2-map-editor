@@ -665,6 +665,10 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// symmetry" (SC2ObjectsShell.DuplicatePropWithSymmetry/
     /// DuplicateMarkerWithSymmetry), which remains a one-shot, unlinked copy.</summary>
     public List<SC2ObjSymmetryGroup> ObjSymmetryGroups = new();
+    /// <summary>Real units/buildings placed purely as an in-editor visual
+    /// scale reference — see SC2ObjReferenceUnit's own doc comment.
+    /// Deliberately never read by SC2ObjectsExport.cs.</summary>
+    public List<SC2ObjReferenceUnit> ObjReferenceUnits = new();
 
     /// <summary>Raw _save.lua/_scenario.lua text captured at import time (if
     /// this terrain originated from a real .scd), used by SC2ObjectsExport
@@ -688,7 +692,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     // its own comment for why this cache exists.
     [NonSerialized] private int _idsEnsuredPropsCount = -1, _idsEnsuredMarkersCount = -1, _idsEnsuredGraphsCount = -1,
         _idsEnsuredArmiesCount = -1, _idsEnsuredUnitsCount = -1, _idsEnsuredZonesCount = -1,
-        _idsEnsuredChainsCount = -1, _idsEnsuredSymmetryGroupsCount = -1;
+        _idsEnsuredChainsCount = -1, _idsEnsuredSymmetryGroupsCount = -1, _idsEnsuredReferenceUnitsCount = -1;
 
     /// <summary>Backfills Id=0 items (old data saved before Ids existed, or
     /// anything constructed with `new()` and never assigned one) with fresh
@@ -712,7 +716,8 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         if (_idsEnsuredPropsCount == ObjProps.Count && _idsEnsuredMarkersCount == ObjMarkers.Count &&
             _idsEnsuredGraphsCount == ObjGraphs.Count && _idsEnsuredArmiesCount == ObjArmies.Count &&
             _idsEnsuredUnitsCount == ObjUnits.Count && _idsEnsuredZonesCount == ObjZones.Count &&
-            _idsEnsuredChainsCount == ObjChains.Count && _idsEnsuredSymmetryGroupsCount == ObjSymmetryGroups.Count)
+            _idsEnsuredChainsCount == ObjChains.Count && _idsEnsuredSymmetryGroupsCount == ObjSymmetryGroups.Count &&
+            _idsEnsuredReferenceUnitsCount == ObjReferenceUnits.Count)
             return;
 
         // A deserialized document can contain valid non-zero Ids while its
@@ -727,6 +732,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         foreach (var z in ObjZones) maxExistingId = Mathf.Max(maxExistingId, z.Id);
         foreach (var c in ObjChains) maxExistingId = Mathf.Max(maxExistingId, c.Id);
         foreach (var s in ObjSymmetryGroups) maxExistingId = Mathf.Max(maxExistingId, s.Id);
+        foreach (var r in ObjReferenceUnits) maxExistingId = Mathf.Max(maxExistingId, r.Id);
         NextObjectId = Mathf.Max(NextObjectId, maxExistingId + 1);
         foreach (var p in ObjProps) if (p.Id == 0) p.Id = AllocateObjectId();
         foreach (var m in ObjMarkers) if (m.Id == 0) m.Id = AllocateObjectId();
@@ -736,6 +742,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         foreach (var z in ObjZones) if (z.Id == 0) z.Id = AllocateObjectId();
         foreach (var c in ObjChains) if (c.Id == 0) c.Id = AllocateObjectId();
         foreach (var s in ObjSymmetryGroups) if (s.Id == 0) s.Id = AllocateObjectId();
+        foreach (var r in ObjReferenceUnits) if (r.Id == 0) r.Id = AllocateObjectId();
         SC2ObjectGraphRefs.MigrateLegacyIndexes(this);
 
         _idsEnsuredPropsCount = ObjProps.Count;
@@ -746,6 +753,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         _idsEnsuredZonesCount = ObjZones.Count;
         _idsEnsuredChainsCount = ObjChains.Count;
         _idsEnsuredSymmetryGroupsCount = ObjSymmetryGroups.Count;
+        _idsEnsuredReferenceUnitsCount = ObjReferenceUnits.Count;
     }
 
     public void EnsureObjectsLists()
@@ -758,6 +766,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         ObjZones ??= new List<SC2ObjZone>();
         ObjChains ??= new List<SC2ObjChain>();
         ObjSymmetryGroups ??= new List<SC2ObjSymmetryGroup>();
+        ObjReferenceUnits ??= new List<SC2ObjReferenceUnit>();
     }
 
     [Header("Export")] public SC2MapRawData RawData;
@@ -1008,6 +1017,16 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
             case SymmetryMode.XY:
                 list.Add(c+new Vector3(-rel.x,rel.y,rel.z));
                 list.Add(c+new Vector3(rel.x,rel.y,-rel.z));
+                list.Add(c+new Vector3(-rel.x,rel.y,-rel.z));break;
+            // Reflect across relX==relZ (top-left/bottom-right) — swaps the
+            // two horizontal components, Y untouched same as every other
+            // mode here.
+            case SymmetryMode.DiagonalTLBR: list.Add(c+new Vector3(rel.z,rel.y,rel.x));break;
+            // Reflect across relX==-relZ (top-right/bottom-left).
+            case SymmetryMode.DiagonalTRBL: list.Add(c+new Vector3(-rel.z,rel.y,-rel.x));break;
+            case SymmetryMode.DiagonalBoth:
+                list.Add(c+new Vector3(rel.z,rel.y,rel.x));
+                list.Add(c+new Vector3(-rel.z,rel.y,-rel.x));
                 list.Add(c+new Vector3(-rel.x,rel.y,-rel.z));break;
             case SymmetryMode.Radial:
                 // Shared with Costs (SC2Symmetry.GetSymmetricCells) and

@@ -32,6 +32,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     public bool ShowUI = true;
     public bool ShowPanel = true;
+    /// <summary>Compact right-side panel (Measure tool button, reference
+    /// units list, reference-image controls) — default ON, matching
+    /// ShowPanel's own convention.</summary>
+    public bool ShowReferencePanel = true;
     public bool EnableGameViewNavigation = true;
     public bool EnableHotkeys = true;
     public bool LogActions;
@@ -132,6 +136,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     public bool OverlayProps = true;
     public bool OverlayMarkers = true;
     public bool OverlayUnits = true;
+    public bool OverlayReferenceUnits;
     public bool OverlayGraphLand = true;
     public bool OverlayGraphAir = true;
     public bool OverlayGraphNaval = true;
@@ -800,6 +805,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private Rect _statusRect;
     private Rect _viewportRect;
     private Rect _navigationGizmoRect;
+    private Rect _referencePanelRect;
+    // Subtracts PanelScrollbarWidth same as the left panel's own
+    // PanelContentWidth does — this column's content (unit list, Show*
+    // toggles) routinely grows past the panel's fixed height and triggers
+    // GUILayout's own vertical scrollbar, and without this the content's
+    // declared width didn't leave room for it: the scrollbar then overlapped
+    // the rightmost slice of every row (each unit's own "x" delete button,
+    // sitting at the row's far right edge), making it visually present but
+    // unclickable — the scrollbar's own input consumed the click instead.
+    public float ReferencePanelContentWidth => Mathf.Max(1f, _referencePanelRect.width - (_panelStyle != null ? _panelStyle.padding.horizontal : 12f) - PanelScrollbarWidth);
     private Vector3 _mapViewCenter = DefaultMapCenter;
     private float _mapViewSize = 512f;
     private bool _viewTransitionActive;
@@ -1267,6 +1282,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (ShowPanel)
             DrawMainPanel(width, height);
 
+        if (ShowReferencePanel)
+            DrawReferencePanel();
+
         // Re-assert immediately before drawing, not just once at the top of
         // OnGUI: DrawMainPanel above can paint into BlendRT/PairMapRT
         // (Paint Pairs/Paint Blend brush strokes, mask-group switches) partway
@@ -1274,7 +1292,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // render target in an unexpected state, the gizmo drawn right after
         // would render straight into that texture instead of the screen.
         RenderTexture.active = null;
+        // Drawn AFTER the reference panel so it visually floats over the
+        // panel's own top portion — the gizmo keeps its existing unchanged
+        // Rect (see UpdateLayoutRects), no repositioning needed.
         DrawNavigationGizmo(width);
+        DrawFloatingReferenceImage();
         GUI.enabled = previousEnabled;
 
         // REVERTED: tried calling DrawOpenMenus() here (before
@@ -1371,6 +1393,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 // active tab's own paint/place/select handlers below never
                 // also fire on the same click while Measure is active.
                 HandleMeasureToolGameViewInput();
+                // Same reasoning as Measure just above: reference-unit
+                // placement/select/drag consumes its own click via e.Use()
+                // for the specific cases it cares about (armed placement,
+                // dragging, clicking an existing reference unit) and falls
+                // through untouched otherwise, so it must run before the
+                // active tab's own click handlers below get a chance to
+                // consume the SAME event first (e.g. Objects/Markers'
+                // click-to-select swallowing a placement click meant for a
+                // reference unit, which is what broke placement originally —
+                // this shell was previously called last, after every tab
+                // handler had already had first crack at MouseDown).
+                HandleReferenceUnitsGameViewInput();
                 DrawMapFrameOverlay();
                 // HandleTerrainGameViewInput draws its Geometry/Paint brush
                 // ring ONLY when the Terrain tab is active and does nothing
@@ -2003,7 +2037,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // doc comment for why this class of bug exists at all. Deliberately
         // generous (this only sizes the background card + hit-test rect,
         // never clips GUILayout content) rather than exactly tuned.
-        var contentHeight = 8 * MenuItemHeight + 340f * SC2UiScale.Scale;
+        var contentHeight = 9 * MenuItemHeight + 340f * SC2UiScale.Scale;
 #if !UNITY_EDITOR
         contentHeight += 16f * SC2UiScale.Scale;
 #endif
@@ -2011,6 +2045,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             GUILayout.Label("PANELS", _dropdownSectionLabelStyle);
             ShowPanel = GUILayout.Toggle(ShowPanel, "Inspector Panel", _dropdownToggleStyle);
+            ShowReferencePanel = GUILayout.Toggle(ShowReferencePanel, "Reference Panel", _dropdownToggleStyle);
             EnableGameViewNavigation = GUILayout.Toggle(EnableGameViewNavigation, "Game Navigation", _dropdownToggleStyle);
 
             GUILayout.Space(6);
@@ -2117,7 +2152,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // input/overlap hit-testing, contributing to clicks near the bottom
         // of this now much-taller (11->15) menu reaching whatever panel
         // content sat underneath instead of this dropdown's own toggles.
-        var itemCount = 14 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units (3) + Land/Air (2) + Chains/Areas/Water/RNM/Grid (5) [+ Naval/Amphibious]
+        var itemCount = 15 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units/ReferenceUnits (4) + Land/Air (2) + Chains/Areas/Water/RNM/Grid (5) [+ Naval/Amphibious]
 
         DrawMenuPanel(_visibilityMenuRect.x, TitleBarHeight, 210, itemCount, () =>
         {
@@ -2128,6 +2163,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             DrawToggle("Props", ref OverlayProps);
             DrawToggle("Markers", ref OverlayMarkers);
             DrawToggle("Units", ref OverlayUnits);
+            DrawToggle("Reference Units", ref OverlayReferenceUnits);
             DrawToggle("Path: Land", ref OverlayGraphLand);
             DrawToggle("Path: Air", ref OverlayGraphAir);
             if (playableWater)
@@ -2184,7 +2220,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawSymmetryMenu()
     {
         var data = _terrainShell?.Data;
-        var contentHeight = data == null ? MenuItemHeight : 5 * MenuItemHeight + (data.Symmetry == SymmetryMode.Radial ? MenuItemHeight : 0f);
+        var contentHeight = data == null ? MenuItemHeight : 8 * MenuItemHeight + (data.Symmetry == SymmetryMode.Radial ? MenuItemHeight : 0f);
         DrawMenuPanel(_symmetryMenuRect.x, TitleBarHeight, 210, contentHeight, () =>
         {
             if (data == null)
@@ -2197,6 +2233,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             DrawSymmetryModeToggle(data, SymmetryMode.X, "X");
             DrawSymmetryModeToggle(data, SymmetryMode.Y, "Y");
             DrawSymmetryModeToggle(data, SymmetryMode.XY, "XY");
+            DrawSymmetryModeToggle(data, SymmetryMode.DiagonalTLBR, "Diagonal (TL-BR)");
+            DrawSymmetryModeToggle(data, SymmetryMode.DiagonalTRBL, "Diagonal (TR-BL)");
+            DrawSymmetryModeToggle(data, SymmetryMode.DiagonalBoth, "Diagonal (both)");
             DrawSymmetryModeToggle(data, SymmetryMode.Radial, "Radial");
 
             if (data.Symmetry == SymmetryMode.Radial)
@@ -2561,6 +2600,94 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         GUILayout.EndArea();
 
         // Child IMGUI controls must receive MouseDown/MouseUp normally.
+    }
+
+    /// <summary>Compact right-side panel (View menu > "Reference Panel",
+    /// default on) — mirrors DrawMainPanel's own Rect/BeginArea/ScrollView/
+    /// BeginVertical structure at a much narrower fixed width. Surfaces the
+    /// Measure tool (additive to its existing Edit menu / View menu / "M"
+    /// hotkey entry points, not a replacement), the reference-image load/
+    /// show controls, and the reference-units placement list.</summary>
+    private void DrawReferencePanel()
+    {
+        DrawSolidRect(_referencePanelRect, ColorBg, _panelTexture);
+        DrawSolidRect(new Rect(_referencePanelRect.x, _referencePanelRect.y, 1f, _referencePanelRect.height), ColorDivider, _dividerTexture);
+
+        // The nav gizmo (_navigationGizmoRect) is drawn AFTER this panel so
+        // it floats decoratively over the panel's top-left corner — fine for
+        // the panel's own static BACKGROUND fill above (still drawn full-
+        // height, so the gizmo visually sits "on top of" one continuous
+        // column), but the SCROLLABLE content area itself must not overlap
+        // it at all: an earlier fix only padded the top of the scrolled
+        // CONTENT, which merely delayed the problem — once the user
+        // scrolled, later rows still passed underneath the gizmo on their
+        // way through that same fixed on-screen strip, since the gizmo's
+        // position is fixed in screen space while content scrolls past it.
+        // Shrinking the actual BeginArea/ScrollView rect to start below the
+        // gizmo's bottom edge means no scroll position can ever bring a row
+        // under it, not just the first one.
+        var gizmoClearance = Mathf.Max(0f, _navigationGizmoRect.yMax - _referencePanelRect.y) + 10f;
+        var contentAreaRect = new Rect(_referencePanelRect.x, _referencePanelRect.y + gizmoClearance,
+            _referencePanelRect.width, Mathf.Max(1f, _referencePanelRect.height - gizmoClearance));
+
+        GUILayout.BeginArea(contentAreaRect, _panelStyle);
+        var outerWidth = Mathf.Max(1f, contentAreaRect.width - _panelStyle.padding.horizontal);
+        var outerHeight = Mathf.Max(1f, contentAreaRect.height - _panelStyle.padding.vertical);
+        // Horizontal scrollbar explicitly suppressed (GUIStyle.none): this
+        // column's own content width is capped to ReferencePanelContentWidth
+        // everywhere below (see DrawRightPanelSection's own MaxWidth calls),
+        // so any width overflow is a bug to fix at the source, not something
+        // to let the user scroll sideways to see.
+        _referencePanelScroll = GUILayout.BeginScrollView(_referencePanelScroll, false, false,
+            GUIStyle.none, GUI.skin.verticalScrollbar, GUIStyle.none,
+            GUILayout.Width(outerWidth), GUILayout.Height(outerHeight));
+        GUILayout.BeginVertical(GUILayout.Width(ReferencePanelContentWidth));
+        {
+            var contentWidth = ReferencePanelContentWidth;
+            var measureOn = GUILayout.Toggle(_tool == "Measure", "Measure", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
+            if (measureOn != (_tool == "Measure")) ToggleMeasureTool();
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("REFERENCE IMAGE", _dropdownSectionLabelStyle, GUILayout.MaxWidth(contentWidth));
+            if (GUILayout.Button(_referenceOverlayTex != null ? "Change..." : "Load...", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.MaxWidth(contentWidth)))
+                LoadReferenceImage();
+            var nextFloating = GUILayout.Toggle(_showReferenceImageFloating, "Show", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
+            if (nextFloating != _showReferenceImageFloating) _showReferenceImageFloating = nextFloating;
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            EnsureReferenceUnitsShell();
+            _referenceUnitsShell.DrawRightPanelSection(ReferencePanelContentWidth);
+        }
+        GUILayout.EndVertical();
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+
+    private Vector2 _referencePanelScroll;
+    private bool _showReferenceImageFloating;
+
+    /// <summary>Bottom-right-corner picture-in-picture preview of the SAME
+    /// texture the existing terrain-shader reference overlay uses
+    /// (_referenceOverlayTex/LoadReferenceImage, untouched) — an
+    /// independent second display mode, not a replacement: floats OVER the
+    /// viewport (like the nav gizmo) rather than carving out layout space,
+    /// so it never shrinks the usable 3D view.</summary>
+    private void DrawFloatingReferenceImage()
+    {
+        if (!_showReferenceImageFloating || _referenceOverlayTex == null) return;
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
+        var size = Mathf.Min(320f, _viewportRect.width * 0.25f, _viewportRect.height * 0.4f);
+        if (size < 32f) return;
+        var rect = new Rect(Screen.width - size - 12f, Screen.height - size - 12f, size, size);
+        DrawSolidRect(new Rect(rect.x - 2f, rect.y - 2f, rect.width + 4f, rect.height + 4f), ColorDivider, _dividerTexture);
+        GUI.DrawTexture(rect, _referenceOverlayTex, ScaleMode.ScaleToFit);
     }
 
     private void DrawTerrainInspector()
@@ -3155,6 +3282,56 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
     }
 
+    private SC2ReferenceUnitsShell _referenceUnitsShell;
+
+    private void EnsureReferenceUnitsShell()
+    {
+        EnsureTerrainShell();
+        if (_referenceUnitsShell == null)
+        {
+            _referenceUnitsShell = new SC2ReferenceUnitsShell(_terrainShell)
+            {
+                RepaintHost = RepaintGameView,
+                ReportStatus = SetStatus,
+            };
+            // Switching/reloading a map must not leave selection/drag state
+            // (or a stale intel cache) pointed at ids from the PREVIOUS
+            // map's ObjReferenceUnits — same reasoning as _objectsShell's own
+            // DataChanged hookups just above.
+            _terrainShell.DataChanged += _ => _referenceUnitsShell?.OnDataChanged();
+        }
+    }
+
+    /// <summary>Same raycast contract TryGetMeasureHit already implements —
+    /// passed to SC2ReferenceUnitsShell as a delegate rather than
+    /// duplicated, since building the imported-terrain collider list
+    /// (BuildImportedTerrainColliders) is this class's own responsibility.</summary>
+    private bool TryRaycastForPlacement(Camera camera, Vector2 guiMousePosition, out Vector3 hit)
+    {
+        var ray = SC2TerrainShell.GameGuiPointToRay(camera, _viewportRect, guiMousePosition);
+        if (SC2TerrainShell.TryRaycastImportedTerrain(BuildImportedTerrainColliders(), ray, out hit))
+            return true;
+        if (_terrainShell != null && SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+            return true;
+        hit = default;
+        return false;
+    }
+
+    /// <summary>Runs every frame regardless of which main tab is active —
+    /// reference units are a global, always-visible aid, same reasoning
+    /// Decals' EnsurePreview already uses for its own "stay visible from any
+    /// tab" content.</summary>
+    private void HandleReferenceUnitsGameViewInput()
+    {
+        EnsureReferenceUnitsShell();
+        _referenceUnitsShell.DrawBrowserModal();
+        var camera = ResolveCamera();
+        if (camera == null) return;
+        var mousePosition = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
+        var allowInput = Event.current != null && !IsMouseOverUi(mousePosition);
+        _referenceUnitsShell.OnGameViewGUI(camera, _viewportRect, mousePosition, allowInput, OverlayReferenceUnits, TryRaycastForPlacement);
+    }
+
     // "Import .scd (Document)" panel. Separate from _objectsShell/
     // _terrainShell on purpose: it reads and writes _mapSession, not legacy
     // SC2TerrainData.
@@ -3382,8 +3559,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _statusRect = new Rect(width - statusRectWidth, 0, statusRectWidth, TitleBarHeight);
         _navigationGizmoRect = new Rect(width - 118, HeaderHeight + 10f, 104, 104);
 
+        // Compact right-side panel — about as wide as the nav gizmo above
+        // (104px + a small margin), spanning the full right-edge column from
+        // the header to the bottom of the screen. The gizmo keeps its own
+        // unchanged position/size and is simply drawn AFTER this panel, so
+        // it visually floats over the panel's own top portion — no separate
+        // gizmo-repositioning logic needed.
+        var referencePanelWidth = ShowReferencePanel ? SC2UiScale.Pxf(118f) : 0f;
+        _referencePanelRect = new Rect(width - referencePanelWidth, HeaderHeight, referencePanelWidth, Mathf.Max(1f, height - HeaderHeight));
+
         var left = ShowPanel ? panelWidth : 0f;
-        _viewportRect = new Rect(left, HeaderHeight, Mathf.Max(1f, width - left), Mathf.Max(1f, height - HeaderHeight));
+        var right = referencePanelWidth;
+        _viewportRect = new Rect(left, HeaderHeight, Mathf.Max(1f, width - left - right), Mathf.Max(1f, height - HeaderHeight));
     }
 
     private void UpdateMouseMapCoordinates()
@@ -3868,31 +4055,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// header, which visually covers part of the same camera image the
     /// Game View renders behind it.</summary>
     private bool ClipGuiSegmentToViewport(Vector2 a, Vector2 b, out Vector2 clippedA, out Vector2 clippedB)
-    {
-        var rect = _viewportRect;
-        var dx = b.x - a.x; var dy = b.y - a.y;
-        float t0 = 0f, t1 = 1f;
-        var p0 = -dx; var q0 = a.x - rect.xMin;
-        var p1 = dx; var q1 = rect.xMax - a.x;
-        var p2 = -dy; var q2 = a.y - rect.yMin;
-        var p3 = dy; var q3 = rect.yMax - a.y;
-        for (var i = 0; i < 4; i++)
-        {
-            var p = i == 0 ? p0 : i == 1 ? p1 : i == 2 ? p2 : p3;
-            var q = i == 0 ? q0 : i == 1 ? q1 : i == 2 ? q2 : q3;
-            if (Mathf.Approximately(p, 0f))
-            {
-                if (q < 0f) { clippedA = a; clippedB = b; return false; }
-                continue;
-            }
-            var r = q / p;
-            if (p < 0f) { if (r > t1) { clippedA = a; clippedB = b; return false; } if (r > t0) t0 = r; }
-            else { if (r < t0) { clippedA = a; clippedB = b; return false; } if (r < t1) t1 = r; }
-        }
-        clippedA = new Vector2(a.x + dx * t0, a.y + dy * t0);
-        clippedB = new Vector2(a.x + dx * t1, a.y + dy * t1);
-        return true;
-    }
+        => SC2TerrainShell.ClipSegmentToViewport(_viewportRect, a, b, out clippedA, out clippedB);
 
     /// <summary>Same imported-terrain-first, live-procedural-fallback
     /// raycast order every other placement/painting tool in this file
@@ -5861,6 +6024,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             return true;
         if (ShowPanel && _panelRect.Contains(mouse))
             return true;
+        if (ShowReferencePanel && _referencePanelRect.Contains(mouse))
+            return true;
         if (_statusRect.Contains(mouse))
             return true;
         if (_navigationGizmoRect.Contains(mouse))
@@ -6370,6 +6535,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
          || OverlayProps != SharedContext.OverlayProps
          || OverlayMarkers != SharedContext.OverlayMarkers
          || OverlayUnits != SharedContext.OverlayUnits
+         || OverlayReferenceUnits != SharedContext.OverlayReferenceUnits
          || OverlayGraphLand != SharedContext.OverlayGraphLand
          || OverlayGraphAir != SharedContext.OverlayGraphAir
          || OverlayGraphNaval != SharedContext.OverlayGraphNaval
@@ -6388,6 +6554,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             OverlayProps = SharedContext.OverlayProps;
             OverlayMarkers = SharedContext.OverlayMarkers;
             OverlayUnits = SharedContext.OverlayUnits;
+            OverlayReferenceUnits = SharedContext.OverlayReferenceUnits;
             OverlayGraphLand = SharedContext.OverlayGraphLand;
             OverlayGraphAir = SharedContext.OverlayGraphAir;
             OverlayGraphNaval = SharedContext.OverlayGraphNaval;
@@ -6408,7 +6575,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         SharedContext.ApplyOverlayState(
             OverlayTerrain, OverlayHfield, OverlayCosts, OverlayCollision2,
-            OverlayProps, OverlayMarkers, OverlayUnits,
+            OverlayProps, OverlayMarkers, OverlayUnits, OverlayReferenceUnits,
             OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
             OverlayChains, OverlayAreas, OverlayWater, OverlayRNM, OverlayGrid, OverlayWireframe);
     }

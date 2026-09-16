@@ -1075,6 +1075,9 @@ public sealed class SC2CostsShell
         SymmetryMode.Y => SC2SymmetryMode.MirrorZ,
         SymmetryMode.XY => SC2SymmetryMode.MirrorXZ,
         SymmetryMode.Radial => SC2SymmetryMode.Rotational,
+        SymmetryMode.DiagonalTLBR => SC2SymmetryMode.MirrorDiagTLBR,
+        SymmetryMode.DiagonalTRBL => SC2SymmetryMode.MirrorDiagTRBL,
+        SymmetryMode.DiagonalBoth => SC2SymmetryMode.MirrorDiagBoth,
         _ => SC2SymmetryMode.None
     };
 

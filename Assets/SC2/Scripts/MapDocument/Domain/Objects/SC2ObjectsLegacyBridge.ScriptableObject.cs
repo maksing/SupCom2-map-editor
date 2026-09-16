@@ -17,7 +17,8 @@ namespace SC2.MapEditor.Document
             return BuildFromLegacy(
                 data.ObjProps, data.ObjMarkers, data.ObjGraphs, data.ObjArmies,
                 data.ObjUnits, data.ObjZones, data.ObjChains, data.ObjSymmetryGroups,
-                data.NextObjectId, data.ObjSaveLuaTextOriginal, data.ObjScenarioLuaTextOriginal);
+                data.NextObjectId, data.ObjSaveLuaTextOriginal, data.ObjScenarioLuaTextOriginal,
+                data.ObjReferenceUnits);
         }
     }
 }

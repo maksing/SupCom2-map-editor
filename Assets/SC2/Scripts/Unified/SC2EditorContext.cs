@@ -23,6 +23,7 @@ public sealed class SC2EditorContext
     public bool OverlayProps = true;
     public bool OverlayMarkers = true;
     public bool OverlayUnits = true;
+    public bool OverlayReferenceUnits;
     public bool OverlayGraphLand = true;
     public bool OverlayGraphAir = true;
     public bool OverlayGraphNaval = true;
@@ -114,6 +115,7 @@ public sealed class SC2EditorContext
         if (OverlayProps) enabled.Add("Props");
         if (OverlayMarkers) enabled.Add("Markers");
         if (OverlayUnits) enabled.Add("Units");
+        if (OverlayReferenceUnits) enabled.Add("ReferenceUnits");
         if (OverlayGraphLand) enabled.Add("Path:Land");
         if (OverlayGraphAir) enabled.Add("Path:Air");
         if (OverlayGraphNaval) enabled.Add("Path:Naval");
@@ -133,7 +135,7 @@ public sealed class SC2EditorContext
     /// Call from the GameView when it wants to push its overlay toggles to the shared state.
     /// </summary>
     public void ApplyOverlayState(bool terrain, bool hfield, bool costs, bool collision2,
-        bool props, bool markers, bool units,
+        bool props, bool markers, bool units, bool referenceUnits,
         bool graphLand, bool graphAir, bool graphNaval, bool graphAmphibious,
         bool chains, bool areas, bool water, bool rnm, bool grid, bool wireframe)
     {
@@ -144,6 +146,7 @@ public sealed class SC2EditorContext
         OverlayProps = props;
         OverlayMarkers = markers;
         OverlayUnits = units;
+        OverlayReferenceUnits = referenceUnits;
         OverlayGraphLand = graphLand;
         OverlayGraphAir = graphAir;
         OverlayGraphNaval = graphNaval;

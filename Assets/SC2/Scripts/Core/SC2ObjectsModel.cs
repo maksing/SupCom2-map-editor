@@ -136,6 +136,36 @@ public class SC2ObjUnitNode
     public float HeightOffset;
 }
 
+/// <summary>A real game unit/building placed PURELY as an in-editor visual
+/// scale reference (real mesh + Radar/Sonar/Vision/weapon-range circles read
+/// from its own .bp blueprint) — never written to mapobjs.bdf/_save.lua/
+/// _scenario.lua. Deliberately its own list (SC2TerrainData.ObjReferenceUnits)
+/// rather than a flag on SC2ObjUnitNode, so "never exported" is a structural
+/// property of SC2ObjectsExport.cs simply never reading this list, not a
+/// flag that every export code path has to remember to check.</summary>
+[Serializable]
+public class SC2ObjReferenceUnit
+{
+    public int Id;
+    /// <summary>SC2GameAsset.Id (e.g. "uua0101") — same lowercase-blueprint-
+    /// code convention SC2ObjUnitNode.Type already uses, resolved back to a
+    /// full SC2GameAsset via SC2UnitPropBrowser.FindUnitAsset.</summary>
+    public string BlueprintId = "";
+    public string DisplayName = "";
+    public Vector3 Position;
+    public Vector3 OrientationEuler;
+    public bool AnchorToTerrain = true;
+    public float HeightOffset;
+    /// <summary>Per-instance declutter toggles — a mapper placing more than
+    /// one reference unit for different purposes (one for radar coverage,
+    /// another for weapon range) needs to be able to quiet the circles they
+    /// don't currently care about on each one independently.</summary>
+    public bool ShowRadar = true;
+    public bool ShowSonar = true;
+    public bool ShowVision = true;
+    public bool ShowWeapons = true;
+}
+
 [Serializable]
 public class SC2ObjZone
 {

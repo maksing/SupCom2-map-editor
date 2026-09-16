@@ -243,7 +243,22 @@ public sealed class SC2UnitPropBrowser
     /// instance.</summary>
     private static ISC2SourceContainerReader OpenIndependentArchiveReader(string root)
     {
-        var archives = SC2GameInstallArchives.DiscoverArchives(root);
+        // DiscoverArchives itself only sorts alphabetically — plain
+        // filename order, with no notion of "this archive's content should
+        // win when paths collide." A real install's DLC/patch content sits
+        // in its own dedicated archive rather than only nested inside a
+        // base archive's own "mods/" folder — e.g. z_lua_dlc1.scd carries
+        // the SAME mods/DLC1/shadow/Units/.../*.bp paths bp.scd's own copy
+        // already has, and per the game's own "z_" naming convention (every
+        // DLC/patch archive here is z_-prefixed) it must win that path
+        // collision, not the alphabetically-earlier "bp.scd". Reordering here
+        // (stable — archives within each group keep DiscoverArchives' own
+        // alphabetical order) is what actually decides that: the
+        // SC2MultiSourceContainerReader below picks whichever reader is
+        // FIRST in this list on a path collision.
+        var archives = SC2GameInstallArchives.DiscoverArchives(root)
+            .OrderBy(a => a.Stem.StartsWith("z_", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ToList();
         if (archives.Count == 0) return null;
         var factory = new SC2SourceContainerReaderFactory();
         var readers = new List<ISC2SourceContainerReader>();
@@ -559,6 +574,24 @@ public sealed class SC2UnitPropBrowser
     private static int SourcePriority(SC2GameAssetDiscoveryEntry entry)
     {
         string source = entry.Asset.SourcePath.Replace('\\', '/');
+        // mods/CampaignBranch/shadow/... is a single-player STORY-BRANCH
+        // override — its stats only apply while a specific campaign mission
+        // has that branch active (e.g. a scripted/boss-encounter buff), not
+        // in skirmish or the map editor's own "real game data" reference
+        // use. It also uses a "/shadow/" subfolder internally, so without
+        // this check it tied with mods/DLC1/shadow/... at priority 3 and the
+        // alphabetical tie-break ("CampaignBranch" < "DLC1") silently picked
+        // the campaign-only value instead of DLC1's actual persistent stats
+        // (confirmed live: UUB0301 showed RadarRadius=325 from
+        // CampaignBranch instead of DLC1's 210). Checked first so this low
+        // priority applies regardless of the /shadow//base/ checks below —
+        // only a unit that exists NOWHERE else falls back to it.
+        // NOTE: "mods" is the archive-relative path's own FIRST segment (a
+        // real .scd entry name has no leading slash — confirmed directly
+        // against bp.scd: entry.FullName starts with 'm', not '/'), so the
+        // match must not require a leading '/' the way the mid-path
+        // "/shadow/"/"/base/" checks below correctly do.
+        if (source.IndexOf("mods/campaignbranch/", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
         if (source.IndexOf("/shadow/", StringComparison.OrdinalIgnoreCase) >= 0) return 3;
         if (source.IndexOf("/base/", StringComparison.OrdinalIgnoreCase) >= 0) return 2;
         return 1;

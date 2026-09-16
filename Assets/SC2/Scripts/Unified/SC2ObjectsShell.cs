@@ -1041,6 +1041,17 @@ public sealed class SC2ObjectsShell
                     3 => c + new Vector3(-rel.x, rel.y, -rel.z),
                     _ => slotPos
                 };
+            case SymmetryMode.DiagonalTLBR: return c + new Vector3(rel.z, rel.y, rel.x); // self-inverse
+            case SymmetryMode.DiagonalTRBL: return c + new Vector3(-rel.z, rel.y, -rel.x); // self-inverse
+            case SymmetryMode.DiagonalBoth:
+                // GetSymmetricPositions' slot order for DiagonalBoth: 1=TLBR, 2=TRBL, 3=180-degree rotation — each self-inverse.
+                return slotIndex switch
+                {
+                    1 => c + new Vector3(rel.z, rel.y, rel.x),
+                    2 => c + new Vector3(-rel.z, rel.y, -rel.x),
+                    3 => c + new Vector3(-rel.x, rel.y, -rel.z),
+                    _ => slotPos
+                };
             case SymmetryMode.Radial:
                 // Same SC2RadialSymmetryMath.RotationAngleSteps sequence
                 // GetSymmetricPositions uses to build the forward slots —

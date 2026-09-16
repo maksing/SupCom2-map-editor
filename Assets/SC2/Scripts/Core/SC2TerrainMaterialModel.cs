@@ -202,7 +202,21 @@ public class SC2CostsBlockData
 // what a given count means (Radial4 vs. Rotational4 used to compute
 // genuinely different point patterns — a real, confirmed bug this
 // consolidation fixes, not just a style cleanup).
-public enum SymmetryMode{None,X,Y,XY,Radial}
+// DiagonalTLBR/DiagonalTRBL mirror across the map's two diagonals — the
+// game's own top-down screen convention has +X right and +Z DOWN (see
+// SC2TopViewMirror's own doc comment), so DiagonalTLBR (reflecting across
+// the line where relX==relZ) connects the visual top-left and bottom-right
+// corners, and DiagonalTRBL (relX==-relZ) connects top-right and
+// bottom-left. DiagonalBoth combines both mirrors into one 4-way symmetry
+// (original + each diagonal reflection + their composition, a 180-degree
+// rotation) — the diagonal equivalent of XY's 4-way axis-mirror combo.
+//
+// Explicit ordinals 8-10 (NOT the next sequential 5-7): SC2RuntimeTerrainPersistence's
+// legacy flat-JSON loader treats any raw saved ordinal in [4,7] as one of
+// the OLD pre-consolidation Radial2/4/6/8 values and remaps it to Radial —
+// letting these new modes land in that range would make a saved-and-reloaded
+// diagonal symmetry silently turn into Radial with the wrong RadialCount.
+public enum SymmetryMode{None=0,X=1,Y=2,XY=3,Radial=4,DiagonalTLBR=8,DiagonalTRBL=9,DiagonalBoth=10}
 
 /// <summary>Single shared source of truth for N-way rotational symmetry
 /// angles (degrees, one per additional copy beyond the original) — used by

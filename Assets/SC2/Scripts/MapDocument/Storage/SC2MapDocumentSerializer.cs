@@ -509,6 +509,9 @@ namespace SC2.MapEditor.Document
             var symmetryGroups = SC2JsonValue.NewArray();
             foreach (var sg in d.SymmetryGroups) symmetryGroups.Add(WriteSymmetryGroup(sg));
             o.Set("symmetryGroups", symmetryGroups);
+            var referenceUnits = SC2JsonValue.NewArray();
+            foreach (var r in d.ReferenceUnits) referenceUnits.Add(WriteReferenceUnit(r));
+            o.Set("referenceUnits", referenceUnits);
             o.Set("nextObjectId", SC2JsonValue.Of(d.NextObjectId));
             o.Set("saveLuaTextOriginal", SC2JsonValue.Of(d.SaveLuaTextOriginal));
             o.Set("scenarioLuaTextOriginal", SC2JsonValue.Of(d.ScenarioLuaTextOriginal));
@@ -531,6 +534,7 @@ namespace SC2.MapEditor.Document
             foreach (var v in o.Get("zones").Items()) d.Zones.Add(ReadZone(v));
             foreach (var v in o.Get("chains").Items()) d.Chains.Add(ReadChain(v));
             foreach (var v in o.Get("symmetryGroups").Items()) d.SymmetryGroups.Add(ReadSymmetryGroup(v));
+            foreach (var v in o.Get("referenceUnits").Items()) d.ReferenceUnits.Add(ReadReferenceUnit(v));
             return d;
         }
 
@@ -691,6 +695,38 @@ namespace SC2.MapEditor.Document
             OrientationEuler = ReadVector3(o.Get("orientationEuler")),
             AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
             HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
+        };
+
+        private static SC2JsonValue WriteReferenceUnit(SC2ObjReferenceUnit r)
+        {
+            var o = SC2JsonValue.NewObject();
+            o.Set("id", SC2JsonValue.Of(r.Id));
+            o.Set("blueprintId", SC2JsonValue.Of(r.BlueprintId));
+            o.Set("displayName", SC2JsonValue.Of(r.DisplayName));
+            o.Set("position", WriteVector3(r.Position));
+            o.Set("orientationEuler", WriteVector3(r.OrientationEuler));
+            o.Set("anchorToTerrain", SC2JsonValue.Of(r.AnchorToTerrain));
+            o.Set("heightOffset", SC2JsonValue.Of(r.HeightOffset));
+            o.Set("showRadar", SC2JsonValue.Of(r.ShowRadar));
+            o.Set("showSonar", SC2JsonValue.Of(r.ShowSonar));
+            o.Set("showVision", SC2JsonValue.Of(r.ShowVision));
+            o.Set("showWeapons", SC2JsonValue.Of(r.ShowWeapons));
+            return o;
+        }
+
+        private static SC2ObjReferenceUnit ReadReferenceUnit(SC2JsonValue o) => new SC2ObjReferenceUnit
+        {
+            Id = o.Get("id").AsInt(0),
+            BlueprintId = o.Get("blueprintId").AsString(""),
+            DisplayName = o.Get("displayName").AsString(""),
+            Position = ReadVector3(o.Get("position")),
+            OrientationEuler = ReadVector3(o.Get("orientationEuler")),
+            AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
+            HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
+            ShowRadar = o.Get("showRadar").AsBool(true),
+            ShowSonar = o.Get("showSonar").AsBool(true),
+            ShowVision = o.Get("showVision").AsBool(true),
+            ShowWeapons = o.Get("showWeapons").AsBool(true),
         };
 
         private static SC2JsonValue WriteZone(SC2ObjZone z)

@@ -353,6 +353,7 @@ namespace SC2.MapEditor.Document
             public List<SC2ObjZone> Zones = new();
             public List<SC2ObjChain> Chains = new();
             public List<SC2ObjSymmetryGroup> SymmetryGroups = new();
+            public List<SC2ObjReferenceUnit> ReferenceUnits = new();
             public int NextObjectId;
             public string SaveLuaTextOriginal = "";
             public string ScenarioLuaTextOriginal = "";
@@ -382,6 +383,7 @@ namespace SC2.MapEditor.Document
                 Zones = new List<SC2ObjZone>(doc.Zones),
                 Chains = new List<SC2ObjChain>(doc.Chains),
                 SymmetryGroups = new List<SC2ObjSymmetryGroup>(doc.SymmetryGroups),
+                ReferenceUnits = new List<SC2ObjReferenceUnit>(doc.ReferenceUnits),
                 NextObjectId = doc.NextObjectId,
                 SaveLuaTextOriginal = doc.SaveLuaTextOriginal ?? "",
                 ScenarioLuaTextOriginal = doc.ScenarioLuaTextOriginal ?? "",

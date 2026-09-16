@@ -66271,6 +66271,7 @@ MonoBehaviour:
       SlotIndex: 0
     - ObjectId: 2
       SlotIndex: 1
+  ObjReferenceUnits: []
   ObjSaveLuaTextOriginal: 
   ObjScenarioLuaTextOriginal: 
   NextObjectId: 7

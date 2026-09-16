@@ -705,6 +705,30 @@ public sealed class SC2DecalsShell : IDisposable
                 list.Add(new SymmetrySlot(c + new Vector3(rel.x, rel.y, -rel.z), new Vector3(seedNormal.x, seedNormal.y, -seedNormal.z), -seedRotation));
                 list.Add(new SymmetrySlot(c + new Vector3(-rel.x, rel.y, -rel.z), new Vector3(-seedNormal.x, seedNormal.y, -seedNormal.z), seedRotation + 180f));
                 break;
+            // Diagonal mirrors — same swap SC2TerrainData.GetSymmetricPositions
+            // uses for position/normal. Rotation negates the same way the X/Y
+            // single-mirror cases above do — every single mirror here
+            // reverses handedness the same way regardless of which line it
+            // reflects across, since SurfaceNormal is mirrored first and the
+            // decal's own right/forward basis is always rebuilt FROM that
+            // mirrored normal (see SC2DecalGeometryBuilder.BuildPlacement),
+            // not measured against a fixed world axis.
+            case SymmetryMode.DiagonalTLBR:
+                list.Add(new SymmetrySlot(c + new Vector3(rel.z, rel.y, rel.x), new Vector3(seedNormal.z, seedNormal.y, seedNormal.x), -seedRotation));
+                break;
+            case SymmetryMode.DiagonalTRBL:
+                list.Add(new SymmetrySlot(c + new Vector3(-rel.z, rel.y, -rel.x), new Vector3(-seedNormal.z, seedNormal.y, -seedNormal.x), -seedRotation));
+                break;
+            case SymmetryMode.DiagonalBoth:
+                list.Add(new SymmetrySlot(c + new Vector3(rel.z, rel.y, rel.x), new Vector3(seedNormal.z, seedNormal.y, seedNormal.x), -seedRotation));
+                list.Add(new SymmetrySlot(c + new Vector3(-rel.z, rel.y, -rel.x), new Vector3(-seedNormal.z, seedNormal.y, -seedNormal.x), -seedRotation));
+                // Composing both diagonal mirrors is the SAME 180-degree
+                // rotation about the center that XY's own third slot above
+                // already uses (any two perpendicular mirror axes compose to
+                // the same 180-degree rotation, whether axis-aligned or
+                // diagonal) — identical formula, handedness-preserving.
+                list.Add(new SymmetrySlot(c + new Vector3(-rel.x, rel.y, -rel.z), new Vector3(-seedNormal.x, seedNormal.y, -seedNormal.z), seedRotation + 180f));
+                break;
             case SymmetryMode.Radial:
                 var ang = Mathf.Atan2(rel.z, rel.x); var r = new Vector2(rel.x, rel.z).magnitude;
                 var nAng = Mathf.Atan2(seedNormal.z, seedNormal.x); var nR = new Vector2(seedNormal.x, seedNormal.z).magnitude;
@@ -742,6 +766,14 @@ public sealed class SC2DecalsShell : IDisposable
             case SymmetryMode.XY:
                 if (slotIndex == 1) return (c + new Vector3(-rel.x, rel.y, rel.z), new Vector3(-normal.x, normal.y, normal.z), -rotation);
                 if (slotIndex == 2) return (c + new Vector3(rel.x, rel.y, -rel.z), new Vector3(normal.x, normal.y, -normal.z), -rotation);
+                return (c + new Vector3(-rel.x, rel.y, -rel.z), new Vector3(-normal.x, normal.y, -normal.z), rotation + 180f);
+            case SymmetryMode.DiagonalTLBR:
+                return (c + new Vector3(rel.z, rel.y, rel.x), new Vector3(normal.z, normal.y, normal.x), -rotation);
+            case SymmetryMode.DiagonalTRBL:
+                return (c + new Vector3(-rel.z, rel.y, -rel.x), new Vector3(-normal.z, normal.y, -normal.x), -rotation);
+            case SymmetryMode.DiagonalBoth:
+                if (slotIndex == 1) return (c + new Vector3(rel.z, rel.y, rel.x), new Vector3(normal.z, normal.y, normal.x), -rotation);
+                if (slotIndex == 2) return (c + new Vector3(-rel.z, rel.y, -rel.x), new Vector3(-normal.z, normal.y, -normal.x), -rotation);
                 return (c + new Vector3(-rel.x, rel.y, -rel.z), new Vector3(-normal.x, normal.y, -normal.z), rotation + 180f);
             case SymmetryMode.Radial:
                 var steps = SC2RadialSymmetryMath.RotationAngleSteps(data.RadialCount).ToList();

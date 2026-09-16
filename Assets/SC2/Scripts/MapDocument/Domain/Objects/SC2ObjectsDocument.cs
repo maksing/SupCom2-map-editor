@@ -31,6 +31,11 @@ namespace SC2.MapEditor.Document
         public List<SC2ObjZone> Zones = new();
         public List<SC2ObjChain> Chains = new();
         public List<SC2ObjSymmetryGroup> SymmetryGroups = new();
+        /// <summary>Reference-only units/buildings (SC2ObjReferenceUnit) —
+        /// round-tripped through the map project like every other list here,
+        /// but never read by SC2ObjectsExport (see that class's own
+        /// doc comment on this list).</summary>
+        public List<SC2ObjReferenceUnit> ReferenceUnits = new();
         public int NextObjectId;
 
         /// <summary>The real original _save.lua/

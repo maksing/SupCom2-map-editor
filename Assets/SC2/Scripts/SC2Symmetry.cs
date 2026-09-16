@@ -15,6 +15,12 @@ public enum SC2SymmetryMode
     MirrorZ,
     MirrorXZ,
     Rotational,
+    /// <summary>Mirrors across the grid's top-left/bottom-right diagonal.</summary>
+    MirrorDiagTLBR,
+    /// <summary>Mirrors across the grid's top-right/bottom-left diagonal.</summary>
+    MirrorDiagTRBL,
+    /// <summary>Both diagonals combined — 4-way, the diagonal equivalent of MirrorXZ.</summary>
+    MirrorDiagBoth,
 }
 
 public static class SC2Symmetry
@@ -51,6 +57,20 @@ public static class SC2Symmetry
                 yield return MirrorZ(MirrorX(cell, center, gridSize), center, gridSize);
                 break;
 
+            case SC2SymmetryMode.MirrorDiagTLBR:
+                yield return MirrorDiagTLBR(cell, center, gridSize);
+                break;
+
+            case SC2SymmetryMode.MirrorDiagTRBL:
+                yield return MirrorDiagTRBL(cell, center, gridSize);
+                break;
+
+            case SC2SymmetryMode.MirrorDiagBoth:
+                yield return MirrorDiagTLBR(cell, center, gridSize);
+                yield return MirrorDiagTRBL(cell, center, gridSize);
+                yield return MirrorDiagTRBL(MirrorDiagTLBR(cell, center, gridSize), center, gridSize);
+                break;
+
             case SC2SymmetryMode.Rotational:
                 // SC2RadialSymmetryMath (Scripts/Core/SC2TerrainMaterialModel.cs)
                 // is the shared source of truth for N-way rotational angles —
@@ -71,6 +91,24 @@ public static class SC2Symmetry
 
     private static Vector2Int MirrorZ(Vector2Int cell, Vector2 center, int gridSize) =>
         Clamp(new Vector2Int(cell.x, Mathf.RoundToInt(2 * center.y - cell.y) - 1), gridSize);
+
+    /// <summary>Swaps X/Y around the diagonal through center — unlike
+    /// MirrorX/MirrorZ this doesn't negate either component, so (for the
+    /// common case of a square grid with center.x==center.y) it needs no
+    /// discrete "-1" correction: swapping is its own exact inverse on an
+    /// integer grid regardless of parity.</summary>
+    private static Vector2Int MirrorDiagTLBR(Vector2Int cell, Vector2 center, int gridSize) =>
+        Clamp(new Vector2Int(
+            Mathf.RoundToInt(cell.y + (center.x - center.y)),
+            Mathf.RoundToInt(cell.x + (center.y - center.x))), gridSize);
+
+    /// <summary>Swaps and negates X/Y around the OTHER diagonal — same
+    /// "-1" discrete correction as MirrorX/MirrorZ, needed here because
+    /// (unlike MirrorDiagTLBR) this negates rather than just swaps.</summary>
+    private static Vector2Int MirrorDiagTRBL(Vector2Int cell, Vector2 center, int gridSize) =>
+        Clamp(new Vector2Int(
+            Mathf.RoundToInt(center.x + center.y - cell.y) - 1,
+            Mathf.RoundToInt(center.x + center.y - cell.x) - 1), gridSize);
 
     private static Vector2Int Rotate(Vector2Int cell, Vector2 center, int gridSize, float degrees)
     {

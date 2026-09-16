@@ -631,6 +631,7 @@ public static class SC2RuntimeTerrainPersistence
         public string ObjScenarioLuaTextOriginal;
         public int NextObjectId;
         public List<SC2ObjSymmetryGroup> ObjSymmetryGroups;
+        public List<SC2ObjReferenceUnit> ObjReferenceUnits;
     }
 
     private static Dto ToDto(SC2TerrainData data)
@@ -779,6 +780,7 @@ public static class SC2RuntimeTerrainPersistence
         dto.ObjScenarioLuaTextOriginal = data.ObjScenarioLuaTextOriginal ?? "";
         dto.NextObjectId = data.NextObjectId;
         dto.ObjSymmetryGroups = new List<SC2ObjSymmetryGroup>(data.ObjSymmetryGroups);
+        dto.ObjReferenceUnits = new List<SC2ObjReferenceUnit>(data.ObjReferenceUnits);
 
         return dto;
     }
@@ -946,6 +948,7 @@ public static class SC2RuntimeTerrainPersistence
         data.ObjScenarioLuaTextOriginal = dto.ObjScenarioLuaTextOriginal ?? "";
         data.NextObjectId = Mathf.Max(1, dto.NextObjectId);
         data.ObjSymmetryGroups = dto.ObjSymmetryGroups ?? new List<SC2ObjSymmetryGroup>();
+        data.ObjReferenceUnits = dto.ObjReferenceUnits ?? new List<SC2ObjReferenceUnit>();
 
         data.EnsureSerializableState();
         data.InvalidateGeometryCache();
