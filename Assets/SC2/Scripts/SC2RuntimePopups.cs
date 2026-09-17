@@ -290,6 +290,8 @@ internal static class SC2RuntimeConfirm
     private static string _confirmLabel;
     private static System.Action _onConfirm;
 
+    public static bool IsOpen => _open;
+
     public static void Open(string title, string message, string confirmLabel, System.Action onConfirm)
     {
         _open = true;

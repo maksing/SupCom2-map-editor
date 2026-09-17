@@ -108,15 +108,43 @@ public sealed partial class SC2GameViewEditorUI
         // from its UNWRAPPED text unless something else caps the column.
         GUILayout.BeginVertical(GUILayout.Width(innerRect.width), GUILayout.MaxWidth(innerRect.width));
 
+        // While a "Delete Saved Terrain" confirmation is up (drawn on top,
+        // after this content — see below), a click meant for its Cancel/
+        // Delete button can otherwise land on an "Open"/"Delete" row still
+        // sitting underneath at the same screen position and get consumed
+        // here first, since this content is laid out earlier in the same
+        // OnGUI pass. GUI.enabled = false makes these controls ignore input
+        // entirely instead of reacting to (and swallowing) the click.
+#if !UNITY_EDITOR
+        var previousEnabled = GUI.enabled;
+        if (SC2RuntimeConfirm.IsOpen) GUI.enabled = false;
+#endif
         if (!SC2GameInstallSettings.IsConfigured)
             DrawStartupRootPicker();
         else
             DrawStartupMapPicker();
+#if !UNITY_EDITOR
+        GUI.enabled = previousEnabled;
+#endif
 
         GUILayout.EndVertical();
         GUILayout.EndArea();
 
         DrawStartupCredits(screenWidth, screenHeight);
+
+#if !UNITY_EDITOR
+        // Must draw (and let it claim the click on its own Cancel/Delete
+        // buttons) BEFORE the "swallow every click on the background" catch-
+        // all just below — that catch-all unconditionally calls
+        // Event.current.Use() on any MouseDown reaching this point, which
+        // flips the event's type to EventType.Used; a control checked
+        // AFTER that (this dialog's own GUILayout.Button calls) never sees
+        // a real MouseDown/MouseUp at all, so its buttons would appear to
+        // do nothing. Confirmed as the actual cause of a "Delete Saved
+        // Terrain" confirmation's own Cancel button having no effect when
+        // opened from this startup screen.
+        SC2RuntimeConfirm.DrawOverlays();
+#endif
 
         // Swallow every click on the background — nothing meaningful is
         // drawn behind this overlay anyway (no terrain shell exists yet).
@@ -278,6 +306,8 @@ public sealed partial class SC2GameViewEditorUI
                 GUILayout.Label(CustomMapDisplayName(asset), GUILayout.ExpandWidth(true));
                 if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
                     OpenExistingTerrainAsset(asset);
+                if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(70f))))
+                    RequestDeleteTerrainAsset(asset);
                 GUILayout.EndHorizontal();
             }
         }
@@ -296,6 +326,8 @@ public sealed partial class SC2GameViewEditorUI
                 GUILayout.Label(mapName, GUILayout.ExpandWidth(true));
                 if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
                     OpenSavedTerrainByName(mapName);
+                if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(70f))))
+                    RequestDeleteTerrainName(mapName);
                 GUILayout.EndHorizontal();
             }
         }
@@ -363,6 +395,28 @@ public sealed partial class SC2GameViewEditorUI
 #if UNITY_EDITOR
     private static string CustomMapDisplayName(SC2TerrainData asset) =>
         string.IsNullOrEmpty(asset.MapName) ? asset.name : asset.MapName;
+
+    /// <summary>Editor counterpart to SC2GameViewEditorUI's own Build-only
+    /// RequestDeleteTerrainName/ApplyDeleteTerrainName (File menu > Delete
+    /// Saved Terrain) — a saved map here is a plain SC2TerrainData asset
+    /// (no separate on-disk save file to also remove), so deleting it is
+    /// exactly what a user would otherwise do manually in the Project
+    /// window, per this screen's own "delete the .asset file from the
+    /// Project window" guidance for the Editor case. EditorUtility.
+    /// DisplayDialog blocks synchronously here (real Editor context, not
+    /// the Build-only stub that always returns true) so this needs no
+    /// async confirm overlay the way the Build path does.</summary>
+    private static void RequestDeleteTerrainAsset(SC2TerrainData asset)
+    {
+        if (asset == null) return;
+        var displayName = CustomMapDisplayName(asset);
+        if (!EditorUtility.DisplayDialog(
+                "Delete Saved Terrain",
+                $"Permanently delete the saved terrain '{displayName}'? This cannot be undone.",
+                "Delete", "Cancel"))
+            return;
+        AssetDatabase.DeleteAsset(AssetDatabase.GetAssetPath(asset));
+    }
 #endif
 
     /// <summary>Shows whatever map was most recently opened/created through
