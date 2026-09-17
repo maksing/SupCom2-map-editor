@@ -113,6 +113,11 @@ public sealed class SC2ObjectsShell
     /// than a single-click action.</summary>
     private bool _areaMirrorX, _areaMirrorZ;
 
+    /// <summary>Whether each Area edge numeric field held keyboard focus last
+    /// frame — see DrawZones' own comment on why applying/mirroring only
+    /// happens once a field loses focus, not on every keystroke.</summary>
+    private bool _areaLeftFieldWasFocused, _areaRightFieldWasFocused, _areaBottomFieldWasFocused, _areaTopFieldWasFocused;
+
     // ── Search / system filters ──────────────────────────────────────────
     private enum SysFilter { All, Selected, Invalid, Unanchored }
     private string _searchProps = "", _searchMarkers = "", _searchUnits = "", _searchArmies = "", _searchZones = "", _searchChains = "";
@@ -675,7 +680,7 @@ public sealed class SC2ObjectsShell
     public void DoUndo()
     {
         if (!_undo.Undo()) return;
-        ClearAllSelections(keepGraphSelection: true);
+        ClearAllSelections(keepGraphSelection: true, keepZoneSelection: true);
         BumpDataVersion();
         RepaintHost?.Invoke();
     }
@@ -683,7 +688,7 @@ public sealed class SC2ObjectsShell
     public void DoRedo()
     {
         if (!_undo.Redo()) return;
-        ClearAllSelections(keepGraphSelection: true);
+        ClearAllSelections(keepGraphSelection: true, keepZoneSelection: true);
         BumpDataVersion();
         RepaintHost?.Invoke();
     }
@@ -733,11 +738,19 @@ public sealed class SC2ObjectsShell
     /// which can plausibly replace the whole graph set) keeps clearing it
     /// as before. Safe to leave stale even if the selected graph really was
     /// removed by the undo — every reader of _selectedGraphId already
-    /// null-checks the FirstOrDefault lookup.</summary>
-    private void ClearAllSelections(bool keepGraphSelection = false)
+    /// null-checks the FirstOrDefault lookup.
+    ///
+    /// keepZoneSelection is the same fix for the same reported reason, one
+    /// domain over: undoing an Area's rect edit (Left/Right/Bottom/Top, or
+    /// a viewport edge drag) deselected the Area entirely, closing its
+    /// panel section — undoing one small edit has no more reason to kick
+    /// the user out of the Area they were editing than it does to change
+    /// which graph they're working in.</summary>
+    private void ClearAllSelections(bool keepGraphSelection = false, bool keepZoneSelection = false)
     {
         _selProps.Clear(); _selMarkers.Clear(); _selUnits.Clear();
-        _selectedArmyId = _selectedZoneId = _selectedChainId = 0;
+        _selectedArmyId = _selectedChainId = 0;
+        if (!keepZoneSelection) _selectedZoneId = 0;
         if (!keepGraphSelection) _selectedGraphId = 0;
     }
 
@@ -4610,7 +4623,14 @@ public sealed class SC2ObjectsShell
             // user had to click every time) — the heuristic is cheap and
             // name-only, so there's no reason not to run it immediately;
             // the Role field right below stays freely editable either way.
-            var nz = new SC2ObjZone { Id = Data.AllocateObjectId(), Name = zoneName, Role = SC2ObjZone.GuessRole(zoneName) };
+            // Default to the map's own full playable bounds (0,0)-(CostsGridSize,
+            // CostsGridSize) rather than the previous zero-size (0,0)-(0,0) —
+            // a brand new Area used to be invisible in the viewport until the
+            // user manually typed in real corner coordinates. CostsGridSize,
+            // not a hardcoded 1024, so this still matches the actual map on a
+            // 512/2048/etc. sized map (see that field's own doc comment).
+            var mapSize = Data.CostsGridSize;
+            var nz = new SC2ObjZone { Id = Data.AllocateObjectId(), Name = zoneName, Role = SC2ObjZone.GuessRole(zoneName), X1 = 0f, Z1 = 0f, X2 = mapSize, Z2 = mapSize };
             Data.ObjZones.Add(nz);
             _selectedZoneId = nz.Id;
             // A zone created here only exists on the legacy list until the
@@ -4655,6 +4675,35 @@ public sealed class SC2ObjectsShell
             var newBottom = SC2EnvFieldGui.FloatField("Bottom (Z)", bottom, "zone_bottom");
             var newTop = SC2EnvFieldGui.FloatField("Top (Z)", top, "zone_top");
 
+            // Only apply/mirror once a field loses keyboard focus, not on
+            // every keystroke while still typing. FloatField applied its
+            // parsed value live before this fix — typing "150" briefly
+            // applied 1, then 15, then 150 to the zone's actual data, and
+            // with Mirror X/Z on, each of those bogus PARTIAL values got
+            // cross-applied onto the opposite edge too. Worse, since the
+            // applied value fed straight back into `left`/`right`/etc. next
+            // frame, RawFloatBox's own cache-invalidation check (comparing
+            // against the incoming value) saw it change and force-refreshed
+            // the text being typed to a freshly-formatted version of that
+            // still-changing intermediate value — read by the user as
+            // random digits replacing whatever they were typing, in
+            // whichever field the mirror math had just touched. Deferring
+            // to blur means the underlying value never moves while a field
+            // is focused, so that whole feedback loop can't start.
+            var focused = GUI.GetNameOfFocusedControl();
+            var leftFocused = focused == "SC2EnvNum_zone_left";
+            var rightFocused = focused == "SC2EnvNum_zone_right";
+            var bottomFocused = focused == "SC2EnvNum_zone_bottom";
+            var topFocused = focused == "SC2EnvNum_zone_top";
+            var leftCommitted = _areaLeftFieldWasFocused && !leftFocused;
+            var rightCommitted = _areaRightFieldWasFocused && !rightFocused;
+            var bottomCommitted = _areaBottomFieldWasFocused && !bottomFocused;
+            var topCommitted = _areaTopFieldWasFocused && !topFocused;
+            _areaLeftFieldWasFocused = leftFocused;
+            _areaRightFieldWasFocused = rightFocused;
+            _areaBottomFieldWasFocused = bottomFocused;
+            _areaTopFieldWasFocused = topFocused;
+
             // Tolerance well above the text field's own "0.###" display
             // rounding (max ~0.0005 round-trip drift): comparing with exact
             // (or near-exact, e.g. Vector2's ~1e-5) equality against that
@@ -4667,10 +4716,10 @@ public sealed class SC2ObjectsShell
             // the thousands after one Mirror click). A tolerance this size
             // still catches every real, intentional edit.
             const float edgeChangeEpsilon = 0.01f;
-            var leftChanged = Mathf.Abs(newLeft - left) > edgeChangeEpsilon;
-            var rightChanged = Mathf.Abs(newRight - right) > edgeChangeEpsilon;
-            var bottomChanged = Mathf.Abs(newBottom - bottom) > edgeChangeEpsilon;
-            var topChanged = Mathf.Abs(newTop - top) > edgeChangeEpsilon;
+            var leftChanged = leftCommitted && Mathf.Abs(newLeft - left) > edgeChangeEpsilon;
+            var rightChanged = rightCommitted && Mathf.Abs(newRight - right) > edgeChangeEpsilon;
+            var bottomChanged = bottomCommitted && Mathf.Abs(newBottom - bottom) > edgeChangeEpsilon;
+            var topChanged = topCommitted && Mathf.Abs(newTop - top) > edgeChangeEpsilon;
 
             // Proportional/symmetric resize: moving one edge OUT (away from
             // the rect's own center) by delta moves its opposite edge OUT by
@@ -4711,6 +4760,14 @@ public sealed class SC2ObjectsShell
         {
             Session.History.Execute(Session.Document, new SC2SetZoneRectCommand(z.Id, x1, z1, x2, z2));
             _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
+        }
+        else
+        {
+            // No document session — same legacy whole-snapshot fallback the
+            // viewport edge-drag's own MouseDown handler already uses for
+            // this case, so a panel edit is undoable here too instead of
+            // silently recording nothing.
+            PushUndo();
         }
         z.X1 = x1; z.Z1 = z1; z.X2 = x2; z.Z2 = z2;
     }
@@ -6468,6 +6525,17 @@ public sealed class SC2ObjectsShell
             var docU = doc.Units.FirstOrDefault(x => x.Id == u.Id);
             if (docU != null) u.Position = docU.Position;
         }
+        // Without this, SC2SetZoneRectCommand's Undo/Redo correctly reverted/
+        // reapplied a zone's rect on Session.Document.Objects.Zones, but
+        // DrawZones/DrawZoneOverlays both read from Data.ObjZones (a
+        // separate list) — nothing ever copied the change back, so moving
+        // an Area appeared to not be undoable at all even though the
+        // command itself was pushed/undone correctly.
+        foreach (var z in Data.ObjZones)
+        {
+            var docZ = doc.Zones.FirstOrDefault(x => x.Id == z.Id);
+            if (docZ != null) (z.X1, z.Z1, z.X2, z.Z2) = (docZ.X1, docZ.Z1, docZ.X2, docZ.Z2);
+        }
     }
 
     /// <summary>Terrain raycast first (gives a proper surface height for
@@ -6989,6 +7057,19 @@ public sealed class SC2ObjectsShell
                     ZoneEdge.Bottom => zone.Z1 <= zone.Z2,
                     _ => zone.Z1 > zone.Z2
                 };
+                // A click in the 3D viewport never changes GUIUtility's own
+                // keyboard focus (it isn't a focusable GUI control) - if the
+                // Left/Right/Bottom/Top numeric field in the panel was
+                // focused before this drag started, it stays "focused" as
+                // far as SC2EnvFieldGui.IsFieldFocused is concerned for the
+                // whole drag, which now (see that method's own doc comment)
+                // makes those fields trust their own stale cached text
+                // instead of refreshing to the value this drag is actively
+                // writing - the panel only caught up once some OTHER real
+                // GUI control (e.g. clicking the Area in the list) shifted
+                // focus away. Clear it explicitly so a viewport edit is
+                // reflected in the panel immediately, every frame.
+                GUI.FocusControl(null);
                 if (Session?.Document == null) PushUndo();
                 e.Use();
                 return;

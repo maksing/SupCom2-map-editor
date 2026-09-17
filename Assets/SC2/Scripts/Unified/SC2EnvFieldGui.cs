@@ -164,6 +164,21 @@ public static class SC2EnvFieldGui
 
     public static bool Button(string label, params GUILayoutOption[] options) => GUILayout.Button(label, options);
 
+    /// <summary>True while the numeric box for `key` holds keyboard focus.
+    /// Every RawXBox* helper below skips its own "incoming value changed
+    /// elsewhere, reformat the displayed text" check while focused — found
+    /// via a real report: SC2ObjectsShell's Area edge fields defer actually
+    /// applying an edit until the field loses focus, so the box's own
+    /// `value` argument (recomputed fresh from data each frame) stays
+    /// frozen while the user types. Without this check, RawXBox's `_lastValue`
+    /// bookkeeping (updated to the just-parsed PARTIAL value on every single
+    /// keystroke, unconditionally, whether or not any caller actually acted
+    /// on it) drifted out of sync with that frozen `value` after exactly one
+    /// keystroke, and the very next repaint saw a "mismatch" and snapped the
+    /// display straight back to the pre-edit number — reading as "a value
+    /// set by dragging in the viewport can't be typed over at all."</summary>
+    private static bool IsFieldFocused(string key) => GUI.GetNameOfFocusedControl() == "SC2EnvNum_" + key;
+
     // ---- Numeric fields ----
     public static float FloatField(string label, float value, string key)
     {
@@ -282,7 +297,13 @@ public static class SC2EnvFieldGui
 
     private static float RawFloatBoxAt(Rect rect, float value, string key)
     {
-        if (!_text.TryGetValue(key, out var text) || !_lastValue.TryGetValue(key, out var lastVal) || !Mathf.Approximately(lastVal, value))
+        var hasText = _text.TryGetValue(key, out var text);
+        // While this control holds keyboard focus, never overwrite the
+        // user's in-progress typed text with a freshly-formatted `value` —
+        // see IsFieldFocused's own doc comment for the desync this
+        // otherwise causes for any caller that defers applying an edit
+        // until the field loses focus (SC2ObjectsShell's Area edge fields).
+        if (!hasText || (!IsFieldFocused(key) && (!_lastValue.TryGetValue(key, out var lastVal) || !Mathf.Approximately(lastVal, value))))
             text = FormatFloat(value);
 
         // Was unnamed, unlike TextField above — left Unity to auto-assign a
@@ -308,7 +329,8 @@ public static class SC2EnvFieldGui
 
     private static int RawIntBoxAt(Rect rect, int value, string key)
     {
-        if (!_text.TryGetValue(key, out var text) || !_lastIntValue.TryGetValue(key, out var lastVal) || lastVal != value)
+        var hasText = _text.TryGetValue(key, out var text);
+        if (!hasText || (!IsFieldFocused(key) && (!_lastIntValue.TryGetValue(key, out var lastVal) || lastVal != value)))
             text = value.ToString(CultureInfo.InvariantCulture);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
@@ -323,7 +345,8 @@ public static class SC2EnvFieldGui
 
     private static int RawIntBox(int value, string key, float width)
     {
-        if (!_text.TryGetValue(key, out var text) || !_lastIntValue.TryGetValue(key, out var lastVal) || lastVal != value)
+        var hasText = _text.TryGetValue(key, out var text);
+        if (!hasText || (!IsFieldFocused(key) && (!_lastIntValue.TryGetValue(key, out var lastVal) || lastVal != value)))
             text = value.ToString(CultureInfo.InvariantCulture);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
@@ -338,7 +361,8 @@ public static class SC2EnvFieldGui
 
     private static float RawFloatBox(float value, string key, float width)
     {
-        if (!_text.TryGetValue(key, out var text) || !_lastValue.TryGetValue(key, out var lastVal) || !Mathf.Approximately(lastVal, value))
+        var hasText = _text.TryGetValue(key, out var text);
+        if (!hasText || (!IsFieldFocused(key) && (!_lastValue.TryGetValue(key, out var lastVal) || !Mathf.Approximately(lastVal, value))))
             text = FormatFloat(value);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
@@ -359,7 +383,8 @@ public static class SC2EnvFieldGui
 
     private static float RawFloatBoxExpand(float value, string key)
     {
-        if (!_text.TryGetValue(key, out var text) || !_lastValue.TryGetValue(key, out var lastVal) || !Mathf.Approximately(lastVal, value))
+        var hasText = _text.TryGetValue(key, out var text);
+        if (!hasText || (!IsFieldFocused(key) && (!_lastValue.TryGetValue(key, out var lastVal) || !Mathf.Approximately(lastVal, value))))
             text = FormatFloat(value);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
