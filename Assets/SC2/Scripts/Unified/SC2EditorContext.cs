@@ -23,7 +23,7 @@ public sealed class SC2EditorContext
     public bool OverlayProps = true;
     public bool OverlayMarkers = true;
     public bool OverlayUnits = true;
-    public bool OverlayReferenceUnits;
+    public bool OverlayReferenceUnits = true;
     public bool OverlayGraphLand = true;
     public bool OverlayGraphAir = true;
     public bool OverlayGraphNaval = true;

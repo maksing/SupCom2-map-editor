@@ -2374,7 +2374,7 @@ public class SC2TerrainShell : ScriptableObject
 
         if (texture != null)
         {
-            SC2TextureBrowser.DrawPreview(rect, texture);
+            SC2TextureBrowser.DrawPreview(rect, texture, TextureUsageForPicker(pickerKey));
             var nameRect = new Rect(rect.x + SC2UiScale.Pxf(5f), rect.y + SC2UiScale.Pxf(5f), rect.width - SC2UiScale.Pxf(10f), SC2UiScale.Pxf(34f));
             DrawTexturePreviewLabel(nameRect, texture.name);
         }

@@ -55,14 +55,14 @@ public static class SC2TextureBrowser
     private static readonly Dictionary<Texture, Texture2D> _archiveCubeVolumePreviewCache = new();
     private const int ArchiveCubeVolumePreviewCacheCapacity = 64;
 
-    private static Texture2D GetOrBuildArchivePreview(Texture texture)
+    private static Texture2D GetOrBuildArchivePreview(Texture texture, bool linear)
     {
         if (_archiveCubeVolumePreviewCache.TryGetValue(texture, out var cached) && cached != null) return cached;
         var path = SC2TerrainMaterialFactory.TryGetResourcePath(texture);
         if (string.IsNullOrEmpty(path) || !path.StartsWith("archive:", StringComparison.Ordinal)) return null;
         if (!SC2GameArchiveRegistry.TryGetReader(out var reader)) return null;
         var entryPath = path.Substring("archive:".Length);
-        if (!SC2CustomTextureImporter.TryLoadPreviewFromArchive(reader, entryPath, out var preview, out _) || preview == null)
+        if (!SC2CustomTextureImporter.TryLoadPreviewFromArchive(reader, entryPath, out var preview, out _, linear) || preview == null)
             return null;
         if (_archiveCubeVolumePreviewCache.Count >= ArchiveCubeVolumePreviewCacheCapacity)
         {
@@ -467,8 +467,17 @@ public static class SC2TextureBrowser
     /// confirmed via a real screenshot (a cubemap's big picker preview
     /// showing dozens of unrelated thumbnails tiled together). Used by
     /// SC2TerrainShell.DrawTexturePicker's preview box.</summary>
-    public static void DrawPreview(Rect rect, Texture texture)
+    public static void DrawPreview(Rect rect, Texture texture, SC2TextureUsage usage = SC2TextureUsage.Unknown)
     {
+        // Normal/RNM textures are raw vector/blend data, not color —
+        // decoding and previewing them as sRGB (the correct interpretation
+        // for every other usage) gamma-distorts every value. Same condition
+        // SC2TextureThumbnailCache.Load already uses for the texture
+        // BROWSER's own grid/details thumbnails; this "left panel" preview
+        // built its filtered copy unconditionally as sRGB and never applied
+        // it, so a Normal/Mask slot's inline preview visibly disagreed with
+        // that same texture's browser thumbnail (different color/contrast).
+        var linear = usage == SC2TextureUsage.Normal || usage == SC2TextureUsage.Rnm;
         if (texture is Texture2D flat)
         {
             // See FlippedSourceRect's doc comment (DrawEntryTexture below) -
@@ -482,10 +491,10 @@ public static class SC2TextureBrowser
             // see its own doc comment - to avoid the same high-frequency-
             // content aliasing SC2TextureThumbnailCache.FilterAndDestroySource
             // fixes for catalog-entry thumbnails.
-            GUI.DrawTextureWithTexCoords(rect, GetOrBuildLivePreview(flat), FlippedSourceRect, true);
+            GUI.DrawTextureWithTexCoords(rect, GetOrBuildLivePreview(flat, linear), FlippedSourceRect, true);
             return;
         }
-        var archivePreview = GetOrBuildArchivePreview(texture);
+        var archivePreview = GetOrBuildArchivePreview(texture, linear);
         if (archivePreview != null)
         {
             GUI.DrawTextureWithTexCoords(rect, archivePreview, FlippedSourceRect, true);
@@ -501,7 +510,7 @@ public static class SC2TextureBrowser
         if (preview != null) DrawEntryTexture(rect, entry, preview);
     }
 
-    private static Texture2D GetOrBuildLivePreview(Texture2D source)
+    private static Texture2D GetOrBuildLivePreview(Texture2D source, bool linear)
     {
         if (source == null) return null;
         if (_livePreviewCache.TryGetValue(source, out var cached) && cached != null) return cached;
@@ -514,7 +523,7 @@ public static class SC2TextureBrowser
                 if (tex != null) UnityEngine.Object.Destroy(tex);
             _livePreviewCache.Clear();
         }
-        var built = SC2CustomTextureImporter.BuildFilteredPreview(source);
+        var built = SC2CustomTextureImporter.BuildFilteredPreview(source, linear: linear);
         if (built != null) _livePreviewCache[source] = built;
         return built ?? source;
     }

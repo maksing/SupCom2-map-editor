@@ -35,7 +35,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// <summary>Compact right-side panel (Measure tool button, reference
     /// units list, reference-image controls) — default ON, matching
     /// ShowPanel's own convention.</summary>
-    public bool ShowReferencePanel = true;
+    public bool ShowReferencePanel;
     public bool EnableGameViewNavigation = true;
     public bool EnableHotkeys = true;
     public bool LogActions;
@@ -136,7 +136,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     public bool OverlayProps = true;
     public bool OverlayMarkers = true;
     public bool OverlayUnits = true;
-    public bool OverlayReferenceUnits;
+    public bool OverlayReferenceUnits = true;
     public bool OverlayGraphLand = true;
     public bool OverlayGraphAir = true;
     public bool OverlayGraphNaval = true;

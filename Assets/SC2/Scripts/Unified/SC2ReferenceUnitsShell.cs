@@ -130,7 +130,7 @@ public sealed class SC2ReferenceUnitsShell
                         _terrainShell?.RecordUndoCheckpoint("Move Reference Unit");
                         _dragUndoPending = false;
                     }
-                    unit.Position = draggedTo;
+                    unit.Position = SnapXZ(draggedTo);
                     // Data.ObjReferenceUnits now holds the new position, but
                     // the live 3D preview mesh (SC2GameAssetScenePreview) is
                     // a separate GPU-instanced batch that only re-reads
@@ -175,12 +175,67 @@ public sealed class SC2ReferenceUnitsShell
             }
         }
 
+        // Always drawn (not gated by showOverlay, which only controls the
+        // Radar/Sonar/Vision/Weapon rings) — same reasoning real Units/Props
+        // use: the click/drag handle is a placement-tool aid, independent
+        // of whatever intel-ring visibility the Visibility menu has set,
+        // and the unit's own real mesh has no click target of its own at
+        // small scale/steep angles otherwise.
+        DrawReferenceUnitGlyphs(camera, viewportRect);
         if (showOverlay) DrawIntelOverlays(camera, viewportRect);
     }
+
+    /// <summary>The same rotated-square "pick-dot" glyph
+    /// SC2ObjectsShell.DrawViewportGlyph draws for every real Unit/Prop (own
+    /// small copy here rather than a shared call — that method is private
+    /// to SC2ObjectsShell and reference units intentionally don't share its
+    /// GPU-instanced-marker machinery, which is built for thousands of
+    /// objects; a handful of reference units doesn't need it) — gives the
+    /// user an obvious point to click/drag instead of having to land
+    /// exactly on the real mesh, and the highlighted color marks whichever
+    /// one Delete/the Show* checkboxes in the panel would currently act on.</summary>
+    private void DrawReferenceUnitGlyphs(Camera camera, Rect viewportRect)
+    {
+        if (Data == null || Event.current == null || Event.current.type != EventType.Repaint) return;
+        foreach (var unit in Data.ObjReferenceUnits)
+        {
+            var gui = SC2TerrainShell.WorldToGameGui(camera, viewportRect, unit.Position);
+            if (!viewportRect.Contains(gui)) continue;
+            var selected = unit.Id == _selectedId;
+            DrawGlyph(gui, selected ? new Color(1f, 0.85f, 0.2f, 0.95f) : new Color(0.9f, 0.92f, 0.95f, 0.85f));
+        }
+    }
+
+    private static void DrawGlyph(Vector2 center, Color color)
+    {
+        var oldColor = GUI.color;
+        var oldMatrix = GUI.matrix;
+        const float size = 10f;
+
+        GUI.color = color;
+        GUIUtility.RotateAroundPivot(45f, center);
+        GUI.DrawTexture(new Rect(center.x - size * .5f, center.y - size * .5f, size, size), Texture2D.whiteTexture);
+        GUI.matrix = oldMatrix;
+
+        GUI.color = new Color(.04f, .05f, .07f, Mathf.Clamp01(color.a));
+        var innerSize = Mathf.Max(2f, size - 5f);
+        GUI.DrawTexture(new Rect(center.x - innerSize * .5f, center.y - innerSize * .5f, innerSize, innerSize), Texture2D.whiteTexture);
+        GUI.color = oldColor;
+        GUI.matrix = oldMatrix;
+    }
+
+    /// <summary>Same 1-world-unit grid snap SC2ObjectsShell's own SnapXZ
+    /// applies to every real Unit/Marker placement and drag (Props stay
+    /// freeform there; reference units are buildings, not props, so they
+    /// snap too) — kept as its own copy rather than a shared reference
+    /// since SnapXZ is a private one-liner on that class, not a public
+    /// utility.</summary>
+    private static Vector3 SnapXZ(Vector3 pos) => new(Mathf.Round(pos.x), pos.y, Mathf.Round(pos.z));
 
     private void PlaceAt(Vector3 position)
     {
         if (Data == null || _pendingAsset == null) return;
+        position = SnapXZ(position);
         _terrainShell?.RecordUndoCheckpoint("Place Reference Unit");
         var unit = new SC2ObjReferenceUnit
         {
