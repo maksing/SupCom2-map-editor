@@ -2864,7 +2864,20 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         EnsureTerrainShell();
         SyncTerrainShellSubtab();
         TryAdoptTerrainData();
-        _terrainShell.OnGameViewGUI(camera, new Rect(0f, 0f, Screen.width, Screen.height), Event.current.mousePosition);
+        // Was a fresh full-screen Rect(0,0,Screen.width,Screen.height),
+        // unlike every sibling Handle*GameViewInput call (Objects, Reference
+        // Units, ...), which all correctly pass _viewportRect (excludes the
+        // left panel/header — see UpdateLayoutRects). Passing the full
+        // screen here meant the Terrain brush's own viewport-clip checks
+        // (SC2GeometryMode/SC2PaintMode's DrawGameViewGizmo, the map frame
+        // overlay's projection) were always clipping against a rect that
+        // already included the left panel, so nothing ever got cut off at
+        // the real panel boundary — confirmed via real screenshots of the
+        // Set H/Raise brush rings and the map border both bleeding straight
+        // over the panel and, for the map border, projecting as garbled
+        // diagonal lines (consistent with the camera being driven by a
+        // viewport rect wider than what it's actually rendering into).
+        _terrainShell.OnGameViewGUI(camera, _viewportRect, Event.current.mousePosition);
     }
 
     /// <summary>Keeps OverlayTerrain/OverlayRNM (top-panel Visibility menu)
@@ -3492,7 +3505,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             _objectsShell.OnGameViewGUI(camera, _viewportRect, mousePos, allowInput, _tool,
                 OverlayProps, OverlayUnits, OverlayMarkers,
                 OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
-                OverlayChains, OverlayAreas, objectsTabActive);
+                OverlayChains, OverlayAreas, objectsTabActive, AnyMenuOpen());
         }
         catch (System.Exception ex)
         {
@@ -4155,8 +4168,17 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 var worldZ = Mathf.Lerp(a.y, b.y, t);
                 var worldY = _terrainShell.SampleLiveRuntimeHeight(worldX, worldZ);
                 var guiPoint = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, new Vector3(worldX, worldY, worldZ));
-                if (previousGui.HasValue)
-                    SC2TerrainShell.DrawGuiLineSegment(previousGui.Value, guiPoint, color, 3f);
+                // The camera renders behind the whole GameView UI, so an
+                // edge that falls near/above the map's own horizon (a
+                // shallow camera angle, or a large map frame) still
+                // projects to a valid but off-limits GUI point above the
+                // real viewport — e.g. up through the tab bar/title bar.
+                // Same shared clip every other world-space GUI overlay in
+                // this project already uses (DrawTerrainHuggingRing, the
+                // Measure tool) instead of drawing straight over the UI.
+                if (previousGui.HasValue &&
+                    SC2TerrainShell.ClipSegmentToViewport(_viewportRect, previousGui.Value, guiPoint, out var clippedA, out var clippedB))
+                    SC2TerrainShell.DrawGuiLineSegment(clippedA, clippedB, color, 3f);
                 previousGui = guiPoint;
             }
         }

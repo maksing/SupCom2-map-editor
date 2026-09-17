@@ -5772,7 +5772,7 @@ public sealed class SC2ObjectsShell
     public void OnGameViewGUI(Camera camera, Rect viewportRect, Vector2 mousePosition, bool allowInput,
         string activeTool, bool showProps, bool showUnits, bool showMarkers,
         bool showGraphLand, bool showGraphAir, bool showGraphNaval, bool showGraphAmphibious,
-        bool showChains, bool showAreas, bool objectsTabActive)
+        bool showChains, bool showAreas, bool objectsTabActive, bool anyMenuOpen = false)
     {
         if (!IsReady || camera == null) return;
         Data.EnsureObjectIds();
@@ -5967,6 +5967,24 @@ public sealed class SC2ObjectsShell
         var canMove = canSelect;
         var canPick = canSelect;
 
+        // Path graphs/chains/areas are drawn with plain GUI.DrawTexture
+        // calls, not GUI.Window — this codebase's own established finding
+        // (see SC2GameViewEditorUI's "REVERTED" comment on DrawOpenMenus)
+        // is that GUI.depth doesn't reliably control paint order for that
+        // kind of content, only call order does. HandleObjectsGameViewInput
+        // runs after DrawOpenMenus in the same OnGUI pass, so these lines
+        // always painted over an open File/Edit/View/Visibility/Symmetry/
+        // Tools dropdown regardless of its own GUI.depth. Reordering the
+        // calls isn't safe here — DrawOpenMenus' own click handling
+        // depends on running (and consuming its clicks) before this method,
+        // and Unity reruns the same code for both the input and repaint
+        // passes, so moving it later would let a click meant for an open
+        // menu fall through to whatever's in the viewport underneath
+        // instead. Skipping the draw entirely while a menu is open is the
+        // safe fix: cheap, doesn't touch any of that click-handling, and
+        // the overlay reappears the instant the menu closes.
+        if (!anyMenuOpen)
+        {
         if (showAreas) DrawZoneOverlays(camera, viewportRect, mousePosition, canPick, ref pick);
         if (showGraphLand || showGraphAir || showGraphNaval || showGraphAmphibious || showChains)
         {
@@ -5994,6 +6012,7 @@ public sealed class SC2ObjectsShell
             {
                 SC2Log.LogException(ex);
             }
+        }
         }
         if (showProps)
             foreach (var prop in VisibleForViewport(Data.ObjProps, camera, viewportRect, p => p.Position))

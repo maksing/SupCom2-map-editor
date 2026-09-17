@@ -2541,7 +2541,7 @@ public class SC2TerrainShell : ScriptableObject
     /// still exactly right for a preview that must NOT track the surface
     /// (e.g. SC2GeometryMode's SetHeight-tool preview, which shows the flat
     /// target height plane by design).</summary>
-    public static void DrawGameViewBrush(Camera camera, Rect viewportRect, Vector3 worldPosition, float radius, Color outer, Color inner, float innerRadius = 0f, Func<float, float, float> sampleHeight = null, bool clipToViewport = false)
+    public static void DrawGameViewBrush(Camera camera, Rect viewportRect, Vector3 worldPosition, float radius, Color outer, Color inner, float innerRadius = 0f, Func<float, float, float> sampleHeight = null, bool clipToViewport = true)
     {
         if (Event.current.type != EventType.Repaint || camera == null)
             return;
@@ -2564,16 +2564,22 @@ public class SC2TerrainShell : ScriptableObject
         var previousGuiColor = GUI.color;
         var previousGuiEnabled = GUI.enabled;
         GUI.enabled = true;
-        // A mouse-following brush cursor never needs this (the mouse, and
-        // so the cursor, is only ever drawn while inside the viewport to
-        // begin with) — but a reference unit's static intel ring is sized
-        // from real game data (up to several hundred world units) and often
-        // extends well past the viewport into a side panel. DrawGuiCircle
-        // draws one big textured quad with no clipping of its own, so
-        // without this it painted straight over whichever panel the ring's
-        // bounding box overlapped. GUI.BeginGroup clips its children AND
-        // remaps their coordinates to be relative to the group's own
-        // top-left, hence the `- viewportRect.position` below.
+        // Was defaulted to false on the assumption that "a mouse-following
+        // brush cursor never needs this (the mouse, and so the cursor, is
+        // only ever drawn while inside the viewport to begin with)" — true
+        // for the CENTER point (checked just above), but false for the
+        // ring's own edge: a large-radius brush (e.g. SC2GeometryMode's
+        // SetHeight target-height ring) whose center sits safely inside the
+        // viewport, near the left panel, still projects an edge well past
+        // that boundary, and no caller actually ever opted into
+        // clipToViewport=true to catch it (grep-confirmed: every call site
+        // relied on this default). DrawGuiCircle draws one big textured
+        // quad with no clipping of its own, so without this it painted
+        // straight over whichever panel the ring's bounding box overlapped
+        // — confirmed via a real screenshot of the SetHeight brush's cyan
+        // ring covering the entire left panel. GUI.BeginGroup clips its
+        // children AND remaps their coordinates to be relative to the
+        // group's own top-left, hence the `- viewportRect.position` below.
         if (clipToViewport) GUI.BeginGroup(viewportRect);
         var drawCenter = clipToViewport ? center - viewportRect.position : center;
         DrawGuiCircle(drawCenter, screenRadius, outer, 48);
