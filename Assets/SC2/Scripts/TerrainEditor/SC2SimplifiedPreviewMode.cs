@@ -114,7 +114,12 @@ public sealed class SC2SimplifiedPreviewMode
         _win.SetBasePreviewVisiblePublic(false);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        _lastBuild = SC2TerrainLayerBuilder.Build(Data, sortByTriangleCount: false);
+        // Same outer-perimeter lock the real exporter uses (see its own
+        // comment) — this preview exists specifically to show what the
+        // simplified, export-shaped mesh looks like, so it must protect the
+        // map's own edge from simplification the same way export does.
+        _lastBuild = SC2TerrainLayerBuilder.Build(Data, sortByTriangleCount: false, null,
+            SC2TerrainSimplifier.FindOuterPerimeterVertices(Data));
         BuildMesh(_lastBuild);
         _buildMs = sw.Elapsed.TotalMilliseconds;
         _dirty = false;

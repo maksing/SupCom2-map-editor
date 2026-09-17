@@ -437,15 +437,22 @@ public static class SC2TerrainExporter
 
         SC2Log.Log("[SC2Exporter] Building simplified export layers...");
         var swBuild = System.Diagnostics.Stopwatch.StartNew();
-        // Background terrain (if enabled) needs the core's TRUE outer
-        // perimeter to survive simplification intact, even when the pair
-        // touching the map edge has its own SimplifyRatio > 0 — otherwise
-        // the background's boundary-ring height copy (taken from this
-        // exact ring) could end up seeded from a vertex the core itself
-        // already moved/merged away. Gated on BackgroundTerrainEnabled so
-        // a map that never touches this feature exports byte-for-byte
-        // unchanged.
-        var coreOuterLock = data.BackgroundTerrainEnabled ? SC2TerrainSimplifier.FindOuterPerimeterVertices(data) : null;
+        // The map's own true outer perimeter must always survive
+        // simplification intact — vertex-clustering decimation has no
+        // inherent concept of "this is the map edge, don't touch it," only
+        // of painted pair-to-pair boundaries (SC2TerrainSimplifier.
+        // FindBoundaryVertices). Whenever the pair touching the map edge
+        // has SimplifyRatio > 0 and that edge isn't ALSO a pair boundary
+        // (the common case: one pair usually covers the whole border), the
+        // outer ring had nothing locking it in place and could be
+        // collapsed/removed like any interior vertex — confirmed real:
+        // edge polygons could disappear entirely. Previously only computed
+        // when BackgroundTerrainEnabled (that feature separately needs this
+        // exact ring for its own seam height-copy), which left every other
+        // map's edge unprotected; now unconditional; a map whose outer pair
+        // ring is already fully raw (SimplifyRatio 0) sees no change since
+        // there's nothing for it to protect there in the first place.
+        var coreOuterLock = SC2TerrainSimplifier.FindOuterPerimeterVertices(data);
         var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, (stage, progress) =>
         {
             SC2Log.Log($"[SC2Exporter] Build stage: {stage}");

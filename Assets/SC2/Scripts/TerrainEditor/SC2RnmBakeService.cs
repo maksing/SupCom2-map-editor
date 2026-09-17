@@ -418,7 +418,13 @@ public static class SC2RnmBakeService
         var model = new TerrainModel { Version = 6 };
         pairIndexPerLayer = new List<int>();
 
-        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true);
+        // Same outer-perimeter lock the real exporter uses (see its own
+        // comment) — this bake's geometry must match what's actually
+        // exported, including the map edge surviving simplification intact,
+        // or the lighting bake would be computed against a different (and
+        // possibly edge-truncated) mesh than the one that ships.
+        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null,
+            SC2TerrainSimplifier.FindOuterPerimeterVertices(data));
         // Same per-axis unwrap as the real exporter (SC2TerrainUv1Unwrap) —
         // built once for the whole core terrain, sampled per pair below with
         // that pair's own tiling scale. Keeping the bake's own UV1 in sync
