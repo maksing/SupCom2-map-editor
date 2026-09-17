@@ -2427,56 +2427,68 @@ public static class SC2TerrainExporter
         // this method's own param doc / the field's own doc comment for
         // why "excluded from Collision2" must not mean "excluded from
         // hfield.bdf/Costs" too).
-        // The water surface must be baked into
-        // Collision2 as ONE connected (manifold) mesh with the ground TIN -
-        // a separately-appended, disconnected quad (an earlier approach)
-        // showed up in Blender as its own disjoint island with no shared
-        // vertices, which is exactly what was rejected. Fixed by PADDING the
-        // heightmap with a flat "water shelf" ring (10% beyond the map's
-        // real size, see below) and feeding it into the SAME Delaunay
-        // triangulation the ground already uses, so real terrain and the
-        // water shelf weld into one manifold surface at the boundary.
+        // Getting the INTERIOR of the map's water right took two more
+        // iterations - see git history for the water-footprint-mask attempt
+        // this replaced. Collision2 now gets its OWN heightmap with water
+        // already baked in as real height data, built entirely inside
+        // SC2HfieldProjectionService.Project (its bakeWaterElevation param)
+        // BEFORE that function's FillGaps hole-filler runs, not as a patch
+        // applied afterward here. This matters because FillGaps was written
+        // for small rasterization gaps, not entire material-excluded
+        // regions: its single left-to-right sweep can propagate one
+        // boundary cell's value across an ENTIRE hole in one pass, so a
+        // large lake whose low-index edge happens to touch dry shore would
+        // otherwise get that shore's height smeared across the whole lake
+        // before any later height check could catch it. Baking water first
+        // means FillGaps only ever sees genuinely small gaps again.
+        // hfield.bdf/Costs/RNM-bake all call Project without this param and
+        // are completely unaffected - their heightmap keeps showing every
+        // material's real, unflooded height exactly as before.
         //
-        // Getting the INTERIOR of the map's water right (not just the outer
-        // margin) took two more iterations - see git history for the
-        // water-footprint-mask attempt this replaced. Collision2 now gets
-        // its OWN heightmap with water already baked in as real height data,
-        // built entirely inside SC2HfieldProjectionService.Project (its
-        // bakeWaterElevation param) BEFORE that function's FillGaps hole-
-        // filler runs, not as a patch applied afterward here. This matters
-        // because FillGaps was written for small rasterization gaps, not
-        // entire material-excluded regions: its single left-to-right sweep
-        // can propagate one boundary cell's value across an ENTIRE hole in
-        // one pass, so a large lake whose low-index edge happens to touch
-        // dry shore would otherwise get that shore's height smeared across
-        // the whole lake before any later height check could catch it.
-        // Baking water first means FillGaps only ever sees genuinely small
-        // gaps again. hfield.bdf/Costs/RNM-bake all call Project without
-        // this param and are completely unaffected - their heightmap keeps
-        // showing every material's real, unflooded height exactly as before.
+        // The +10% edge margin computed below is a SEPARATE, unconditional
+        // concern, independent of water entirely: it exists so naval/air
+        // unit and camera collision doesn't hit an abrupt wall/gap exactly
+        // at the map boundary, by extending the mesh a little past it. An
+        // earlier version only added this margin when water was involved
+        // and filled it with a flat plane at the water's own height — which
+        // both skipped the extension for water-less maps entirely, and (for
+        // a map edge that isn't itself flat/at water level) baked a visible
+        // cliff/step right at the boundary instead of a smooth continuation.
+        // Filling the margin by clamping to the real heightmap's own
+        // nearest border cell (extending each edge's actual height outward)
+        // fixes both: it always runs, and it never disagrees with the real
+        // terrain it's extending.
         var bakeWater = waterTopElevation.HasValue && data != null;
-        var waterRaw = bakeWater ? (ushort)Mathf.Clamp(Mathf.RoundToInt(waterTopElevation!.Value * 128f), 0, 65535) : (ushort)0;
         var collisionHfield = SC2HfieldProjectionService.Project(model, existingTerrainTypes, mapX, mapY, data?.Collision2ExcludedMaterialNames, bakeWater ? waterTopElevation : null);
 
-        var heightmapForMesh = collisionHfield.Heightmap;
         var meshMapX = (int)collisionHfield.MapX;
         var meshMapY = (int)collisionHfield.MapY;
-        var marginCells = 0;
-        if (bakeWater)
+        // 5% margin on each side = 10% total extra size, matching the
+        // requested "map size (1024/2048/etc.) + 10%" cap. Unconditional —
+        // independent of water/bakeWater entirely, which only affects
+        // whether SC2HfieldProjectionService.Project above baked a flat
+        // water surface into the map's INTERIOR height data (a separate
+        // concern from this margin). The margin ring is filled by clamping
+        // to the real heightmap's own nearest border cell (extending the
+        // terrain's own edge height outward), not a flat plane at some
+        // unrelated level — a real map's edge is rarely flat, and a
+        // mismatched flat shelf would show a cliff/step right at the map
+        // boundary instead of a smooth continuation.
+        var marginCells = Mathf.Max(1, Mathf.RoundToInt((meshMapX - 1) * 0.05f));
+        var paddedSize = (meshMapX - 1) + marginCells * 2 + 1;
+        var padded = new ushort[paddedSize * paddedSize];
+        for (var gz = 0; gz < paddedSize; gz++)
         {
-            // 5% margin on each side = 10% total extra size, matching the
-            // requested "map size (1024/2048/etc.) + 10%" cap.
-            marginCells = Mathf.Max(1, Mathf.RoundToInt((meshMapX - 1) * 0.05f));
-            var paddedSize = (meshMapX - 1) + marginCells * 2 + 1;
-            var padded = new ushort[paddedSize * paddedSize];
-            for (var i = 0; i < padded.Length; i++) padded[i] = waterRaw;
-            for (var gz = 0; gz < meshMapY; gz++)
-                for (var gx = 0; gx < meshMapX; gx++)
-                    padded[(gz + marginCells) * paddedSize + (gx + marginCells)] = collisionHfield.Heightmap[gz * meshMapX + gx];
-            heightmapForMesh = padded;
-            meshMapX = paddedSize;
-            meshMapY = paddedSize;
+            var srcZ = Mathf.Clamp(gz - marginCells, 0, meshMapY - 1);
+            for (var gx = 0; gx < paddedSize; gx++)
+            {
+                var srcX = Mathf.Clamp(gx - marginCells, 0, meshMapX - 1);
+                padded[gz * paddedSize + gx] = collisionHfield.Heightmap[srcZ * meshMapX + srcX];
+            }
         }
+        var heightmapForMesh = padded;
+        meshMapX = paddedSize;
+        meshMapY = paddedSize;
 
         // maxPolygons is user-adjustable (2500-10000, see SC2Collision2Shell's
         // slider) — 2500 is only the vanilla-observed convention, not a
@@ -2484,18 +2496,15 @@ public static class SC2TerrainExporter
         // counts as plain UInt32 fields with no fixed-size ceiling.
         var raw = SC2Collision2MeshBuilder.Build(heightmapForMesh, meshMapX, meshMapY, maxTriangles: maxPolygons, heightOffset: heightOffset);
 
-        if (bakeWater)
+        // Undo the padding's world-space shift so the real terrain realigns
+        // exactly with world (0,0) again (SC2Collision2MeshBuilder always
+        // places grid index 0 at world 0) - the extended edge then correctly
+        // reaches into negative territory on the low edges and
+        // mapSize+margin on the high edges.
+        for (var i = 0; i < raw.Vertices.Count; i++)
         {
-            // Undo the padding's world-space shift so the real terrain
-            // realigns exactly with world (0,0) again (SC2Collision2MeshBuilder
-            // always places grid index 0 at world 0) - the water shelf then
-            // correctly extends into negative territory on the low edges
-            // and mapSize+margin on the high edges.
-            for (var i = 0; i < raw.Vertices.Count; i++)
-            {
-                var v = raw.Vertices[i];
-                raw.Vertices[i] = (v.X - marginCells, v.Y, v.Z - marginCells);
-            }
+            var v = raw.Vertices[i];
+            raw.Vertices[i] = (v.X - marginCells, v.Y, v.Z - marginCells);
         }
 
         var flatVerts = new TerrainVertex[raw.Vertices.Count];
@@ -2685,7 +2694,7 @@ public static class SC2TerrainExporter
         // on its own for every case that should contribute zero live
         // geometry (not initialized, ImportOnlyMode, no pairs painted) - no
         // separate early-return needed here, the loop below just won't run.
-        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null, null, skipSimplification);
+        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null, SC2TerrainSimplifier.FindOuterPerimeterVertices(data), skipSimplification);
         // Pre-size instead of letting List<T>.Add grow these by repeated
         // doubling — build.BuiltVertexCount/BuiltTriangleCount already give
         // the EXACT final count before a single element is added, so this
