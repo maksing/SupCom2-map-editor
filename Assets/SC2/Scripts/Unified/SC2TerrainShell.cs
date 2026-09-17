@@ -1393,16 +1393,8 @@ public class SC2TerrainShell : ScriptableObject
     /// string WaterTexturePaths actually stores, not a full
     /// SC2TextureReference (water has no document-side texture-slot command
     /// like ordinary materials do).</summary>
-    private static string BuildWaterTexturePath(Texture2D texture)
-    {
-        if (texture == null) return "";
-        var path = SC2TerrainMaterialFactory.TryGetResourcePath(texture) ?? "";
-        var custom = path.StartsWith("file:", System.StringComparison.Ordinal);
-        var identityPath = custom ? path.Substring(5) : path;
-        if (custom) return identityPath;
-        var catalogEntry = SC2TextureCatalog.Instance.FindByResourcePath(identityPath);
-        return catalogEntry?.GamePath ?? "";
-    }
+    private static string BuildWaterTexturePath(Texture2D texture) =>
+        SC2TerrainMaterialFactory.ResolveGamePath(texture);
 
     /// <summary>Optional low-detail decorative terrain surrounding the
     /// playable core on all sides — a real second SC2TerrainData instance

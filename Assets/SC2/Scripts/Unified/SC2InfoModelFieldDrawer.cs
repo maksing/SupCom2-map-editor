@@ -368,8 +368,14 @@ public sealed class SC2InfoModelFieldDrawer
         // before); a typed-path edit already resolved into `picked` inside
         // DrawTexturePickerWithPath and pathDraft already carries what the
         // user typed — keep it verbatim either way it resolved locally or not.
+        // Must go through ResolveGamePath, not TryGetResourcePath directly —
+        // the latter hands back its own internal "archive:<entry path>"/
+        // "file:<path>" round-trip tag, not a real BDF game path, and that
+        // raw tag was getting written straight into InfoModel's texture
+        // fields (and from there into the exported info.bdf) instead of the
+        // clean "/textures/..." path.
         if (pickedViaBrowser)
-            pathDraft = picked != null ? (SC2TerrainMaterialFactory.TryGetResourcePath(picked) ?? "") : "";
+            pathDraft = SC2TerrainMaterialFactory.ResolveGamePath(picked);
         cache = picked;
         cachedPath = pathDraft;
         return cachedPath ?? "";

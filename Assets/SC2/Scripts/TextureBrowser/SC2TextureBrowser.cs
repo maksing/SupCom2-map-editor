@@ -598,7 +598,7 @@ public static class SC2TextureBrowser
     // offered a suggestion at all.
     private const string ArchivePathPrefix = "archive:";
 
-    private static SC2TextureCatalogEntry ResolveEntry(Texture texture)
+    public static SC2TextureCatalogEntry ResolveEntry(Texture texture)
     {
         if (texture == null) return null;
         var path = SC2TerrainMaterialFactory.TryGetResourcePath(texture);

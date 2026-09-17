@@ -103,6 +103,57 @@ public static class SC2TerrainMaterialFactory
     public static string TryGetResourcePath(Texture tex) =>
         tex != null && _resourcePathByTexture.TryGetValue(tex, out var path) ? path : null;
 
+    /// <summary>Converts a picked texture into the clean, real BDF-relative
+    /// game path ("/textures/environment/red_sky.dds") that a persisted
+    /// string field (WaterTexturePaths, InfoModel's EnvironmentMap/SkyMap/
+    /// ColorCorrectionCube/FogOfWarCorrectionCube/etc.) must actually store —
+    /// never TryGetResourcePath's own raw internal tag ("file:...",
+    /// "archive:...", or (for a Cubemap/Texture3D resolved by
+    /// LoadTexturePublicAny) a raw AssetDatabase/Resources path) verbatim,
+    /// which round-trips fine back into a live Texture via this factory's
+    /// own loaders but is not a real game path and corrupts the exported
+    /// .bdf if written there directly.
+    ///
+    /// Delegates to SC2TextureBrowser.ResolveEntry — the same lookup the
+    /// Diffuse/Normal/Mask picker already relies on to suggest sibling
+    /// textures — rather than re-deriving a narrower "file:"/"archive:"-only
+    /// version here: an earlier version of this method handled only those
+    /// two tags directly, which left EnvironmentMap/SkyMap/
+    /// ColorCorrectionCube blank because LoadTexturePublicAny registers
+    /// Cubemap/Texture3D picks under a raw AssetDatabase or Resources path
+    /// instead, which ResolveEntry's own final by-name fallback against the
+    /// catalog still resolves correctly.</summary>
+    public static string ResolveGamePath(Texture texture)
+    {
+        var entry = SC2TextureBrowser.ResolveEntry(texture);
+        if (entry == null) return "";
+        // GamePath is only populated for a vanilla entry backed by a real
+        // loose file on disk (see SC2TextureCatalogEntry.GamePath's own doc
+        // comment) - an entry sourced live from a .scd archive (the common
+        // case for a game install that was never manually extracted) only
+        // ever gets ArchiveEntryPath set, so GamePath must fall back to it
+        // or every archive-sourced pick resolves to an empty path. Both
+        // fields lose their leading '/' during SC2TextureCatalogEntry.
+        // Normalize (needed for its own stable-id hashing), but the real
+        // info.bdf/.bdf format always carries one (confirmed against the
+        // standalone InfoBdfEditor tool's own ComputeBdfTexturePath, and
+        // this project's established "'/Textures\Name.dds'" bdfPath
+        // convention elsewhere) - add it back here for the value actually
+        // being persisted into the model.
+        var relative = !string.IsNullOrEmpty(entry.GamePath) ? entry.GamePath : entry.ArchiveEntryPath;
+        if (string.IsNullOrEmpty(relative)) return "";
+        // Real .bdf texture paths never carry the ".win" mid-filename
+        // platform marker (same rule the standalone InfoBdfEditor tool's
+        // own ComputeBdfTexturePath and SC2TerrainExporter's own basename
+        // cleanup already apply) - strip it here too, whether or not the
+        // source file on disk/in the archive happens to have it.
+        var ext = System.IO.Path.GetExtension(relative);
+        var stem = relative.Substring(0, relative.Length - ext.Length);
+        if (stem.EndsWith(".win", System.StringComparison.OrdinalIgnoreCase))
+            stem = stem[..^4];
+        return "/" + stem + ext;
+    }
+
     public static void RegisterResourcePath(Texture texture, string resourcePath)
     {
         if (texture == null || string.IsNullOrWhiteSpace(resourcePath)) return;
