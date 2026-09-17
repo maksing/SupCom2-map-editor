@@ -522,6 +522,15 @@ public class SC2PairsMode
         {
             _win.RecordUndoCheckpointFor(Data, "Change Tiling Scale");
             pair.TilingScale = newTilingScale;
+            // Without this, the value was stored correctly (and the final
+            // export/EffectiveUvTilingScale resolver would use it) but the
+            // live GPU preview's own per-pair UV-scale LUT — rebuilt only
+            // when _previewDirty triggers ApplyPreviewModeToChunks — never
+            // refreshed, so the viewport kept showing the old tiling
+            // indefinitely and the edit read as having no effect at all.
+            // Matches the sibling Pair Color field's own pattern just above.
+            EditorUtility.SetDirty(Data);
+            _win.MarkDirtyAndRepaint();
         }
         EditorGUI.EndDisabledGroup();
         if (globalUvActive)
