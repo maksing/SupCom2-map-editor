@@ -435,15 +435,28 @@ public static class SC2TextureBrowser
     /// all.</summary>
     private static Texture ResolveRealAsset(SC2TextureCatalogEntry entry)
     {
+        // Normal/RNM textures are raw linear vector/blend data, not sRGB
+        // color — the SAME condition SC2TextureThumbnailCache.Load already
+        // uses for the browser's own preview thumbnails. Both runtime
+        // decode calls below used to omit this entirely (TryLoadAny had no
+        // way to even accept it), so the REAL Texture2D handed to a
+        // material's Normal/Mask field got its GPU-level sRGB tag baked
+        // wrong at the moment it was picked — no later preview-side fix
+        // (e.g. the left panel's own filtered-preview blit) can correct a
+        // source texture that's already mistagged. Confirmed real: a picked
+        // vanilla normal map rendered visibly different (flatter, more
+        // saturated blue) than that same file's own — correctly linear —
+        // browser thumbnail.
+        var linear = entry.Usage == SC2TextureUsage.Normal || entry.Usage == SC2TextureUsage.Rnm;
         if (!string.IsNullOrEmpty(entry.ResourcePath))
         {
             var loaded = Resources.Load<Texture>(entry.ResourcePath);
             if (loaded != null) return loaded;
         }
-        if (!string.IsNullOrEmpty(entry.GamePath) && SC2CustomTextureImporter.TryLoadAny(entry.GamePath, out var any, out _))
+        if (!string.IsNullOrEmpty(entry.GamePath) && SC2CustomTextureImporter.TryLoadAny(entry.GamePath, out var any, out _, linear))
             return any;
         if (!string.IsNullOrEmpty(entry.ArchiveEntryPath) && SC2GameArchiveRegistry.TryGetReader(out var reader)
-            && SC2CustomTextureImporter.TryLoadFromArchive(reader, entry.ArchiveEntryPath, out var archiveTex, out _))
+            && SC2CustomTextureImporter.TryLoadFromArchive(reader, entry.ArchiveEntryPath, out var archiveTex, out _, linear))
             return archiveTex;
         if (!string.IsNullOrEmpty(entry.ThumbnailResourcePath))
         {

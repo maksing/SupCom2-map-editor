@@ -134,13 +134,30 @@ public static class SC2CustomTextureImporter
     /// cubemap/volume DDS, a Texture2D otherwise. Used where the caller
     /// actually needs to hand the real object on (e.g. SC2TextureBrowser's
     /// Accept()), not just draw a preview.</summary>
-    public static bool TryLoadAny(string path, out Texture texture, out string error)
+    /// <summary>`linear`: same meaning as TryLoad's own — true for normal
+    /// maps/RNM masks, raw vector/blend data that must not be gamma-decoded.
+    /// Was missing entirely (always decoded sRGB regardless of the real
+    /// usage) — every OTHER loader in this file (TryLoad/TryLoadFromArchive/
+    /// TryLoadPreviewFromArchive) already threads this through, but this is
+    /// the one SC2TextureBrowser.ResolveRealAsset itself calls to build the
+    /// REAL Texture2D handed to a material's Diffuse/Normal/Mask field — so
+    /// a picked Normal/RNM texture's own GPU-level sRGB tag was baked wrong
+    /// at the moment it was picked, before either preview path (browser
+    /// thumbnail vs. left-panel inline preview) ever got a chance to differ:
+    /// no amount of correctly setting a PREVIEW blit's read/write mode can
+    /// fix a source texture whose own texture object is already tagged
+    /// sRGB. Confirmed real: a vanilla normal map's true colors are
+    /// purple/lavender (matches its own browser thumbnail, decoded via the
+    /// correctly-linear TryLoad/TryLoadFromArchive path), but the picked
+    /// material's own texture — resolved through this function — rendered
+    /// visibly different (a flatter, more saturated blue) once assigned.</summary>
+    public static bool TryLoadAny(string path, out Texture texture, out string error, bool linear = false)
     {
         texture = null;
         error = null;
         try
         {
-            if (!TryLoadBytesAny(File.ReadAllBytes(path), Path.GetExtension(path), out texture, out var preview, out _, out _, out error))
+            if (!TryLoadBytesAny(File.ReadAllBytes(path), Path.GetExtension(path), out texture, out var preview, out _, out _, out error, linear))
                 return false;
             if (!ReferenceEquals(preview, texture) && preview != null) UnityEngine.Object.Destroy(preview);
             return texture != null;
