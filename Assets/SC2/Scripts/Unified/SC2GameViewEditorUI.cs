@@ -4443,6 +4443,19 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_quitConfirmShowing)
             return false; // Already asking — don't stack a second native dialog on top.
 
+        // Still on the mandatory startup screen (game-install setup/Create
+        // New Map/Open Map) — the user hasn't actually opened or created
+        // anything THIS session yet, so there's nothing to lose no matter
+        // what terrainShell.Data currently holds. Without this check, a
+        // ScriptableObject-backed RuntimeTerrainData left over
+        // IsInitialized=true from a PREVIOUS Play session (Unity persists a
+        // ScriptableObject asset's state across Play sessions in the
+        // Editor, unlike a scene MonoBehaviour) prompted "Save changes to
+        // 'NewMap'?" before the user had even reached the startup screen's
+        // own buttons.
+        if (_activeInstance?.StartupComplete != true)
+            return true;
+
         var terrainShell = _activeInstance?._terrainShell;
         if (terrainShell?.Data == null || !terrainShell.Data.IsInitialized)
             return true; // Nothing loaded - nothing to lose, quit immediately without prompting.
