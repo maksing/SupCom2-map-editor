@@ -1242,6 +1242,49 @@ public static class SC2TerrainExporter
             return Mathf.Lerp(Mathf.Lerp(H(x0, z0), H(x1, z0), tx), Mathf.Lerp(H(x0, z1), H(x1, z1), tx), tz);
         }
         var decalsBytes = SC2DecalsExportService.Build(session, mapName, out var decalDiffuseAtlasBytes, out var decalNormalAtlasBytes, SampleLiveHeightForDecals);
+
+        // Stale textures from a PREVIOUS export of this same map (e.g. a
+        // material's Diffuse got replaced, or a texture got removed
+        // entirely) used to linger in texDir forever - nothing here ever
+        // deleted anything, only ever added/overwrote. texDir is this one
+        // map's own exclusive output folder (outputDir is already the
+        // per-map root - see this function's own opening comment), never
+        // shared with another map's export, so it's safe to remove
+        // whatever the CURRENT export didn't just write or keep:
+        // fileNameOwner already holds the complete, authoritative set of
+        // filenames this run actually needs (every write into texDir goes
+        // through UniqueFileName, which populates it) - only cleaned up
+        // once export has fully succeeded (this is the success return
+        // path), so a failed/aborted export never wipes an existing map's
+        // textures based on a partial fileNameOwner set.
+        try
+        {
+            foreach (var existing in Directory.GetFiles(texDir))
+            {
+                if (!fileNameOwner.ContainsKey(Path.GetFileName(existing)))
+                    File.Delete(existing);
+            }
+        }
+        catch (Exception ex) { warnings.Add($"Textures cleanup: {ex.Message}"); }
+
+        // Same stale-file problem, same fix, for lightingDir: a renamed/
+        // removed RnmMaskName (or a pair deleted entirely) used to leave its
+        // old "{safe}_0/1/2.win.dds" trio behind forever. rnmCache's keys
+        // are the complete set of mask-name stems ExportRnmMaskByName
+        // actually wrote/kept this run.
+        try
+        {
+            foreach (var existing in Directory.GetFiles(lightingDir))
+            {
+                var name = Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(existing)); // strip .dds then .win
+                var underscoreAt = name.LastIndexOf('_');
+                var safe = underscoreAt > 0 ? name[..underscoreAt] : name;
+                if (!rnmCache.ContainsKey(safe))
+                    File.Delete(existing);
+            }
+        }
+        catch (Exception ex) { warnings.Add($"Lighting cleanup: {ex.Message}"); }
+
         EditorUtility.ClearProgressBar();
         return new SC2ExportArtifacts
         {
@@ -1300,14 +1343,30 @@ public static class SC2TerrainExporter
         File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.collision2.win.bdf"), artifacts.Collision2Bytes);
         File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.info.win.bdf"), artifacts.InfoBytes);
         File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.mapobjs.win.bdf"), artifacts.MapObjsBytes);
+        // Each of these three files used to only ever get WRITTEN when its
+        // bytes were non-null, never removed when they went back to null
+        // (e.g. every decal was deleted from the map) — the previous
+        // export's now-stale decals.bdf/atlas files stayed on disk forever,
+        // silently still referencing textures/geometry no longer part of
+        // the map. Delete explicitly in the else branch instead of only
+        // ever adding.
+        var decalsBdfPath = Path.Combine(mapDir, $"{mapName}.decals.win.bdf");
         if (artifacts.DecalsBytes != null)
-            File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.decals.win.bdf"), artifacts.DecalsBytes);
+            File.WriteAllBytes(decalsBdfPath, artifacts.DecalsBytes);
+        else if (File.Exists(decalsBdfPath))
+            File.Delete(decalsBdfPath);
         if (artifacts.DecalDiffuseAtlasBytes != null || artifacts.DecalNormalAtlasBytes != null)
             Directory.CreateDirectory(Path.Combine(mapDir, "decals"));
+        var decalDiffusePath = Path.Combine(mapDir, "decals", "decals_diffuse.win.dds");
         if (artifacts.DecalDiffuseAtlasBytes != null)
-            File.WriteAllBytes(Path.Combine(mapDir, "decals", "decals_diffuse.win.dds"), artifacts.DecalDiffuseAtlasBytes);
+            File.WriteAllBytes(decalDiffusePath, artifacts.DecalDiffuseAtlasBytes);
+        else if (File.Exists(decalDiffusePath))
+            File.Delete(decalDiffusePath);
+        var decalNormalPath = Path.Combine(mapDir, "decals", "decals_normal.win.dds");
         if (artifacts.DecalNormalAtlasBytes != null)
-            File.WriteAllBytes(Path.Combine(mapDir, "decals", "decals_normal.win.dds"), artifacts.DecalNormalAtlasBytes);
+            File.WriteAllBytes(decalNormalPath, artifacts.DecalNormalAtlasBytes);
+        else if (File.Exists(decalNormalPath))
+            File.Delete(decalNormalPath);
         var luaEncoding = new System.Text.UTF8Encoding(false);
         // Compiled-slot lua lives right alongside the bdf files in maps/
         // <mapName>/, matching a real per-map .scd (confirmed against a real
