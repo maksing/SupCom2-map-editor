@@ -3432,6 +3432,12 @@ public class SC2TerrainShell : ScriptableObject
         {
             RecordUndoCheckpoint("Init");
             _data.InitializeFlatPlane(side, side, cellSize);
+            // side is a fixed triangle-budget sculpting resolution, unrelated
+            // to the physical map size picked above — CostsGridSize (the
+            // exported hfield/Costs grid's own resolution) must track that
+            // world-unit size instead, or a map created at "512" silently
+            // exports/paints Costs at the 1024 default.
+            _data.CostsGridSize = Mathf.RoundToInt(_initMapSizeWU);
             EditorUtility.SetDirty(_data);
             SchedulePreviewBuild();
         }
@@ -3453,6 +3459,7 @@ public class SC2TerrainShell : ScriptableObject
         {
             RecordUndoCheckpoint("Import HM");
             _data.InitializeFlatPlane(side, side, cellSize);
+            _data.CostsGridSize = Mathf.RoundToInt(_initMapSizeWU);
             try
             {
                 _data.ImportHeightmap(_initHeightmap, _initHeightScale);
@@ -3498,6 +3505,7 @@ public class SC2TerrainShell : ScriptableObject
         {
             RecordUndoCheckpoint("Import HM");
             _data.InitializeFlatPlane(side, side, cellSize);
+            _data.CostsGridSize = Mathf.RoundToInt(_initMapSizeWU);
             _data.ImportHeightmap(tex, _initHeightScale);
             SchedulePreviewBuild();
         }

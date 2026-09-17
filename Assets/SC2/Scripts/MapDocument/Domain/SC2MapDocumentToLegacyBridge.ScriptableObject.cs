@@ -51,12 +51,22 @@ namespace SC2.MapEditor.Document
             }
 
             // `data` is a fresh instance here, so CostsGridSize is still its
-            // default (1024) — SC2HfieldDocument.MapX/MapY exist but are never
-            // actually populated by the forward bridge yet (pending a
-            // separate Hfield/Costs document migration), so there's
-            // nothing non-default to read back at this specific reconstruction
-            // point regardless. Same behavior as the previous hardcoded
-            // constant for every map that hasn't gone through that migration.
+            // default (1024) unless restored from the saved document.
+            // SC2HfieldLegacyBridge.BuildFromLegacy (the forward/save
+            // direction) already writes the real CostsGridSize into
+            // MapX/MapY - this read-back was missing, so a saved map using
+            // any other grid size reloaded with CostsGridSize silently
+            // reset to 1024, and EnsureCostsAndTerrainTypes' own
+            // mismatched-length guard would then destructively resize the
+            // just-loaded CostsBlocks/TerrainTypes arrays to match (the
+            // exact failure mode SC2RuntimeTerrainPersistence's own legacy
+            // JSON load path already had a comment warning about and a
+            // real fix for - this document-package path just never got the
+            // matching fix). 0 means an older save written before MapX/MapY
+            // were populated - keep the in-memory default rather than
+            // collapsing the grid to 0x0.
+            if (document.Hfield != null && document.Hfield.MapX > 0)
+                data.CostsGridSize = document.Hfield.MapX;
             var gridCellCount = data.CostsGridSize * data.CostsGridSize;
             var hfield = ReconstructHfield(document.Hfield, blobStore, gridCellCount);
             data.TerrainTypes = hfield.TerrainTypes;

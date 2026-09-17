@@ -722,6 +722,14 @@ public sealed partial class SC2GameViewEditorUI
         data.MapName = mapName;
         var (side, cellSize) = SC2TerrainShell.ComputeFlatPlaneGrid(sizeWu);
         data.InitializeFlatPlane(side, side, cellSize);
+        // ComputeFlatPlaneGrid's own `side` is a fixed triangle-budget
+        // sculpting resolution, unrelated to sizeWu (the world-space size
+        // the "512"/"1024"/"2048" buttons here actually pick) - CostsGridSize
+        // (the exported hfield/Costs grid's own real resolution, see that
+        // field's own doc comment) was left at its 1024 default regardless
+        // of which size button the user picked, so a map created at "512"
+        // silently exported/painted Costs at 1024.
+        data.CostsGridSize = Mathf.RoundToInt(sizeWu);
         return data;
     }
 
