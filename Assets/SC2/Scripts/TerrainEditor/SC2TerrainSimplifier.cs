@@ -154,8 +154,24 @@ public static class SC2TerrainSimplifier
 
         var width = Mathf.Max(0.001f, maxX - minX);
         var depth = Mathf.Max(0.001f, maxZ - minZ);
-        var thin = Math.Min(width, depth) <= Mathf.Max(0.001f, Mathf.Max(width, depth) * 0.035f);
-        var boundaryHeavy = seen.Count > 0 && boundaryHits / (float)seen.Count > 0.35f;
+        // thin/boundaryHeavy are shape heuristics meant to protect small,
+        // decorative features (a painted road, a thin coastal transition
+        // strip) from vertex-clustering distortion - below kPerimeterAreaTriLimit,
+        // same size ceiling perimeterAreaHeavy already uses. Un-gated, a
+        // large, substantial pair that simply borders many other pairs
+        // across a big map (e.g. a widespread Sand/Rock transition covering
+        // most of the terrain) legitimately has >35% of its own vertices on
+        // a shared boundary without being anything like a thin strip -
+        // confirmed via a real map where a 128k-triangle pair spanning the
+        // whole map (1012x1012, i.e. NOT thin) stayed at 0% reduction
+        // regardless of its SimplifyRatio purely because of this. Above the
+        // ceiling, SimplifyByVertexClustering already locks/protects real
+        // boundary vertices during clustering, so raw-vertex-count-based
+        // shape heuristics aren't needed to keep those seams intact.
+        var thin = triCount <= kPerimeterAreaTriLimit &&
+                   Math.Min(width, depth) <= Mathf.Max(0.001f, Mathf.Max(width, depth) * 0.035f);
+        var boundaryHeavy = triCount <= kPerimeterAreaTriLimit &&
+                             seen.Count > 0 && boundaryHits / (float)seen.Count > 0.35f;
         var perimeterAreaHeavy = triCount <= kPerimeterAreaTriLimit && HasHighPerimeterAreaRatio(allVerts, pairTris);
         return thin || boundaryHeavy || perimeterAreaHeavy;
     }

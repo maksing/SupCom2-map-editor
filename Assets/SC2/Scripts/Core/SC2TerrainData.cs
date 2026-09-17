@@ -1058,12 +1058,18 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         return list;
     }
 
+    // Was returning Materials[p.Mat1Index].Color (the underlying material's
+    // own diffuse tint) instead of the pair's own explicitly user-set
+    // SC2MaterialPair.PairColor (the "Pair Color" field edited in the Pairs
+    // tab, SC2MaterialsPairsMode.cs) - every swatch/preview-mesh caller
+    // (Simplified preview, Paint assign-pair swatch, Export panel's
+    // per-pair list) wants this method to identify THIS pair visually, not
+    // whichever material happens to be Mat1, so a pair's preview color
+    // never matched the color the user actually picked for it.
     public Color PairColor(int pi)
     {
         if(pi<0||pi>=Pairs.Count)return Color.grey;
-        var p=Pairs[pi];
-        if(p.Mat1Index>=0&&p.Mat1Index<Materials.Count)return Materials[p.Mat1Index].Color;
-        return Color.grey;
+        return Pairs[pi].PairColor;
     }
     // ── Computed geometry (derived from Heights on demand) ───────────────────
     // Exporter and Simplifier use these. Not stored — built from Heights.
