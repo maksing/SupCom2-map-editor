@@ -980,6 +980,10 @@ namespace SC2.MapEditor.Document
             var flags = SC2JsonValue.NewObject();
             foreach (var kv in m.Flags) flags.Set(kv.Key, SC2JsonValue.Of(kv.Value));
             o.Set("flags", flags);
+            var vectors = SC2JsonValue.NewObject();
+            foreach (var kv in m.Vectors) vectors.Set(kv.Key, WriteFloatArray(kv.Value));
+            o.Set("vectors", vectors);
+            o.Set("blendState", SC2JsonValue.Of(m.BlendState));
             return o;
         }
 
@@ -988,6 +992,8 @@ namespace SC2.MapEditor.Document
             var m = new SC2ImportedTerrainMaterialOverrideDocument();
             foreach (var kv in o.Get("textures").Members()) m.TextureResourcePaths[kv.Key] = kv.Value.AsString("");
             foreach (var kv in o.Get("flags").Members()) m.Flags[kv.Key] = (float)kv.Value.AsDouble(0);
+            foreach (var kv in o.Get("vectors").Members()) m.Vectors[kv.Key] = ReadFloatArray(kv.Value, 4, new float[4]);
+            m.BlendState = o.Get("blendState").AsString("");
             return m;
         }
 

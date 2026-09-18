@@ -203,6 +203,8 @@ public class MapDocumentSerializerTests
         var importedOverride = new SC2ImportedTerrainMaterialOverrideDocument();
         importedOverride.TextureResourcePaths["_Diffuse1"] = "SC2Textures/rock_d";
         importedOverride.Flags["_EnableRNM"] = 1f;
+        importedOverride.Vectors["_TextureScroll"] = new[] { 0.5f, -0.25f, 0f, 0f };
+        importedOverride.BlendState = "TerrainAlphaBlendState";
         doc.Terrain.ImportedEntries.Add(new SC2ImportedTerrainEntryDocument
         {
             Id = "imported-1", DisplayName = "Imported Rock",
@@ -442,6 +444,8 @@ public class MapDocumentSerializerTests
         Assert.Single(restoredImported.MaterialOverrides);
         Assert.Equal("SC2Textures/rock_d", restoredImported.MaterialOverrides[0].TextureResourcePaths["_Diffuse1"]);
         Assert.Equal(1f, restoredImported.MaterialOverrides[0].Flags["_EnableRNM"]);
+        Assert.Equal(new[] { 0.5f, -0.25f, 0f, 0f }, restoredImported.MaterialOverrides[0].Vectors["_TextureScroll"]);
+        Assert.Equal("TerrainAlphaBlendState", restoredImported.MaterialOverrides[0].BlendState);
 
         Assert.Equal("scenario-lua-hash", restored.Scenario.OriginalScenarioLua.ContentHash);
         Assert.Equal("save-lua-hash", restored.Scenario.OriginalSaveLua.ContentHash);

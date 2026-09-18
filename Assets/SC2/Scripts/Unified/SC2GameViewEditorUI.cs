@@ -330,13 +330,37 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private static readonly string[] ImportedMaterialTextureProps =
         { "_Diffuse1", "_Diffuse2", "_Normal1", "_Normal2", "_Mask1", "_Mask2", "_Ramp", "_RNMMask0", "_RNMMask1", "_RNMMask2" };
+    // Was only 4 of the 12 single-float shader properties the "Shader
+    // Setup" panel (below, ~line 5670) actually exposes toggles/sliders
+    // for — DiffuseLighting/SpecularLighting/Glow/EnvironmentMapping/
+    // DynamicShadows/InfiniteDistance/AlphaTest(+its Threshold) were toggled
+    // live on the material with no entry here to ever capture them, so they
+    // silently reverted to the freshly-imported BDF's own defaults on every
+    // Undo AND on every Save/Load round trip even though the UI showed them
+    // changing. CaptureImportedEntrySnapshot/SyncImportedTerrainsToDocument/
+    // ApplyImportedTerrainsSnapshot/RestoreImportedTerrainsFromDocument all
+    // drive off this one array, so listing every property here is the only
+    // change those 4 call sites needed.
     private static readonly string[] ImportedMaterialFlagProps =
-        { "_EnableRNM", "_EnableAmbient", "_EnableBlending", "_EnableFog" };
+    {
+        "_EnableRNM", "_EnableAmbient", "_EnableDiffuseLighting", "_EnableSpecularLighting",
+        "_EnableBlending", "_EnableFog", "_EnableGlow", "_EnableEnvironmentMapping",
+        "_EnableDynamicShadows", "_EnableInfiniteDistance", "_EnableAlphaTest", "_AlphaTestThreshold",
+    };
+    // Vector-valued shader properties the Shader Setup panel also exposes
+    // (Texture Scroll) — same "never captured anywhere" gap as the flags
+    // above, just needing GetVector/SetVector instead of GetFloat/SetFloat.
+    private static readonly string[] ImportedMaterialVectorProps = { "_TextureScroll" };
 
     private sealed class ImportedMaterialSnapshot
     {
         public Dictionary<string, Texture> Textures = new();
         public Dictionary<string, float> Flags = new();
+        public Dictionary<string, Vector4> Vectors = new();
+        // The "State" popup (TerrainAlphaBlendState/TerrainAdditiveState/
+        // TerrainOpaqueState/None) — see SC2TerrainMaterialFactory.
+        // ApplyBlendState/ReverseLookupBlendState. Null/empty means "None".
+        public string BlendState;
     }
 
     private sealed class ImportedEntrySnapshot
@@ -436,6 +460,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     foreach (var prop in ImportedMaterialFlagProps)
                         if (mat.HasProperty(prop))
                             matSnap.Flags[prop] = mat.GetFloat(prop);
+                    foreach (var prop in ImportedMaterialVectorProps)
+                        if (mat.HasProperty(prop))
+                            matSnap.Vectors[prop] = mat.GetVector(prop);
+                    matSnap.BlendState = SC2TerrainMaterialFactory.ReverseLookupBlendState(mat);
                 }
                 snap.Materials.Add(matSnap);
             }
@@ -493,6 +521,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                         foreach (var prop in ImportedMaterialFlagProps)
                             if (mat.HasProperty(prop))
                                 ov.Flags[prop] = mat.GetFloat(prop);
+                        foreach (var prop in ImportedMaterialVectorProps)
+                            if (mat.HasProperty(prop))
+                            {
+                                var v = mat.GetVector(prop);
+                                ov.Vectors[prop] = new[] { v.x, v.y, v.z, v.w };
+                            }
+                        ov.BlendState = SC2TerrainMaterialFactory.ReverseLookupBlendState(mat) ?? "";
                     }
                     doc.MaterialOverrides.Add(ov);
                 }
@@ -562,6 +597,24 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
             var meshRenderer = result.Root.GetComponent<MeshRenderer>();
             var originalMaterials = meshRenderer != null ? meshRenderer.sharedMaterials : System.Array.Empty<Material>();
+            // Restores DrawMaterialTextureSlot's own per-slot path-override
+            // dictionary (SC2ImportedTerrainEntry.TexturePathOverrides), not
+            // just the live material's bound texture — SC2TerrainMaterial
+            // Exporter.ApplyFromScene reads ONLY this dictionary (never the
+            // live texture's own resolved path) to decide what to actually
+            // write into an exported terrain.bdf's TexturePaths for a
+            // Custom-/archive-sourced pick, since TryUpdateSlot's own
+            // fallback (UnityEditor.AssetDatabase.GetAssetPath) can only
+            // ever resolve a REAL project asset, never one of these
+            // in-memory-decoded textures. Leaving this dictionary empty
+            // after a reload — as a prior version of this restore did —
+            // meant a picked custom/archive texture kept rendering
+            // correctly in the scene (the live material texture WAS
+            // restored, just below) while silently exporting nothing (or
+            // reverting to whatever the ORIGINAL, pre-pick .bdf path was)
+            // for that exact slot, and the picker's own path field showed
+            // blank instead of the path it had actually resolved to.
+            var restoredPathOverrides = new Dictionary<string, string>();
             for (var i = 0; i < originalMaterials.Length && i < doc.MaterialOverrides.Count; i++)
             {
                 var mat = originalMaterials[i];
@@ -569,6 +622,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 var ov = doc.MaterialOverrides[i];
                 foreach (var kv in ov.TextureResourcePaths)
                 {
+                    // Only a "file:"/"archive:" tag needs to survive as an
+                    // explicit override — a plain Resources-backed path
+                    // resolves fine on its own via TryUpdateSlot's
+                    // AssetDatabase fallback, exactly matching
+                    // DrawMaterialTextureSlot's own "isRealAsset" condition
+                    // for when a live pick sets vs. clears this entry.
+                    if (kv.Value.StartsWith("file:", System.StringComparison.Ordinal) ||
+                        kv.Value.StartsWith("archive:", System.StringComparison.Ordinal))
+                        restoredPathOverrides[i + ":" + kv.Key] = kv.Value;
                     if (!mat.HasProperty(kv.Key)) continue;
                     // ResolveFromResourcePath, not LoadTexturePublicAny — kv.Value
                     // is a saved RESOURCE path (SC2TerrainMaterialFactory.
@@ -594,6 +656,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 }
                 foreach (var kv in ov.Flags)
                     if (mat.HasProperty(kv.Key)) mat.SetFloat(kv.Key, kv.Value);
+                foreach (var kv in ov.Vectors)
+                    if (mat.HasProperty(kv.Key) && kv.Value != null && kv.Value.Length >= 4)
+                        mat.SetVector(kv.Key, new Vector4(kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3]));
+                SC2TerrainMaterialFactory.ApplyBlendState(mat, string.IsNullOrEmpty(ov.BlendState) ? null : ov.BlendState);
             }
 
             var entry = new SC2ImportedTerrainEntry
@@ -609,6 +675,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     .Select(m => m != null && m.HasProperty("_EnableRNM") ? m.GetFloat("_EnableRNM") : 0f)
                     .ToArray(),
                 RecomputeNormals = doc.RecomputeNormals,
+                TexturePathOverrides = restoredPathOverrides,
             };
             _importedTerrains.Add(entry);
         }
@@ -642,6 +709,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     if (mat == null) continue;
                     foreach (var kv in s.Materials[i].Textures) mat.SetTexture(kv.Key, kv.Value);
                     foreach (var kv in s.Materials[i].Flags) mat.SetFloat(kv.Key, kv.Value);
+                    foreach (var kv in s.Materials[i].Vectors) mat.SetVector(kv.Key, kv.Value);
+                    SC2TerrainMaterialFactory.ApplyBlendState(mat, s.Materials[i].BlendState);
                 }
 
             entry.Root.SetActive(s.Active);

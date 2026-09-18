@@ -13,11 +13,22 @@ namespace SC2.MapEditor.Document
     {
         public Dictionary<string, string> TextureResourcePaths = new();
         public Dictionary<string, float> Flags = new();
+        // Vector-valued shader properties (e.g. "_TextureScroll") — kept
+        // separate from Flags since GetFloat/SetFloat can't carry a Vector4.
+        // Each value is a plain 4-float array, same convention this file's
+        // own Position/EulerAngles/Scale already use.
+        public Dictionary<string, float[]> Vectors = new();
+        // The named render-state preset applied via SC2TerrainMaterialFactory.
+        // ApplyBlendState/ReverseLookupBlendState (e.g. "TerrainAlphaBlendState")
+        // — empty means no override (default opaque state).
+        public string BlendState = "";
 
         public SC2ImportedTerrainMaterialOverrideDocument Clone() => new()
         {
             TextureResourcePaths = new Dictionary<string, string>(TextureResourcePaths),
             Flags = new Dictionary<string, float>(Flags),
+            Vectors = new Dictionary<string, float[]>(Vectors),
+            BlendState = BlendState,
         };
     }
 
