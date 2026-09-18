@@ -75,9 +75,45 @@ namespace SC2.MapEditor.Textures
             ResourcePath = NormalizePath(ResourcePath);
             GamePath = NormalizePath(GamePath);
             ArchiveEntryPath = NormalizePath(ArchiveEntryPath);
-            Name = string.IsNullOrWhiteSpace(Name) ? Leaf(!string.IsNullOrEmpty(ResourcePath) ? ResourcePath : ArchiveEntryPath) : Name.Trim();
-            Category = string.IsNullOrWhiteSpace(Category) ? CategoryFromPath(!string.IsNullOrEmpty(ResourcePath) ? ResourcePath : ArchiveEntryPath) : Category.Trim();
+            var pathForNaming = !string.IsNullOrEmpty(ResourcePath) ? ResourcePath : ArchiveEntryPath;
+            Name = string.IsNullOrWhiteSpace(Name) ? Leaf(pathForNaming) : Name.Trim();
+            Category = string.IsNullOrWhiteSpace(Category) ? CategoryFromPath(pathForNaming) : Category.Trim();
+            // Real decal textures turned out to be scattered across dozens of
+            // per-map Terrain subfolders, not confined to any single "Decals"
+            // folder — audited against a real game install: only 44 of 77
+            // actual decal files sit under a folder literally named Decals at
+            // all, the rest live inside whichever map's own folder (e.g.
+            // "MP_007", "CA_I03") and would otherwise surface under that
+            // map's own code-name category instead of being findable as
+            // decals at all. A "Decals"-named folder ANYWHERE in the path
+            // (case-insensitive) OR the literal word "decal" anywhere in the
+            // filename together catch every real decal file found in that
+            // audit, including two files inside the real Decals folder whose
+            // own names don't contain "decal" at all — except the sparse,
+            // mostly-unrelated top-level textures/Decals/ folder (one debug
+            // texture, unrelated to real per-map decal content), which is
+            // deliberately excluded so it doesn't get lumped in here.
+            if (IsDecalPath(pathForNaming))
+                Category = "Decals";
             SearchKey = BuildSearchKey(Name, ResourcePath, GamePath, Category, Source, Usage);
+        }
+
+        private static bool IsDecalPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            var normalized = NormalizePath(path);
+            if (Leaf(normalized).IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            var segments = normalized.Split('/');
+            for (var i = 0; i < segments.Length - 1; i++) // exclude the leaf filename itself
+            {
+                if (!string.Equals(segments[i], "Decals", StringComparison.OrdinalIgnoreCase)) continue;
+                // The sparse top-level textures/Decals/ folder specifically
+                // (i==1, directly under "textures") is excluded — everything
+                // else named Decals anywhere in the path counts.
+                if (i == 1 && string.Equals(segments[0], "textures", StringComparison.OrdinalIgnoreCase)) continue;
+                return true;
+            }
+            return false;
         }
 
         public static string BuildStableId(SC2TextureSource source, string path)

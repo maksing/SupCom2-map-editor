@@ -18,13 +18,6 @@ public sealed class SC2DecalsShell : IDisposable
     // SC2ObjectsShell already uses for its own symmetry support.
     private readonly SC2TerrainShell _terrainShell;
     private readonly SC2DecalSurfaceProvider _surfaces = new();
-    private readonly List<Texture2D> _sources = new();
-    private readonly List<string> _sourceNames = new();
-    // Parallel to _sources by index — null where that source image has no
-    // normal-map counterpart imported yet. ImportSourceNormalImage attaches
-    // to the MOST RECENTLY imported diffuse source, matching the natural
-    // "import diffuse, then import its normal" workflow order.
-    private readonly List<Texture2D> _normalSources = new();
     private Texture2D _diffuseAtlas;
     private Texture2D _normalAtlas;
     private GameObject _previewRoot;
@@ -40,6 +33,7 @@ public sealed class SC2DecalsShell : IDisposable
     private readonly HashSet<string> _dirtyPlacementIds = new();
     private int _selectedEntry = -1;
     private int _selectedPlacement = -1;
+    private bool _placementsExpanded = true;
     private Vector2 _catalogScroll;
     private Vector2 _atlasPan;
     private float _atlasZoom = 0.8f;
@@ -144,36 +138,41 @@ public sealed class SC2DecalsShell : IDisposable
         // this note plus the two atlas-path labels above spell that out;
         // the two buttons themselves are relabeled to say "atlas" too.
         GUILayout.Label("Diffuse/Normal atlases below are each ONE whole texture, shared by every decal in this catalog via the same UV rect.", GUI.skin.box, GUILayout.Width(w - 8));
-        // Without a fixed width, button rows here can overflow the panel's
-        // real edge (text like "Import decal ima[ge]" cut off mid-word),
-        // since GUILayout.Button with no width option
-        // requests its own natural text width regardless of what the
-        // container can actually show — unlike a nested BeginVertical/
-        // FlexibleSpace construct (which correctly inherits the ancestor's
-        // real width), sibling Buttons in a plain BeginHorizontal just sum
-        // their natural widths, overflowing once that sum exceeds the
-        // panel. Giving the row itself a fixed width and each button
-        // ExpandWidth(true) makes them share that fixed total instead.
-        GUILayout.BeginHorizontal(GUILayout.Width(w));
-        if (GUILayout.Button("Choose diffuse atlas...", GUILayout.ExpandWidth(true))) ChooseAtlas(false);
-        if (GUILayout.Button("Choose normal atlas...", GUILayout.ExpandWidth(true))) ChooseAtlas(true);
-        GUILayout.EndHorizontal();
-        // "Import decal image" (diffuse) / its normal-map counterpart below
-        // both feed the SEPARATE "Build atlas" generator (_sources/
-        // _normalSources), not the two "Choose ... atlas..." buttons above —
-        // those load an already-finished atlas file directly instead.
-        GUILayout.BeginHorizontal(GUILayout.Width(w));
-        if (GUILayout.Button("Import decal image (diffuse)", GUILayout.ExpandWidth(true))) ImportSourceImage();
-        if (GUILayout.Button("Import decal image (normal)", GUILayout.ExpandWidth(true))) ImportSourceNormalImage();
-        GUILayout.EndHorizontal();
-        if (_sources.Count > 0 && GUILayout.Button($"Build atlas ({_sources.Count} images, {_normalSources.Count(t => t != null)} with normals)", GUILayout.Width(w))) BuildAtlas();
-        GUILayout.BeginHorizontal(GUILayout.Width(w));
-        if (GUILayout.Button("New rect", GUILayout.ExpandWidth(true))) AddEntry();
+        // Routed through the same shared texture browser every material
+        // Diffuse/Normal/Mask slot already uses (catalog-aware: vanilla/
+        // archive/custom sources, not just a raw local file picker) instead
+        // of a plain OS file dialog — picking an atlas this way is now
+        // consistent with every other texture-picking control in this
+        // editor. siblingHint (the OTHER atlas slot's current texture)
+        // pre-selects that same map's matching Diffuse/Normal atlas the
+        // moment the browser opens with nothing picked yet, same as an
+        // ordinary terrain material's Diffuse/Normal/Mask slots already
+        // suggest each other (SC2TextureCatalog.TryFindSiblingMatch, now
+        // also recognizing the decal atlas "_diffuse"/"_normal" naming
+        // convention alongside the terrain-material "_d"/"_n"/"_s" one).
+        // No null-guard here (matches SC2MaterialsPairsMode.DrawTextureField's
+        // own "if (next != previous)" convention) — clicking the browser's
+        // "None" button legitimately returns null to CLEAR the slot, and a
+        // "!= null" guard silently ate that click, making None appear to do
+        // nothing for these two pickers specifically.
+        var pickedDiffuse = SC2TerrainShell.DrawTexturePicker("Diffuse Atlas", _diffuseAtlas, "decal_diffuse_atlas", _normalAtlas) as Texture2D;
+        if (pickedDiffuse != _diffuseAtlas) ApplyAtlasPick(pickedDiffuse, normal: false);
+        var pickedNormal = SC2TerrainShell.DrawTexturePicker("Normal Atlas", _normalAtlas, "decal_normal_atlas", _diffuseAtlas) as Texture2D;
+        if (pickedNormal != _normalAtlas) ApplyAtlasPick(pickedNormal, normal: true);
+        // "New rect" used to also be here, duplicating the Atlas Editor's
+        // own copy (below, alongside Duplicate/Delete/Previous/Next) — that
+        // modal is where a new rect's position/size actually gets
+        // configured, so it's the one real place to add one from.
+        // The one real place to add/arrange a decal's atlas rect — the
+        // primary action of this whole section, not a peer of Validate —
+        // so it gets its own full-width, taller row, matching this
+        // project's established "Create New Map"-style prominent-button
+        // convention instead of sharing a row of equal-weight buttons.
         GUI.enabled = _diffuseAtlas != null;
-        if (GUILayout.Button(_atlasWindowOpen ? "Atlas Editor open" : "Open Atlas Editor", GUILayout.ExpandWidth(true))) { _atlasWindowOpen = true; CancelTransform(false); }
+        if (GUILayout.Button(_atlasWindowOpen ? "Atlas Editor open" : "Open Atlas Editor", GUILayout.Width(w), GUILayout.Height(SC2UiScale.Pxf(30f))))
+        { _atlasWindowOpen = true; CancelTransform(false); }
         GUI.enabled = true;
-        if (GUILayout.Button("Validate", GUILayout.ExpandWidth(true))) Validate();
-        GUILayout.EndHorizontal();
+        if (GUILayout.Button("Validate", GUILayout.Width(w))) Validate();
         var keepOriginal = GUILayout.Toggle(Doc.KeepOriginalBakedLayer, "Keep original baked layer on export", GUILayout.Width(w));
         if (keepOriginal != Doc.KeepOriginalBakedLayer)
         {
@@ -255,7 +254,8 @@ public sealed class SC2DecalsShell : IDisposable
 
     private void DrawPlacementsSection(float w)
     {
-        GUILayout.Label($"Authored placements: {Doc.Placements.Count}");
+        if (!SC2EnvFieldGui.Foldout(ref _placementsExpanded, $"Authored placements: {Doc.Placements.Count}"))
+            return;
         if (_selectedPlacement < 0 || _selectedPlacement >= Doc.Placements.Count) { GUILayout.Label("Select a decal in the viewport or list.", GUI.skin.box, GUILayout.Width(w - 8)); DrawPlacementList(w); return; }
         var p = Doc.Placements[_selectedPlacement];
         if (_placementDraft == null || _placementDraftId != p.Id)
@@ -309,7 +309,17 @@ public sealed class SC2DecalsShell : IDisposable
     // identifiable without having to select it first.
     private void DrawPlacementList(float w)
     {
-        for (var i = 0; i < Doc.Placements.Count; i++)
+        // Grouped by decal type (the catalog entry each placement uses),
+        // not raw placement order — a map with many decals scattered across
+        // several types used to interleave them in whatever order they were
+        // placed, making it hard to find every instance of one type. Sorts
+        // a list of INDICES rather than Doc.Placements itself, since
+        // _selectedPlacement/symmetry-group logic elsewhere all index into
+        // the document's own placement order, which must stay untouched.
+        var order = Enumerable.Range(0, Doc.Placements.Count)
+            .OrderBy(i => Doc.Entries.FirstOrDefault(e => e.Id == Doc.Placements[i].AtlasEntryId)?.Name ?? "", StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => Doc.Placements[i].Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var i in order)
         {
             var p = Doc.Placements[i];
             GUILayout.BeginHorizontal(GUI.skin.box, GUILayout.Width(w - 8));
@@ -1205,12 +1215,26 @@ public sealed class SC2DecalsShell : IDisposable
     private string _diffuseAtlasSourceKey;
     private string _normalAtlasSourceKey;
 
+    // Shared with ApplyAtlasPick, which must set this SAME key onto
+    // _diffuseAtlasSourceKey/_normalAtlasSourceKey right after a fresh
+    // browser pick — otherwise EnsureMaterial (called every frame) sees its
+    // own cached key go stale the instant Commit() changes Doc's content
+    // hash, and reloads a brand new Texture2D straight from the raw blob
+    // bytes on the very next frame, silently replacing the just-picked
+    // texture (which SC2TextureBrowser.Accept had tagged with
+    // RegisterResourcePath) with an untagged one before the user ever gets
+    // a chance to open the OTHER atlas slot's picker — the sibling
+    // suggestion then always found "no resource tag" for siblingHint,
+    // confirmed via a real diagnostic log.
+    private static string AtlasSourceKey(SC2BlobReference content, string path) =>
+        !content.IsEmpty ? "blob:" + content.ContentHash : "path:" + path;
+
     private void EnsureMaterial()
     {
         if (_previewMaterial == null) { var shader = Shader.Find("SC2/Decal") ?? Resources.Load<Shader>("SC2Decal"); if (shader != null) _previewMaterial = new Material(shader); }
         if (_previewMaterial == null) return;
-        var diffuseKey = !Doc.DiffuseAtlasContent.IsEmpty ? "blob:" + Doc.DiffuseAtlasContent.ContentHash : "path:" + Doc.DiffuseAtlasPath;
-        var normalKey = !Doc.NormalAtlasContent.IsEmpty ? "blob:" + Doc.NormalAtlasContent.ContentHash : "path:" + Doc.NormalAtlasPath;
+        var diffuseKey = AtlasSourceKey(Doc.DiffuseAtlasContent, Doc.DiffuseAtlasPath);
+        var normalKey = AtlasSourceKey(Doc.NormalAtlasContent, Doc.NormalAtlasPath);
         if (_diffuseAtlas == null || _diffuseAtlasSourceKey != diffuseKey)
         {
             _diffuseAtlas = LoadBlobTexture(Doc.DiffuseAtlasContent, false);
@@ -1259,113 +1283,38 @@ public sealed class SC2DecalsShell : IDisposable
         Commit(normal ? "Edit Decal Normal Atlas Path" : "Edit Decal Diffuse Atlas Path", next);
     }
 
-    private void ChooseAtlas(bool normal)
+    private void ApplyAtlasPick(Texture2D texture, bool normal)
     {
-        var path = PickTextureFile(normal ? "Choose decal normal atlas" : "Choose decal diffuse atlas");
-        if (string.IsNullOrEmpty(path)) return;
-        if (!SC2CustomTextureImporter.TryLoad(path, out var texture, out var error, linear: normal)) { _status = error; return; }
+        // texture is null when the browser's "None" button clears the slot
+        // (see the caller's own comment) — every field below has to handle
+        // that instead of assuming a real texture, unlike the original
+        // ChooseAtlas this replaced, which only ever ran after a successful
+        // file load and so never saw null.
         var next = Doc.Clone();
         var blob = PutTexture(texture);
-        if (normal) { _normalAtlas = texture; next.NormalAtlasPath = "decals_normal.dds"; next.NormalAtlasContent = blob; }
-        else { _diffuseAtlas = texture; next.DiffuseAtlasPath = "decals_diffuse.dds"; next.DiffuseAtlasContent = blob; next.AtlasWidth = texture.width; next.AtlasHeight = texture.height; next.AtlasSource = SC2DecalAtlasSource.Existing; }
-        Commit(normal ? "Choose Decal Normal Atlas" : "Choose Decal Diffuse Atlas", next); _status = $"Loaded {texture.width}x{texture.height} atlas.";
-    }
-
-    private void ImportSourceImage()
-    {
-        var path = PickTextureFile("Import decal image"); if (string.IsNullOrEmpty(path)) return;
-        if (!SC2CustomTextureImporter.TryLoad(path, out var texture, out var error)) { _status = error; return; }
-        _sources.Add(texture); _sourceNames.Add(Path.GetFileNameWithoutExtension(path)); _normalSources.Add(null); _status = $"Added {_sourceNames.Last()}.";
-    }
-
-    /// <summary>A source image's normal-map
-    /// counterpart, for later "Build atlas" packing — attaches to the MOST
-    /// RECENTLY imported diffuse source (natural "diffuse, then its normal"
-    /// import order), not a whole separate atlas file (that's what "Choose
-    /// normal atlas..." above is for).</summary>
-    private void ImportSourceNormalImage()
-    {
-        if (_sources.Count == 0) { _status = "Import a diffuse decal image first — its normal map attaches to the most recently imported one."; return; }
-        var path = PickTextureFile("Import decal normal image"); if (string.IsNullOrEmpty(path)) return;
-        if (!SC2CustomTextureImporter.TryLoad(path, out var texture, out var error, linear: true)) { _status = error; return; }
-        var index = _sources.Count - 1;
-        while (_normalSources.Count <= index) _normalSources.Add(null);
-        _normalSources[index] = texture;
-        _status = $"Added normal map for {_sourceNames[index]}.";
-    }
-
-    private void BuildAtlas()
-    {
-        if (Doc.Placements.Count > 0)
+        if (normal)
         {
-            _status = "Remove or reassign placed decals before rebuilding the atlas.";
-            return;
+            _normalAtlas = texture;
+            next.NormalAtlasPath = texture != null ? "decals_normal.dds" : "";
+            next.NormalAtlasContent = blob;
         }
-        var atlas = new Texture2D(2048, 2048, TextureFormat.RGBA32, true, false) { name = "SC2_DecalAtlas_Generated" };
-        var rects = atlas.PackTextures(_sources.ToArray(), 0, 2048, false);
-
-        // Packs a matching normal atlas at
-        // the SAME size, using the SAME rects PackTextures just computed
-        // for diffuse — Texture2D.PackTextures has no "pack this second set
-        // into the same layout" mode, so each source with a real normal-map
-        // counterpart (_normalSources[i] != null) gets manually resized and
-        // blitted into the identical pixel rect on a second canvas instead.
-        // Entries with no imported normal map are left at a flat/neutral
-        // tangent-space normal (0.5, 0.5, 1) — "no bump" — rather than
-        // black/garbage, so a partially-normal-mapped catalog still reads
-        // correctly for the entries that don't have one.
-        var hasAnyNormal = _normalSources.Any(t => t != null);
-        Texture2D normalAtlas = null;
-        if (hasAnyNormal)
+        else
         {
-            normalAtlas = new Texture2D(atlas.width, atlas.height, TextureFormat.RGBA32, true, true) { name = "SC2_DecalNormalAtlas_Generated" };
-            var flat = new Color32(128, 128, 255, 255);
-            var fillPixels = new Color32[normalAtlas.width * normalAtlas.height];
-            for (var p = 0; p < fillPixels.Length; p++) fillPixels[p] = flat;
-            normalAtlas.SetPixels32(fillPixels);
+            _diffuseAtlas = texture;
+            next.DiffuseAtlasPath = texture != null ? "decals_diffuse.dds" : "";
+            next.DiffuseAtlasContent = blob;
+            next.AtlasWidth = texture != null ? texture.width : 0;
+            next.AtlasHeight = texture != null ? texture.height : 0;
+            next.AtlasSource = SC2DecalAtlasSource.Existing;
         }
-
-        var next = Doc.Clone(); next.Entries.Clear(); next.AtlasWidth = atlas.width; next.AtlasHeight = atlas.height;
-        next.DiffuseAtlasPath = "decals_diffuse.dds"; next.AtlasSource = SC2DecalAtlasSource.Generated;
-        next.DiffuseAtlasContent = PutTexture(atlas);
-        for (var i = 0; i < rects.Length; i++)
-        {
-            var px = Mathf.RoundToInt(rects[i].x * atlas.width); var py = Mathf.RoundToInt(rects[i].y * atlas.height);
-            var pw = Mathf.RoundToInt(rects[i].width * atlas.width); var ph = Mathf.RoundToInt(rects[i].height * atlas.height);
-            next.Entries.Add(new SC2DecalAtlasEntry { Name = _sourceNames[i], X = px, Y = py, Width = pw, Height = ph, Source = SC2DecalEntrySource.Generated });
-            if (normalAtlas != null && i < _normalSources.Count && _normalSources[i] != null)
-                BlitIntoAtlas(normalAtlas, _normalSources[i], px, py, pw, ph);
-        }
-
-        if (normalAtlas != null)
-        {
-            normalAtlas.Apply(true, false);
-            _normalAtlas = normalAtlas;
-            next.NormalAtlasPath = "decals_normal.dds";
-            next.NormalAtlasContent = PutTexture(normalAtlas);
-        }
-
-        _diffuseAtlas = atlas; Commit("Build Decal Atlas", next); _selectedEntry = next.Entries.Count > 0 ? 0 : -1;
-        _status = normalAtlas != null ? "Generated diffuse + normal atlas and catalog." : "Generated atlas and catalog.";
-    }
-
-    /// <summary>Point-sampled resize of source into the [x,y,width,height]
-    /// pixel rect of atlas — matches PackTextures' own "just place this
-    /// image at this size" contract closely enough for a normal-map
-    /// counterpart; the atlas gets proper bilinear filtering at sample
-    /// time regardless of how it was written.</summary>
-    private static void BlitIntoAtlas(Texture2D atlas, Texture2D source, int x, int y, int width, int height)
-    {
-        if (source == null || width <= 0 || height <= 0) return;
-        for (var row = 0; row < height; row++)
-        {
-            var v = height > 1 ? row / (float)(height - 1) : 0f;
-            for (var col = 0; col < width; col++)
-            {
-                var u = width > 1 ? col / (float)(width - 1) : 0f;
-                atlas.SetPixel(x + col, y + row, source.GetPixelBilinear(u, v));
-            }
-        }
+        Commit(normal ? "Choose Decal Normal Atlas" : "Choose Decal Diffuse Atlas", next);
+        // Mark this slot's cache as already up to date with what Commit just
+        // wrote — see AtlasSourceKey's own doc comment for why, without
+        // this, the freshly-tagged texture above gets silently replaced by
+        // an untagged blob-decode on the very next EnsureMaterial call.
+        if (normal) _normalAtlasSourceKey = AtlasSourceKey(Doc.NormalAtlasContent, Doc.NormalAtlasPath);
+        else _diffuseAtlasSourceKey = AtlasSourceKey(Doc.DiffuseAtlasContent, Doc.DiffuseAtlasPath);
+        _status = texture != null ? $"Loaded {texture.width}x{texture.height} atlas." : (normal ? "Cleared normal atlas." : "Cleared diffuse atlas.");
     }
 
     private void AddEntry()
@@ -1543,14 +1492,6 @@ public sealed class SC2DecalsShell : IDisposable
     private static Ray ScreenRay(Camera c, Vector2 gui) => SC2TopViewMirror.ScreenPointToRay(c, gui);
     private static float[] A(Vector3 v) => new[] { v.x, v.y, v.z };
     private static bool PlacementEquals(SC2DecalPlacement a, SC2DecalPlacement b) => a.Name == b.Name && a.Rotation == b.Rotation && a.Width == b.Width && a.Length == b.Length && a.ProjectionDepth == b.ProjectionDepth && a.HeightOffset == b.HeightOffset && a.AlignToSurface == b.AlignToSurface && a.Enabled == b.Enabled;
-    private static string PickTextureFile(string title)
-    {
-#if UNITY_EDITOR
-        return UnityEditor.EditorUtility.OpenFilePanelWithFilters(title, "", new[] { "Textures", "png,jpg,jpeg,dds", "All files", "*" });
-#else
-        return SC2RuntimeFileDialog.OpenFile(title, "Texture", "png");
-#endif
-    }
     private SC2BlobReference PutTexture(Texture2D texture)
     {
         if (_session.BlobStore == null || texture == null) return SC2BlobReference.Empty;

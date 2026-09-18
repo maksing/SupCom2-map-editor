@@ -51,42 +51,82 @@ public sealed class SC2TextureCatalog
     private static readonly System.Text.RegularExpressions.Regex SiblingSuffixPattern =
         new(@"^(.*)_[dnsm](\.win)?\.(dds|tga|png)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
+    // Decal atlas files use a whole-WORD "_diffuse"/"_normal" suffix instead
+    // of the single-letter terrain-material convention above — matches both
+    // real vanilla decal atlases ("<map>.decal_atlas_diffuse.win.dds"/
+    // "..._normal.win.dds", confirmed against a real game install) and this
+    // editor's own generated atlas names ("decals_diffuse.dds"/
+    // "decals_normal.dds", see SC2DecalsShell.ApplyAtlasPick).
+    private static readonly System.Text.RegularExpressions.Regex DecalAtlasSuffixPattern =
+        new(@"^(.*)_(diffuse|normal)(\.win)?\.(dds|tga|png)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     /// <summary>Guesses a sibling texture's counterpart for a different
     /// usage on the same material — e.g. given the Diffuse texture already
     /// picked, suggest that same material's Normal or Mask by swapping the
     /// real vanilla suffix convention. Tries both real Mask suffix
     /// conventions ("_s" and "_m", see InferUsage's own doc comment for why
-    /// both exist) since different art folders use different ones. Returns
-    /// null when `sibling`'s own path doesn't end in a recognized suffix,
-    /// or no catalog entry matches any constructed candidate — a safe,
-    /// silent no-op rather than a wrong guess, since this only ever
-    /// pre-selects a suggestion the user still has to accept.</summary>
+    /// both exist) since different art folders use different ones. Also
+    /// tries the separate whole-word decal-atlas suffix convention
+    /// (DecalAtlasSuffixPattern) for Diffuse/Normal, so picking a decal
+    /// atlas's Diffuse suggests that same map's Normal atlas and vice versa,
+    /// the same way an ordinary terrain material's Diffuse/Normal/Mask
+    /// already suggest each other. Returns null when `sibling`'s own path
+    /// doesn't end in a recognized suffix of EITHER convention, or no
+    /// catalog entry matches any constructed candidate — a safe, silent
+    /// no-op rather than a wrong guess, since this only ever pre-selects a
+    /// suggestion the user still has to accept.</summary>
     public SC2TextureCatalogEntry TryFindSiblingMatch(SC2TextureCatalogEntry sibling, SC2TextureUsage targetUsage)
     {
         if (sibling == null) return null;
-        var siblingPath = !string.IsNullOrEmpty(sibling.ArchiveEntryPath) ? sibling.ArchiveEntryPath : sibling.ResourcePath;
+        // A Custom-sourced entry (SC2TextureCatalog.LoadCustomLibrary — the
+        // common case for a user-imported decal atlas, unlike a real
+        // vanilla one) has empty ArchiveEntryPath AND ResourcePath, only
+        // GamePath (its absolute file path) — falling through to it here
+        // was missing entirely, so picking a custom-imported atlas's
+        // Diffuse never suggested anything for Normal at all.
+        var siblingPath = !string.IsNullOrEmpty(sibling.ArchiveEntryPath) ? sibling.ArchiveEntryPath
+            : !string.IsNullOrEmpty(sibling.ResourcePath) ? sibling.ResourcePath
+            : sibling.GamePath;
         if (string.IsNullOrEmpty(siblingPath)) return null;
-        var match = SiblingSuffixPattern.Match(siblingPath);
-        if (!match.Success) return null;
-
-        var prefix = match.Groups[1].Value;
-        var winSuffix = match.Groups[2].Value;
-        var ext = match.Groups[3].Value;
-        var candidateSuffixes = targetUsage switch
-        {
-            SC2TextureUsage.Diffuse => new[] { "_d" },
-            SC2TextureUsage.Normal => new[] { "_n" },
-            SC2TextureUsage.Mask => new[] { "_s", "_m" },
-            _ => Array.Empty<string>(),
-        };
 
         EnsureLoaded();
-        foreach (var suffix in candidateSuffixes)
+
+        var match = SiblingSuffixPattern.Match(siblingPath);
+        if (match.Success)
         {
-            var candidatePath = prefix + suffix + winSuffix + "." + ext;
-            var id = SC2TextureCatalogEntry.BuildStableId(sibling.Source, candidatePath);
-            if (_byId.TryGetValue(id, out var found)) return found;
+            var prefix = match.Groups[1].Value;
+            var winSuffix = match.Groups[2].Value;
+            var ext = match.Groups[3].Value;
+            var candidateSuffixes = targetUsage switch
+            {
+                SC2TextureUsage.Diffuse => new[] { "_d" },
+                SC2TextureUsage.Normal => new[] { "_n" },
+                SC2TextureUsage.Mask => new[] { "_s", "_m" },
+                _ => Array.Empty<string>(),
+            };
+            foreach (var suffix in candidateSuffixes)
+            {
+                var candidatePath = prefix + suffix + winSuffix + "." + ext;
+                var id = SC2TextureCatalogEntry.BuildStableId(sibling.Source, candidatePath);
+                if (_byId.TryGetValue(id, out var found)) return found;
+            }
         }
+
+        if (targetUsage == SC2TextureUsage.Diffuse || targetUsage == SC2TextureUsage.Normal)
+        {
+            var decalMatch = DecalAtlasSuffixPattern.Match(siblingPath);
+            if (decalMatch.Success)
+            {
+                var prefix = decalMatch.Groups[1].Value;
+                var winSuffix = decalMatch.Groups[3].Value;
+                var ext = decalMatch.Groups[4].Value;
+                var suffix = targetUsage == SC2TextureUsage.Diffuse ? "_diffuse" : "_normal";
+                var candidatePath = prefix + suffix + winSuffix + "." + ext;
+                var id = SC2TextureCatalogEntry.BuildStableId(sibling.Source, candidatePath);
+                if (_byId.TryGetValue(id, out var found)) return found;
+            }
+        }
+
         return null;
     }
 

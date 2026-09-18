@@ -130,7 +130,17 @@ public static class SC2TextureBrowser
         Query.Usage = expectedUsage == SC2TextureUsage.Unknown ? null : expectedUsage;
         Query.Search = "";
         Query.Source = null;
-        Query.Category = "";
+        // Same "derive a UI default from the picker's own key" convention
+        // SC2TerrainShell.TextureUsageForPicker already uses for Usage —
+        // opening the browser from a decal atlas slot (pickerKey containing
+        // "decal") now starts pre-filtered to the Decals category instead
+        // of the full, unfiltered catalog. Source/Usage alone can't do this
+        // (a decal atlas is Vanilla/Custom-sourced and Diffuse/Normal-usaged
+        // just like an ordinary terrain material, indistinguishable by
+        // either filter) — Category is the one dimension that actually
+        // finds decals specifically, per SC2TextureCatalogEntry.Normalize's
+        // own decal-detection rule.
+        Query.Category = (pickerKey ?? "").IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0 ? "Decals" : "";
         Query.FavoritesOnly = false;
         _gridScroll = Vector2.zero;
         _message = "";
@@ -224,6 +234,23 @@ public static class SC2TextureBrowser
         foreach (SC2TextureUsage usage in Enum.GetValues(typeof(SC2TextureUsage)))
             if (usage != SC2TextureUsage.Unknown)
                 DrawFilterButton(ref y, rect, usage.ToString(), Query.Usage == usage, () => Query.Usage = usage);
+        y += 8f;
+        // A dedicated toggle rather than a full generic per-Category
+        // section (there are a dozen+ real distinct categories - Terrain,
+        // Splats, Tarmacs, environment, ui, ... - which would overflow this
+        // fixed-height sidebar without adding scrolling). Decals earns its
+        // own button specifically because SC2TextureCatalogEntry.Normalize
+        // now tags it from BOTH a folder match and a filename match (real
+        // decal textures turned out to be scattered across dozens of
+        // per-map folders, not confined to one), so "Category == Decals"
+        // is the only way to actually find them all — Source/Usage alone
+        // can't (a decal is Vanilla-sourced and Diffuse/Normal-usaged just
+        // like ordinary terrain materials, indistinguishable by either
+        // filter). Query.Category itself already existed and is already
+        // consulted by SC2TextureCatalogQueryEngine — this was the missing
+        // UI to actually set it.
+        DrawFilterButton(ref y, rect, "Decals", string.Equals(Query.Category, "Decals", StringComparison.OrdinalIgnoreCase),
+            () => Query.Category = string.Equals(Query.Category, "Decals", StringComparison.OrdinalIgnoreCase) ? "" : "Decals");
         y += 8f;
         DrawFilterButton(ref y, rect, "Favorites", Query.FavoritesOnly, () => Query.FavoritesOnly = !Query.FavoritesOnly);
     }
