@@ -123,16 +123,19 @@ public class SC2MaterialsMode
 
         if (newExpanded)
         {
-            // siblingHint: whichever OTHER slot on this same material
-            // already has a texture — lets the browser suggest this
-            // slot's counterpart by real vanilla suffix convention
-            // ("_d"/"_n"/"_s"/"_m") instead of leaving the user to search
-            // 1000+ textures for the matching set by hand (see
-            // SC2TextureCatalog.TryFindSiblingMatch). Diffuse is preferred
-            // as the hint since it's the slot most commonly picked first.
-            DrawTextureField(i, "Diffuse", ref mat.Diffuse, ref mat.DiffuseOverridePath, mat.Normal != null ? mat.Normal : mat.Mask);
-            DrawTextureField(i, "Normal", ref mat.Normal, ref mat.NormalOverridePath, mat.Diffuse != null ? mat.Diffuse : mat.Mask);
-            DrawTextureField(i, "Mask", ref mat.Mask, ref mat.MaskOverridePath, mat.Diffuse != null ? mat.Diffuse : mat.Normal);
+            // siblingHints: BOTH other slots on this same material, not
+            // just whichever one used to be preferred — lets the browser
+            // suggest this slot's counterpart(s) by real vanilla suffix
+            // convention ("_d"/"_n"/"_s"/"_m", see
+            // SC2TextureCatalog.FindAllSiblingMatches) instead of leaving
+            // the user to search 1000+ textures for the matching set by
+            // hand. Passing both matters when Diffuse and Normal (say) come
+            // from two DIFFERENT real texture families — Mask then offers
+            // both families' own Mask candidate as separate buttons rather
+            // than only ever guessing from one arbitrarily preferred slot.
+            DrawTextureField(i, "Diffuse", ref mat.Diffuse, ref mat.DiffuseOverridePath, mat.Normal, mat.Mask);
+            DrawTextureField(i, "Normal", ref mat.Normal, ref mat.NormalOverridePath, mat.Diffuse, mat.Mask);
+            DrawTextureField(i, "Mask", ref mat.Mask, ref mat.MaskOverridePath, mat.Diffuse, mat.Normal);
         }
         SC2TerrainShell.EndUnifiedPanelBox();
         EditorGUILayout.Space(2);
@@ -161,7 +164,7 @@ public class SC2MaterialsMode
             terrain.Materials.Add(new SC2MaterialDocument { Id = mat.Id, Name = mat.Name });
     }
 
-    private void DrawTextureField(int materialIndex, string label, ref Texture2D texture, ref string overridePath, Texture2D siblingHint = null)
+    private void DrawTextureField(int materialIndex, string label, ref Texture2D texture, ref string overridePath, params Texture2D[] siblingHints)
     {
         var previous = texture;
         var previousPath = overridePath;
@@ -184,7 +187,7 @@ public class SC2MaterialsMode
         // Material 0 and background's own Material 0 collide on both, now
         // that Materials shows both panels stacked in the same frame.
         var texKey = "Material" + Data.GetInstanceID() + "-" + materialIndex + ":" + label;
-        var next = SC2TerrainShell.DrawTexturePickerWithPath(label, texture, texKey, ref pathDraft, out var pickedViaBrowser, fallbackPath, siblingHint) as Texture2D;
+        var next = SC2TerrainShell.DrawTexturePickerWithPath(label, texture, texKey, ref pathDraft, out var pickedViaBrowser, fallbackPath, siblingHints) as Texture2D;
         if (next != previous)
         {
             _win.RecordUndoCheckpointFor(Data, "Change Material " + label + " Texture");

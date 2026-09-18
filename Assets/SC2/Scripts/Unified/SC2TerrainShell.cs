@@ -2329,7 +2329,7 @@ public class SC2TerrainShell : ScriptableObject
     // sensibly — DrawPreview also UV-crops a cached thumbnail to this
     // entry's own atlas cell when needed (a plain EditorGUI.DrawPreviewTexture
     // call here previously showed the whole shared atlas page uncropped).
-    public static Texture DrawTexturePicker(string label, Texture texture, string pickerKey, Texture siblingHint = null)
+    public static Texture DrawTexturePicker(string label, Texture texture, string pickerKey, params Texture[] siblingHints)
     {
         var labelStyle = SafeGuiStyle(EditorStyles.miniLabel);
         labelStyle.normal.textColor = new Color(0.18f, 0.62f, 1f);
@@ -2383,7 +2383,7 @@ public class SC2TerrainShell : ScriptableObject
         if (e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
         {
             GUIUtility.keyboardControl = 0;
-            SC2TextureBrowser.Open(pickerKey, texture, TextureUsageForPicker(pickerKey), siblingHint);
+            SC2TextureBrowser.Open(pickerKey, texture, TextureUsageForPicker(pickerKey), siblingHints);
             e.Use();
         }
 
@@ -2451,10 +2451,10 @@ public class SC2TerrainShell : ScriptableObject
         return _pathFieldLocked[key];
     }
 
-    public static Texture DrawTexturePickerWithPath(string label, Texture texture, string pickerKey, ref string path, out bool pickedViaBrowser, string resolvedFallbackPath = null, Texture siblingHint = null)
+    public static Texture DrawTexturePickerWithPath(string label, Texture texture, string pickerKey, ref string path, out bool pickedViaBrowser, string resolvedFallbackPath = null, params Texture[] siblingHints)
     {
         pickedViaBrowser = false;
-        var picked = DrawTexturePicker(label, texture, pickerKey, siblingHint);
+        var picked = DrawTexturePicker(label, texture, pickerKey, siblingHints);
         if (picked != texture) pickedViaBrowser = true;
 
         var displayPath = string.IsNullOrEmpty(path) ? (resolvedFallbackPath ?? "") : path;

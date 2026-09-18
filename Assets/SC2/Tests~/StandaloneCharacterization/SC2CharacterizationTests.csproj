@@ -15,11 +15,10 @@
     process and is covered separately by Unity Test Framework EditMode tests
     (see Assets/SC2/Tests/EditMode) instead of duplicated here.
 
-    The project's OWN path is intentionally kept short (C:\Temp\SC2CharTests)
-    — dotnet build/test has repeatedly failed with "filename too long" when
-    its own working/output directory sits deep inside this repo's actual path
-    (Assets/SC2/Tests/... under the full outputs/UnityEditorPackage/... tree).
-    Run it from here, or copy this whole folder to another short path.
+    If dotnet build/test fails with "filename too long", its own
+    working/output directory is sitting too deep — copy this whole folder to
+    a short path (e.g. C:\Temp\SC2CharTests) and run it from there instead;
+    SC2Root below still points back at the real repo's source either way.
   -->
 
   <PropertyGroup>
@@ -28,7 +27,7 @@
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
     <!-- Absolute path to Assets/SC2 in the real repo — update if the repo moves. -->
-    <SC2Root>C:\Users\user\Documents\Codex\2026-07-02\c-users-user-documents-codex-2026\outputs\UnityEditorPackage\SC2_UnityEditorPackage_20260704_094503\Assets\SC2</SC2Root>
+    <SC2Root>C:\Users\user\SupCom2 map editor\Assets\SC2</SC2Root>
     <!-- Only needed for SC2LuaValue.cs's Vector3/Quaternion structs — plain
          value types, usable outside a running Unity process as long as the
          real CoreModule assembly supplies their definition. -->

@@ -83,12 +83,17 @@ public static class SC2TextureBrowser
     private static string _pickerKey = "";
     private static string _selectedId = "";
     private static string _currentId = "";
-    // Set only when Open() found a sibling-based suggestion (see its own
-    // doc comment) — RefreshResults reorders the query results so this one
-    // entry sorts first, WITHOUT narrowing the search itself, so the rest
-    // of the (correctly Usage-filtered) set stays fully browsable below it
-    // rather than being hidden by a name-search filter.
-    private static string _suggestedId = "";
+    // Every real sibling match found for siblingHints, all sharing THIS
+    // slot's own expectedUsage (see Open's own doc comment — a Normal
+    // picker only ever suggests other Normal textures, never Diffuse/Mask)
+    // computed unconditionally whenever a siblingHint resolves. More than
+    // one entry means either more than one hint resolved a candidate (e.g.
+    // Diffuse and Mask came from two different real texture families) or a
+    // single family genuinely has more than one file for this usage (e.g.
+    // both a "_s" and a "_m" file). DrawCard reorders these to the front of
+    // the grid and badges them, rather than a separate suggestions panel,
+    // so the user sees the actual thumbnail instead of just a name.
+    private static readonly List<(SC2TextureUsage Usage, SC2TextureCatalogEntry Entry)> _siblingSuggestions = new();
     private static Vector2 _gridScroll;
     // Widened from Texture2D: a cubemap/volume catalog entry's real picked
     // asset is a Cubemap/Texture3D (see Accept()) — all IS-A Texture.
@@ -114,15 +119,28 @@ public static class SC2TextureBrowser
 
     public static bool IsOpen => _open;
 
-    /// <summary>`siblingHint`: another texture slot on the SAME material
-    /// (e.g. pass the Diffuse texture when opening the Normal or Mask
-    /// picker) — when this slot has nothing picked yet, its counterpart is
-    /// suggested by real vanilla suffix convention (SC2TextureCatalog.
-    /// TryFindSiblingMatch) instead of leaving the user to search 1000+
-    /// textures for the matching set by hand. A silent no-op whenever no
-    /// sibling is passed, the sibling itself isn't a cataloged texture, or
-    /// no matching counterpart exists.</summary>
-    public static void Open(string pickerKey, Texture current, SC2TextureUsage expectedUsage, Texture siblingHint = null)
+    /// <summary>`siblingHints`: the OTHER texture slots on the SAME
+    /// material (e.g. pass the already-picked Diffuse and Mask textures
+    /// when opening the Normal picker) — every real THIS-SLOT'S-OWN-USAGE
+    /// counterpart found for ANY of them (see
+    /// SC2TextureCatalog.FindAllSiblingMatches) is collected into
+    /// _siblingSuggestions unconditionally, for the browser to show as
+    /// highlighted thumbnail cards pulled to the front of the grid, instead
+    /// of leaving the user to search 1000+ textures for the matching one by
+    /// hand. Deliberately only ever suggests THIS slot's own expectedUsage —
+    /// opening the Normal picker never suggests a Diffuse or Mask texture,
+    /// since those wouldn't even be valid picks here. Passing more than one
+    /// hint matters when they come from DIFFERENT real texture families
+    /// (e.g. Diffuse and Normal were picked from two different sets) —
+    /// opening Mask then offers BOTH families' own Mask candidate as
+    /// separate cards, rather than only ever guessing from whichever single
+    /// slot happened to be preferred. Separately, when THIS slot has
+    /// nothing picked yet, the first candidate found is also pre-selected
+    /// (the original, single-suggestion nudge this used to be the only
+    /// mechanism for). A silent no-op for any hint that's null, isn't a
+    /// cataloged texture, has no matching counterpart, or when
+    /// expectedUsage itself is Unknown (nothing to match against).</summary>
+    public static void Open(string pickerKey, Texture current, SC2TextureUsage expectedUsage, params Texture[] siblingHints)
     {
         LoadPreferences();
         _open = true;
@@ -144,21 +162,46 @@ public static class SC2TextureBrowser
         Query.FavoritesOnly = false;
         _gridScroll = Vector2.zero;
         _message = "";
-        _suggestedId = "";
+        _siblingSuggestions.Clear();
         _currentId = ResolveCurrentId(current);
         Cache.PinFull(_currentId);
         _selectedId = _currentId;
 
-        if (string.IsNullOrEmpty(_currentId) && siblingHint != null && expectedUsage != SC2TextureUsage.Unknown)
+        if (siblingHints != null && siblingHints.Length > 0 && expectedUsage != SC2TextureUsage.Unknown)
         {
-            var siblingEntry = ResolveEntry(siblingHint);
-            var suggested = siblingEntry != null ? SC2TextureCatalog.Instance.TryFindSiblingMatch(siblingEntry, expectedUsage) : null;
-            if (suggested != null)
+            // Resolve every hint's catalog entry up front (in the caller's
+            // own order — e.g. Diffuse before Mask when opening Normal)
+            // and skip anything null/uncataloged, so a family match on one
+            // hint doesn't depend on iteration order finding it before a
+            // dud entry short-circuits the loop.
+            var siblingEntries = new List<SC2TextureCatalogEntry>();
+            foreach (var hint in siblingHints)
             {
+                if (hint == null) continue;
+                var resolved = ResolveEntry(hint);
+                if (resolved != null) siblingEntries.Add(resolved);
+            }
+
+            foreach (var siblingEntry in siblingEntries)
+            {
+                foreach (var candidate in SC2TextureCatalog.Instance.FindAllSiblingMatches(siblingEntry, expectedUsage))
+                {
+                    if (candidate.Id == siblingEntry.Id) continue;
+                    var alreadyListed = false;
+                    foreach (var existing in _siblingSuggestions)
+                        if (existing.Entry.Id == candidate.Id) { alreadyListed = true; break; }
+                    if (alreadyListed) continue;
+                    _siblingSuggestions.Add((expectedUsage, candidate));
+                    Cache.PinFull(candidate.Id);
+                }
+            }
+
+            if (_siblingSuggestions.Count > 0 && string.IsNullOrEmpty(_currentId))
+            {
+                var suggested = _siblingSuggestions[0].Entry;
                 _selectedId = suggested.Id;
-                _suggestedId = suggested.Id;
                 Cache.PinFull(_selectedId);
-                _message = "Suggested match for " + siblingEntry.Name + ": " + suggested.Name;
+                _message = "Suggested match for " + siblingEntries[0].Name + ": " + suggested.Name;
             }
         }
         _fullPreviewRequested = false;
@@ -282,11 +325,20 @@ public static class SC2TextureBrowser
         GUI.EndScrollView();
     }
 
+    private static bool TryGetSuggestionUsage(string entryId, out SC2TextureUsage usage)
+    {
+        foreach (var suggestion in _siblingSuggestions)
+            if (suggestion.Entry.Id == entryId) { usage = suggestion.Usage; return true; }
+        usage = SC2TextureUsage.Unknown;
+        return false;
+    }
+
     private static void DrawCard(Rect rect, SC2TextureCatalogEntry entry)
     {
         var selected = entry.Id == _selectedId;
+        var isSuggested = TryGetSuggestionUsage(entry.Id, out var suggestionUsage);
         DrawRect(rect, selected ? new Color(0.18f, 0.31f, 0.52f, 1f) : new Color(0.11f, 0.12f, 0.145f, 1f));
-        DrawBorder(rect, selected ? new Color(0.36f, 0.65f, 1f, 1f) : new Color(0.20f, 0.22f, 0.27f, 1f));
+        DrawBorder(rect, selected ? new Color(0.36f, 0.65f, 1f, 1f) : isSuggested ? new Color(0.95f, 0.65f, 0.15f, 1f) : new Color(0.20f, 0.22f, 0.27f, 1f));
         var preview = new Rect(rect.x + 7f, rect.y + 7f, rect.width - 14f, rect.width - 14f);
         DrawChecker(preview);
         var texture = Cache.Get(entry);
@@ -296,6 +348,27 @@ public static class SC2TextureBrowser
         GUI.Label(new Rect(rect.x + 5f, preview.yMax + 20f, rect.width - 10f, 16f), entry.Category, CenterDim());
         var favoriteRect = new Rect(rect.xMax - 22f, rect.y + 5f, 18f, 18f);
         if (GUI.Button(favoriteRect, Favorites.Contains(entry.Id) ? "*" : "+", FlatButton())) ToggleFavorite(entry.Id);
+        if (isSuggested)
+        {
+            // A small tag over the thumbnail's own top-left corner rather
+            // than a separate row — the point of moving suggestions into
+            // the grid itself (replacing an earlier top text-button-row
+            // design) was showing the actual thumbnail image, so the badge
+            // has to sit ON the card, not push it down or replace it. Fixed
+            // "Suggested" text, not suggestionUsage itself — every card
+            // shown here already shares this slot's own expectedUsage (see
+            // Open's own doc comment), so printing the usage would just be
+            // redundant with the picker's own Usage filter.
+            const string badgeText = "Suggested";
+            var badgeWidth = Mathf.Clamp(MiniBold().CalcSize(new GUIContent(badgeText)).x + 10f, 26f, rect.width - 14f);
+            var badgeRect = new Rect(rect.x + 7f, rect.y + 7f, badgeWidth, 16f);
+            DrawRect(badgeRect, new Color(0.95f, 0.65f, 0.15f, 0.92f));
+            var badgeStyle = MiniBold();
+            var previousColor = badgeStyle.normal.textColor;
+            badgeStyle.normal.textColor = Color.black;
+            GUI.Label(badgeRect, badgeText, badgeStyle);
+            badgeStyle.normal.textColor = previousColor;
+        }
         var evt = Event.current;
         if (evt != null && evt.type == EventType.MouseDown && evt.button == 0 && rect.Contains(evt.mousePosition))
         {
@@ -580,33 +653,41 @@ public static class SC2TextureBrowser
         if (!string.IsNullOrEmpty(_selectedId) && catalog.Find(_selectedId) == null) _selectedId = "";
     }
 
-    /// <summary>Moves the suggested entry (see Open's own siblingHint doc
-    /// comment) to the front of an already-Usage-filtered result set,
-    /// WITHOUT narrowing the query itself — the rest of the set stays
-    /// fully browsable below it, unlike an earlier version of this feature
-    /// that filtered the search box down to just the one guessed name and
-    /// hid everything else. `raw` is the query engine's own cached array;
-    /// never mutated in place since the same array instance is shared
-    /// across every call with the same cache key.</summary>
+    /// <summary>Moves every sibling suggestion (see Open's own siblingHints
+    /// doc comment) to the front of the result set, in the same
+    /// Diffuse→Normal→Mask priority order they were collected in, so they
+    /// show up as real thumbnail cards right at the start of the grid
+    /// instead of a separate text-only panel — the whole point of the
+    /// feature is a one-glance visual match, not a name to read. Pulled in
+    /// even when the active Usage/Category/Source filter would otherwise
+    /// have excluded one (e.g. a Diffuse suggestion while the grid itself
+    /// is filtered to Normal, since expectedUsage narrows Query.Usage) —
+    /// these are an explicit recommendation, not a normal search result,
+    /// so the filter doesn't get to hide them. `raw` is the query engine's
+    /// own cached array; never mutated in place since the same array
+    /// instance is shared across every call with the same cache key.
+    /// DrawCard's own suggestion badge is what tells these apart from an
+    /// ordinary result once they're mixed into the same grid.</summary>
     private static IReadOnlyList<int> ApplySuggestedOrdering(IReadOnlyList<int> raw, SC2TextureCatalog catalog)
     {
-        if (string.IsNullOrEmpty(_suggestedId) || raw.Count == 0) return raw;
+        if (_siblingSuggestions.Count == 0) return raw;
         var entries = catalog.Entries;
-        var suggestedIndex = -1;
-        for (var i = 0; i < entries.Count; i++)
-            if (entries[i].Id == _suggestedId) { suggestedIndex = i; break; }
-        if (suggestedIndex < 0) return raw;
 
-        var pos = -1;
-        for (var i = 0; i < raw.Count; i++)
-            if (raw[i] == suggestedIndex) { pos = i; break; }
-        if (pos <= 0) return raw; // already first, or filtered out entirely (e.g. a Source filter excludes it)
+        var suggestedIndices = new List<int>(_siblingSuggestions.Count);
+        var seen = new HashSet<int>();
+        foreach (var (_, suggestion) in _siblingSuggestions)
+        {
+            var index = -1;
+            for (var i = 0; i < entries.Count; i++)
+                if (entries[i].Id == suggestion.Id) { index = i; break; }
+            if (index >= 0 && seen.Add(index)) suggestedIndices.Add(index);
+        }
+        if (suggestedIndices.Count == 0) return raw;
 
-        var reordered = new int[raw.Count];
-        reordered[0] = suggestedIndex;
-        var w = 1;
-        for (var i = 0; i < raw.Count; i++)
-            if (i != pos) reordered[w++] = raw[i];
+        var reordered = new List<int>(raw.Count + suggestedIndices.Count);
+        reordered.AddRange(suggestedIndices);
+        foreach (var index in raw)
+            if (!seen.Contains(index)) reordered.Add(index);
         return reordered;
     }
 
