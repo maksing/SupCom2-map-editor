@@ -1165,23 +1165,33 @@ public static class SC2CustomTextureImporter
     }
 
     /// <summary>`linear`: true for normal maps/RNM masks — same raw
-    /// vector/blend data TryLoad's own `linear` flag protects. The
-    /// temporary RenderTexture's own sRGB flag governs whether the GPU
-    /// gamma-encodes on write during the blit below, independent of
-    /// whether `source` itself was already decoded as linear — hardcoding
-    /// sRGB here re-introduced exactly the gamma distortion a correctly
-    /// linear-decoded source was meant to avoid, confirmed real from a
-    /// normal-map thumbnail showing visibly different colors/contrast than
-    /// the same file opened in an external image editor.</summary>
+    /// vector/blend data TryLoad's own `linear` flag protects.
+    ///
+    /// The write-side gamma handling is driven by GL.sRGBWrite around the
+    /// Blit call, NOT by the temporary RenderTexture's own
+    /// RenderTextureReadWrite mode (a prior version used the latter).
+    /// Confirmed real via diagnostic logging (SC2ColorDiag, 2026-09-18):
+    /// re-picking the same real Diffuse texture through the browser a
+    /// second time in the same session produced a filtered preview roughly
+    /// the SQUARE of the correct value (e.g. avg 0.575 source -> 0.292
+    /// filtered, instead of ~0.576) — the exact signature of an extra
+    /// gamma-encode being applied — while the raw decoded source stayed
+    /// byte-identical both times. RenderTexture.GetTemporary pools RTs by
+    /// descriptor including readWrite mode, but is not guaranteed to
+    /// re-tag a reused pooled RT's actual sRGB write behavior consistently
+    /// across repeated calls with the same size/format — GL.sRGBWrite is
+    /// Unity's own low-level, per-draw-call control for exactly this,
+    /// independent of any RenderTexture's own cached format/pool state.</summary>
     public static Texture2D BuildFilteredPreview(Texture source, int size = 160, bool linear = false)
     {
         if (source == null) return null;
-        var readWrite = linear ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB;
-        var target = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32, readWrite);
+        var target = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32);
         var previous = RenderTexture.active;
+        var previousSRGBWrite = GL.sRGBWrite;
         Texture2D result = null;
         try
         {
+            GL.sRGBWrite = !linear;
             var sourceWidth = Mathf.Max(1, source.width);
             var desiredLod = Mathf.Log(Mathf.Max(1f, (float)sourceWidth / size), 2f);
             var blitMat = GetBlitExplicitLodMaterial();
@@ -1221,6 +1231,7 @@ public static class SC2CustomTextureImporter
         }
         finally
         {
+            GL.sRGBWrite = previousSRGBWrite;
             RenderTexture.active = previous;
             RenderTexture.ReleaseTemporary(target);
         }
