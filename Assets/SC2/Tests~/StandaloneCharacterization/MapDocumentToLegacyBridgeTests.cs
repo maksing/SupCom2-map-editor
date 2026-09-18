@@ -91,6 +91,78 @@ public class MapDocumentToLegacyBridgeTests
     }
 
     [Fact]
+    public void ReconstructTerrain_CustomImportedTextureReference_ReassemblesFileTagFromGamePath()
+    {
+        // Mirrors SC2MaterialsPairsMode.BuildTextureReference's own split for
+        // a Custom-imported pick: no real Resources asset exists for it, so
+        // ResourcePath is left empty and the real TextureLibrary file path
+        // goes into GamePath instead. Regression coverage for a real bug:
+        // ToSlotInfo used to read ResourcePath only, silently dropping
+        // GamePath, so a material's imported Diffuse/Normal/Mask pick came
+        // back with an empty path on the very next load even though the
+        // .dds file was still on disk.
+        var store = NewStore(out var root);
+        try
+        {
+            var grass = new SC2Material { Id = "grass-id", Name = "Grass" };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material> { grass }, new List<SC2MaterialPair>(),
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+            doc.Materials[0].Diffuse = new SC2TextureReference
+            {
+                Name = "sand_abc1234567",
+                ResourcePath = "",
+                GamePath = "C:/Users/user/AppData/LocalLow/DefaultCompany/SupCom2 map editor/TextureLibrary/sand_abc1234567.dds",
+                Source = "Custom",
+            };
+
+            var result = SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store);
+
+            Assert.Equal("sand_abc1234567", result.MaterialDiffuse[0].Name);
+            Assert.Equal(
+                "file:C:/Users/user/AppData/LocalLow/DefaultCompany/SupCom2 map editor/TextureLibrary/sand_abc1234567.dds",
+                result.MaterialDiffuse[0].ResourcePath);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ReconstructTerrain_NonCustomTextureReference_ResourcePathPassesThroughUnchanged()
+    {
+        // A Vanilla/Map-sourced pick already carries its full "archive:..."
+        // (or bare resource) tag directly in ResourcePath (see
+        // SC2MaterialsPairsMode.BuildTextureReference's non-custom branch) —
+        // must NOT be reinterpreted or altered just because GamePath also
+        // happens to be populated (a real catalog entry has both).
+        var store = NewStore(out var root);
+        try
+        {
+            var grass = new SC2Material { Id = "grass-id", Name = "Grass" };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material> { grass }, new List<SC2MaterialPair>(),
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+            doc.Materials[0].Diffuse = new SC2TextureReference
+            {
+                Name = "sandstone_001a_d",
+                ResourcePath = "archive:textures/Terrain/sandstone_001a_d.win.dds",
+                GamePath = "/textures/Terrain/sandstone_001a_d.win.dds",
+                Source = "Vanilla",
+            };
+
+            var result = SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store);
+
+            Assert.Equal("archive:textures/Terrain/sandstone_001a_d.win.dds", result.MaterialDiffuse[0].ResourcePath);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void ReconstructTerrain_UnresolvableMaterialLinkBecomesUnassignedIndex()
     {
         var store = NewStore(out var root);

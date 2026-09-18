@@ -190,11 +190,34 @@ namespace SC2.MapEditor.Document
             return result;
         }
 
-        private static TextureSlotInfo ToSlotInfo(SC2TextureReference reference) => new()
+        /// <summary>A Custom-imported texture's real, reloadable path lives
+        /// in the reference's GamePath, not ResourcePath — see
+        /// SC2MaterialsPairsMode.BuildTextureReference's own split (a Custom
+        /// pick has no real Resources path at all, so ResourcePath is left
+        /// empty and the absolute TextureLibrary file path goes into
+        /// GamePath instead). TextureSlotInfo only carries a single string
+        /// forward into ResolveTextureByPathOrName, so that split has to be
+        /// reassembled here into the same "file:" tag
+        /// SC2TerrainMaterialFactory.RegisterResourcePath already uses for a
+        /// freshly-imported texture, and ResolveTextureByPathOrName's own
+        /// "file:" branch already knows how to resolve. Without this, a
+        /// Custom import's saved reference reconstructed to an EMPTY
+        /// ResourcePath on every reload (GamePath was silently dropped),
+        /// falling through to a same-Name catalog search that had nothing
+        /// to find — a material's imported Diffuse/Normal/Mask picks were
+        /// silently lost on the very next map load, even though the actual
+        /// .dds file was still sitting in TextureLibrary the whole time.</summary>
+        private static TextureSlotInfo ToSlotInfo(SC2TextureReference reference)
         {
-            Name = reference?.Name ?? "",
-            ResourcePath = reference?.ResourcePath ?? "",
-        };
+            var resourcePath = reference?.ResourcePath ?? "";
+            if (string.IsNullOrEmpty(resourcePath) && !string.IsNullOrEmpty(reference?.GamePath))
+                resourcePath = "file:" + reference.GamePath.Replace('\\', '/');
+            return new TextureSlotInfo
+            {
+                Name = reference?.Name ?? "",
+                ResourcePath = resourcePath,
+            };
+        }
 
         private static int ResolveMaterialIndex(string materialId, Dictionary<string, int> materialIndexById)
         {
