@@ -533,6 +533,15 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     public string TexturePath3 = "";
     public string ColorCorrectionCube = "";
     public string FogOfWarCorrectionCube = "";
+    /// <summary>Per-slot provenance tag ("archive:&lt;entryPath&gt;" or "") and
+    /// "copy into map on export" opt-in for the 5 texture paths above, in
+    /// SC2EnvironmentTextureSlot order (EnvironmentMap, SkyMap, TexturePath3,
+    /// ColorCorrectionCube, FogOfWarCorrectionCube) — see
+    /// SC2EnvironmentTextureExport. Lives here too (not just in the document)
+    /// because SC2EnvironmentLegacyBridge.BuildFromLegacy rebuilds the
+    /// document's Environment from this data on a runtime save.</summary>
+    public string[] EnvironmentTextureSourceTags = { "", "", "", "", "" };
+    public bool[] EnvironmentTextureForceExport = new bool[5];
 
     /// <summary>Name of the Area (SC2ObjZone.Name, e.g. "AREA_01") passed to
     /// ScenarioFramework.SetPlayableArea(...) in the exported _script.lua's

@@ -22,6 +22,10 @@ namespace SC2.MapEditor.Document
         // ApplyBlendState/ReverseLookupBlendState (e.g. "TerrainAlphaBlendState")
         // — empty means no override (default opaque state).
         public string BlendState = "";
+        // Shader property name -> true when that texture slot should be
+        // copied into the exported map even if it comes from a vanilla game
+        // archive (see SC2VanillaArchiveClassifier). Absent = default false.
+        public Dictionary<string, bool> TexturePathForceExport = new();
 
         public SC2ImportedTerrainMaterialOverrideDocument Clone() => new()
         {
@@ -29,6 +33,7 @@ namespace SC2.MapEditor.Document
             Flags = new Dictionary<string, float>(Flags),
             Vectors = new Dictionary<string, float[]>(Vectors),
             BlendState = BlendState,
+            TexturePathForceExport = new Dictionary<string, bool>(TexturePathForceExport),
         };
     }
 

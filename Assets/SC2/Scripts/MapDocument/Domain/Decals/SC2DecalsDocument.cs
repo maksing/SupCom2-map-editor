@@ -85,6 +85,18 @@ namespace SC2.MapEditor.Document
         public string NormalAtlasPath = "";
         public SC2BlobReference DiffuseAtlasContent;
         public SC2BlobReference NormalAtlasContent;
+        // Where the picked atlas texture originally came from, as the texture
+        // resource tag ("archive:<entryPath>", "file:<path>") — the atlas
+        // bytes themselves are content-hashed into DiffuseAtlasContent at pick
+        // time, which loses that. Empty for anything that isn't an archive
+        // pick. Lets export reference a vanilla-archive atlas by its real game
+        // path instead of copying it (see SC2VanillaArchiveClassifier).
+        public string DiffuseAtlasSourceTag = "";
+        public string NormalAtlasSourceTag = "";
+        // Per-atlas opt-in: copy the atlas into the exported map even when it
+        // comes from a vanilla game archive. Default false.
+        public bool DiffuseAtlasForceExport;
+        public bool NormalAtlasForceExport;
         public int AtlasWidth;
         public int AtlasHeight;
         public SC2DecalAtlasSource AtlasSource;
@@ -102,6 +114,8 @@ namespace SC2.MapEditor.Document
             VertexCount = VertexCount, IndexCount = IndexCount,
             DiffuseAtlasPath = DiffuseAtlasPath, NormalAtlasPath = NormalAtlasPath,
             DiffuseAtlasContent = DiffuseAtlasContent, NormalAtlasContent = NormalAtlasContent,
+            DiffuseAtlasSourceTag = DiffuseAtlasSourceTag, NormalAtlasSourceTag = NormalAtlasSourceTag,
+            DiffuseAtlasForceExport = DiffuseAtlasForceExport, NormalAtlasForceExport = NormalAtlasForceExport,
             AtlasWidth = AtlasWidth, AtlasHeight = AtlasHeight, AtlasSource = AtlasSource,
             KeepOriginalBakedLayer = KeepOriginalBakedLayer, SpatialState = SpatialState,
             Entries = Entries.ConvertAll(x => x.Clone()),
@@ -115,6 +129,8 @@ namespace SC2.MapEditor.Document
             VertexCount = c.VertexCount; IndexCount = c.IndexCount;
             DiffuseAtlasPath = c.DiffuseAtlasPath; NormalAtlasPath = c.NormalAtlasPath;
             DiffuseAtlasContent = c.DiffuseAtlasContent; NormalAtlasContent = c.NormalAtlasContent;
+            DiffuseAtlasSourceTag = c.DiffuseAtlasSourceTag; NormalAtlasSourceTag = c.NormalAtlasSourceTag;
+            DiffuseAtlasForceExport = c.DiffuseAtlasForceExport; NormalAtlasForceExport = c.NormalAtlasForceExport;
             AtlasWidth = c.AtlasWidth; AtlasHeight = c.AtlasHeight; AtlasSource = c.AtlasSource;
             KeepOriginalBakedLayer = c.KeepOriginalBakedLayer; SpatialState = c.SpatialState;
             Entries = c.Entries; Placements = c.Placements; State = c.State;

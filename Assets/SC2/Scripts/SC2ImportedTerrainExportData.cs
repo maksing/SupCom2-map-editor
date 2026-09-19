@@ -79,6 +79,13 @@ public sealed class SC2ImportedTerrainExportData
     /// Texture-based resolution, unchanged.</summary>
     public System.Collections.Generic.Dictionary<string, string> TexturePathOverrides;
 
+    /// <summary>Per-slot "copy into map on export" opt-in, same
+    /// "materialIndex:shaderProp" keys as TexturePathOverrides. A true entry
+    /// makes a vanilla-archive texture get copied into the exported map
+    /// instead of referenced by its real game path (see
+    /// SC2VanillaArchiveClassifier). Null/missing = default (don't copy).</summary>
+    public System.Collections.Generic.Dictionary<string, bool> TexturePathForceExport;
+
     /// <summary>When true, this entry stands in for the procedural
     /// decorative background terrain (SC2BackgroundTerrain) instead of
     /// the generator — the user has substituted their own custom

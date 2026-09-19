@@ -46,6 +46,13 @@ public class SC2CostsBlockData
     // vanilla texture not extracted into this project) that the editor
     // can't preview but should still export byte-correctly.
     public string DiffuseOverridePath="", NormalOverridePath="", MaskOverridePath="";
+
+    // Per-texture opt-in: copy this slot's texture into the exported map's
+    // own Textures folder even when it comes from a vanilla game archive
+    // (textures.scd/z_dlc1.scd/z_dlc1_map_shared.scd — see
+    // SC2VanillaArchiveClassifier). Default false: a vanilla texture is
+    // just referenced by its real in-game path in terrain.bdf.
+    public bool DiffuseForceExport, NormalForceExport, MaskForceExport;
 }
 
 [Serializable] public class SC2MaterialPair

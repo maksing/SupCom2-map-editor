@@ -157,8 +157,10 @@ public sealed class SC2DecalsShell : IDisposable
         // nothing for these two pickers specifically.
         var pickedDiffuse = SC2TerrainShell.DrawTexturePicker("Diffuse Atlas", _diffuseAtlas, "decal_diffuse_atlas", _normalAtlas) as Texture2D;
         if (pickedDiffuse != _diffuseAtlas) ApplyAtlasPick(pickedDiffuse, normal: false);
+        DrawAtlasForceExportToggle(normal: false);
         var pickedNormal = SC2TerrainShell.DrawTexturePicker("Normal Atlas", _normalAtlas, "decal_normal_atlas", _diffuseAtlas) as Texture2D;
         if (pickedNormal != _normalAtlas) ApplyAtlasPick(pickedNormal, normal: true);
+        DrawAtlasForceExportToggle(normal: true);
         // "New rect" used to also be here, duplicating the Atlas Editor's
         // own copy (below, alongside Duplicate/Delete/Previous/Next) — that
         // modal is where a new rect's position/size actually gets
@@ -1280,7 +1282,38 @@ public sealed class SC2DecalsShell : IDisposable
             if (normal) { next.NormalAtlasContent = blob; _normalAtlas = resolved; }
             else { next.DiffuseAtlasContent = blob; _diffuseAtlas = resolved; next.AtlasWidth = resolved.width; next.AtlasHeight = resolved.height; }
         }
+        // A different path is a different texture — its provenance and
+        // "copy into map on export" opt-in start over.
+        if (normal) { next.NormalAtlasSourceTag = ArchiveSourceTag(resolved); next.NormalAtlasForceExport = false; }
+        else { next.DiffuseAtlasSourceTag = ArchiveSourceTag(resolved); next.DiffuseAtlasForceExport = false; }
         Commit(normal ? "Edit Decal Normal Atlas Path" : "Edit Decal Diffuse Atlas Path", next);
+    }
+
+    /// <summary>Per-atlas "copy into map on export" opt-in — only offered when
+    /// the atlas actually came out of a vanilla game archive (anything else is
+    /// always exported as its own copy, or was typed as a plain game path).</summary>
+    private void DrawAtlasForceExportToggle(bool normal)
+    {
+        var tag = normal ? Doc.NormalAtlasSourceTag : Doc.DiffuseAtlasSourceTag;
+        if (!SC2VanillaArchiveClassifier.IsVanillaSlotPath(tag)) return;
+        var current = normal ? Doc.NormalAtlasForceExport : Doc.DiffuseAtlasForceExport;
+        var edited = GUILayout.Toggle(current, "Copy into map on export");
+        if (edited == current) return;
+        var next = Doc.Clone();
+        if (normal) next.NormalAtlasForceExport = edited; else next.DiffuseAtlasForceExport = edited;
+        Commit(normal ? "Toggle Decal Normal Atlas Copy On Export" : "Toggle Decal Diffuse Atlas Copy On Export", next);
+    }
+
+    /// <summary>The "archive:&lt;entryPath&gt;" tag of a texture that came out
+    /// of a game archive, or "" for anything else (custom file, generated,
+    /// null). ApplyAtlasPick/DrawAtlasPathField hash the picked texture into
+    /// the blob store, which loses where it came from — export needs that to
+    /// reference a vanilla-archive atlas by its real game path instead of
+    /// copying it (SC2VanillaArchiveClassifier).</summary>
+    private static string ArchiveSourceTag(Texture texture)
+    {
+        var tag = texture != null ? SC2TerrainMaterialFactory.TryGetResourcePath(texture) : null;
+        return tag != null && tag.StartsWith("archive:", StringComparison.Ordinal) ? tag : "";
     }
 
     private void ApplyAtlasPick(Texture2D texture, bool normal)
@@ -1297,12 +1330,16 @@ public sealed class SC2DecalsShell : IDisposable
             _normalAtlas = texture;
             next.NormalAtlasPath = texture != null ? "decals_normal.dds" : "";
             next.NormalAtlasContent = blob;
+            next.NormalAtlasSourceTag = ArchiveSourceTag(texture);
+            next.NormalAtlasForceExport = false;
         }
         else
         {
             _diffuseAtlas = texture;
             next.DiffuseAtlasPath = texture != null ? "decals_diffuse.dds" : "";
             next.DiffuseAtlasContent = blob;
+            next.DiffuseAtlasSourceTag = ArchiveSourceTag(texture);
+            next.DiffuseAtlasForceExport = false;
             next.AtlasWidth = texture != null ? texture.width : 0;
             next.AtlasHeight = texture != null ? texture.height : 0;
             next.AtlasSource = SC2DecalAtlasSource.Existing;

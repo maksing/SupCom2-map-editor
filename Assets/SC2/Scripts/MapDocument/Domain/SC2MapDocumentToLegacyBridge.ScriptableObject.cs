@@ -85,6 +85,8 @@ namespace SC2.MapEditor.Document
             data.TexturePath3 = env.TexturePath3;
             data.ColorCorrectionCube = env.ColorCorrectionCube;
             data.FogOfWarCorrectionCube = env.FogOfWarCorrectionCube;
+            data.EnvironmentTextureSourceTags = (string[])env.TextureExport.SourceTags.Clone();
+            data.EnvironmentTextureForceExport = (bool[])env.TextureExport.ForceExport.Clone();
             data.WaterPlaneSize = env.WaterPlaneSize;
             data.WaterUvScale = env.WaterUvScale;
             data.WaterTexturePaths = env.WaterTexturePaths;
@@ -170,6 +172,9 @@ namespace SC2.MapEditor.Document
                 m.Diffuse = ResolveSlot(terrain.MaterialDiffuse[i], m.Name, "Diffuse");
                 m.Normal = ResolveSlot(terrain.MaterialNormal[i], m.Name, "Normal");
                 m.Mask = ResolveSlot(terrain.MaterialMask[i], m.Name, "Mask");
+                m.DiffuseForceExport = terrain.MaterialDiffuse[i].ForceExport;
+                m.NormalForceExport = terrain.MaterialNormal[i].ForceExport;
+                m.MaskForceExport = terrain.MaterialMask[i].ForceExport;
                 data.Materials.Add(m);
             }
             data.Pairs = terrain.Pairs;

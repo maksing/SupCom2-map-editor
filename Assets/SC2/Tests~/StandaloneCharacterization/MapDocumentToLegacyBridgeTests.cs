@@ -130,6 +130,58 @@ public class MapDocumentToLegacyBridgeTests
     }
 
     [Fact]
+    public void ReconstructTerrain_ForceExportFlag_IsCarriedPerSlot_AndDefaultsToFalse()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var grass = new SC2Material { Id = "grass-id", Name = "Grass", NormalForceExport = true };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material> { grass }, new List<SC2MaterialPair>(),
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+            // The forward (legacy -> document) bridge keeps the flag even with no texture assigned.
+            Assert.False(doc.Materials[0].Diffuse.ForceExport);
+            Assert.True(doc.Materials[0].Normal.ForceExport);
+            Assert.False(doc.Materials[0].Mask.ForceExport);
+
+            var result = SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store);
+
+            Assert.False(result.MaterialDiffuse[0].ForceExport);
+            Assert.True(result.MaterialNormal[0].ForceExport);
+            Assert.False(result.MaterialMask[0].ForceExport);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void EnvironmentTextureExport_RoundTripsThroughTheLegacyBridge()
+    {
+        var tags = new[] { "", "archive:textures/env/sky.win.dds", "", "", "" };
+        var force = new[] { false, true, false, false, false };
+        var header = new byte[SC2EnvironmentDocument.HeaderSize];
+
+        var doc = SC2EnvironmentLegacyBridge.BuildFromLegacy(header, "", "/textures/env/sky.dds", "", "", "",
+            textureSourceTags: tags, textureForceExport: force);
+        Assert.True(doc.TextureExport.GetForce(SC2EnvironmentTextureSlot.SkyMap));
+        Assert.Equal("archive:textures/env/sky.win.dds", doc.TextureExport.GetTag(SC2EnvironmentTextureSlot.SkyMap));
+
+        var result = SC2MapDocumentToLegacyBridge.ReconstructEnvironment(doc);
+        Assert.True(result.TextureExport.GetForce(SC2EnvironmentTextureSlot.SkyMap));
+        Assert.False(result.TextureExport.GetForce(SC2EnvironmentTextureSlot.EnvironmentMap));
+
+        // Old data with no arrays at all must come out as five unchecked, empty slots.
+        var legacy = SC2EnvironmentLegacyBridge.BuildFromLegacy(header, "", "", "", "", "");
+        for (var i = 0; i < SC2EnvironmentTextureExport.SlotCount; i++)
+        {
+            Assert.False(legacy.TextureExport.GetForce((SC2EnvironmentTextureSlot)i));
+            Assert.Equal("", legacy.TextureExport.GetTag((SC2EnvironmentTextureSlot)i));
+        }
+    }
+
+    [Fact]
     public void ReconstructTerrain_NonCustomTextureReference_ResourcePathPassesThroughUnchanged()
     {
         // A Vanilla/Map-sourced pick already carries its full "archive:..."

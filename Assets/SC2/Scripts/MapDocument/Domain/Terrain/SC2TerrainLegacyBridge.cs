@@ -152,9 +152,9 @@ namespace SC2.MapEditor.Document
             {
                 Id = m.Id,
                 Name = m.Name,
-                Diffuse = BuildTextureReference(m.Diffuse, resolveResourcePath),
-                Normal = BuildTextureReference(m.Normal, resolveResourcePath),
-                Mask = BuildTextureReference(m.Mask, resolveResourcePath),
+                Diffuse = BuildTextureReference(m.Diffuse, m.DiffuseForceExport, resolveResourcePath),
+                Normal = BuildTextureReference(m.Normal, m.NormalForceExport, resolveResourcePath),
+                Mask = BuildTextureReference(m.Mask, m.MaskForceExport, resolveResourcePath),
                 DebugColor = m.Color,
             };
         }
@@ -175,13 +175,14 @@ namespace SC2.MapEditor.Document
         /// or a resolver returning null both mean "nothing to resolve," the
         /// same honest gap every other bridge already leaves for genuinely
         /// unavailable data.</summary>
-        private static SC2TextureReference BuildTextureReference(Texture2D texture, Func<Texture2D, string> resolveResourcePath)
+        private static SC2TextureReference BuildTextureReference(Texture2D texture, bool forceExport, Func<Texture2D, string> resolveResourcePath)
         {
-            if (texture == null) return new SC2TextureReference();
+            if (texture == null) return new SC2TextureReference { ForceExport = forceExport };
             return new SC2TextureReference
             {
                 Name = texture.name ?? "",
                 ResourcePath = resolveResourcePath != null ? (resolveResourcePath(texture) ?? "") : "",
+                ForceExport = forceExport,
             };
         }
 

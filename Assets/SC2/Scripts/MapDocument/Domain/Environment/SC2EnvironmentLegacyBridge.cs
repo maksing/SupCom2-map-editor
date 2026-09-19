@@ -33,7 +33,9 @@ namespace SC2.MapEditor.Document
             float waterDepthFalloffPower = 2f,
             float waterDepthMinAlpha = 0.04f,
             bool waterDepthPaintBorder = true,
-            bool waterDepthImageBorderOutline = false)
+            bool waterDepthImageBorderOutline = false,
+            string[] textureSourceTags = null,
+            bool[] textureForceExport = null)
         {
             if (environmentHeader == null) throw new ArgumentNullException(nameof(environmentHeader));
             if (environmentHeader.Length != SC2EnvironmentDocument.HeaderSize)
@@ -42,8 +44,15 @@ namespace SC2.MapEditor.Document
                     nameof(environmentHeader));
 
             var headerCopy = (byte[])environmentHeader.Clone();
+            var textureExport = new SC2EnvironmentTextureExport
+            {
+                SourceTags = textureSourceTags ?? new string[SC2EnvironmentTextureExport.SlotCount],
+                ForceExport = textureForceExport ?? new bool[SC2EnvironmentTextureExport.SlotCount],
+            };
+            textureExport.CopyFrom(textureExport); // normalizes length/nulls
             return new SC2EnvironmentDocument
             {
+                TextureExport = textureExport,
                 // Both start equal — see this type's own doc comment for why
                 // a legacy-view snapshot has no separate "as imported" form
                 // to distinguish them with yet.

@@ -1,5 +1,6 @@
 using UnityEngine;
 using BdfIO.Formats.Info;
+using SC2.MapEditor.Document;
 
 /// <summary>
 /// The per-tab field-drawing logic for an info.bdf InfoModel — extracted out
@@ -334,14 +335,22 @@ public sealed class SC2InfoModelFieldDrawer
     // LUTs (confirmed via gamedata.scd/effects/*.hlsl: samplerCUBE for the
     // first two, sampler3D for the other two — "Cube" in their names is the
     // standard color-grading "LUT cube" term, not a skybox cube).
+    /// <summary>Per-slot export provenance + "copy into map on export" opt-in
+    /// for the 5 texture paths below (SC2EnvironmentTextureExport). Set by the
+    /// host that owns a real map document (SC2EnvironmentShell mutates it in
+    /// place and turns changes into undoable commands); left null by the
+    /// standalone Info.bdf editor, which has no map to export into — the
+    /// per-texture checkbox is then simply not drawn.</summary>
+    public SC2EnvironmentTextureExport TextureExport;
+
     public void DrawTexturesTab(InfoModel m)
     {
         SC2EnvFieldGui.SectionLabel("🖼  Texture Paths (@240..256)");
-        m.EnvironmentMap = DrawInfoTextureField("EnvironmentMap", "InfoBdf:EnvironmentMap:env", m.EnvironmentMap, ref _texEnvironmentMap, ref _texEnvironmentMapPath);
-        m.SkyMap = DrawInfoTextureField("SkyMap", "InfoBdf:SkyMap:sky", m.SkyMap, ref _texSkyMap, ref _texSkyMapPath);
-        m.ReservedTexturePath = DrawInfoTextureField("ReservedTexturePath", "InfoBdf:ReservedTexturePath", m.ReservedTexturePath, ref _texReservedTexturePath, ref _texReservedTexturePathPath);
-        m.ColorCorrectionCube = DrawInfoTextureField("ColorCorrectionCube", "InfoBdf:ColorCorrectionCube:cube", m.ColorCorrectionCube, ref _texColorCorrectionCube, ref _texColorCorrectionCubePath);
-        m.FogOfWarCorrectionCube = DrawInfoTextureField("FogOfWarCorrectionCube", "InfoBdf:FogOfWarCorrectionCube:cube", m.FogOfWarCorrectionCube, ref _texFogOfWarCorrectionCube, ref _texFogOfWarCorrectionCubePath);
+        m.EnvironmentMap = DrawInfoTextureField(SC2EnvironmentTextureSlot.EnvironmentMap, "EnvironmentMap", "InfoBdf:EnvironmentMap:env", m.EnvironmentMap, ref _texEnvironmentMap, ref _texEnvironmentMapPath);
+        m.SkyMap = DrawInfoTextureField(SC2EnvironmentTextureSlot.SkyMap, "SkyMap", "InfoBdf:SkyMap:sky", m.SkyMap, ref _texSkyMap, ref _texSkyMapPath);
+        m.ReservedTexturePath = DrawInfoTextureField(SC2EnvironmentTextureSlot.TexturePath3, "ReservedTexturePath", "InfoBdf:ReservedTexturePath", m.ReservedTexturePath, ref _texReservedTexturePath, ref _texReservedTexturePathPath);
+        m.ColorCorrectionCube = DrawInfoTextureField(SC2EnvironmentTextureSlot.ColorCorrectionCube, "ColorCorrectionCube", "InfoBdf:ColorCorrectionCube:cube", m.ColorCorrectionCube, ref _texColorCorrectionCube, ref _texColorCorrectionCubePath);
+        m.FogOfWarCorrectionCube = DrawInfoTextureField(SC2EnvironmentTextureSlot.FogOfWarCorrectionCube, "FogOfWarCorrectionCube", "InfoBdf:FogOfWarCorrectionCube:cube", m.FogOfWarCorrectionCube, ref _texFogOfWarCorrectionCube, ref _texFogOfWarCorrectionCubePath);
     }
 
     /// <summary>Bridges an InfoModel string path field to the shared texture
@@ -355,7 +364,7 @@ public sealed class SC2InfoModelFieldDrawer
     /// browser (SC2TerrainMaterialFactory.TryGetResourcePath gives back the
     /// resource path to persist — the same reverse-lookup Accept() already
     /// populates for every picked entry).</summary>
-    private static string DrawInfoTextureField(string label, string pickerKey, string currentPath, ref Texture cache, ref string cachedPath)
+    private string DrawInfoTextureField(SC2EnvironmentTextureSlot slot, string label, string pickerKey, string currentPath, ref Texture cache, ref string cachedPath)
     {
         if (currentPath != cachedPath)
         {
@@ -363,6 +372,7 @@ public sealed class SC2InfoModelFieldDrawer
             cachedPath = currentPath;
         }
         var pathDraft = cachedPath ?? "";
+        var pathBefore = pathDraft;
         var picked = SC2TerrainShell.DrawTexturePickerWithPath(label, cache, pickerKey, ref pathDraft, out var pickedViaBrowser);
         // A browser pick resolves the path from the picked texture (same as
         // before); a typed-path edit already resolved into `picked` inside
@@ -378,6 +388,30 @@ public sealed class SC2InfoModelFieldDrawer
             pathDraft = SC2TerrainMaterialFactory.ResolveGamePath(picked);
         cache = picked;
         cachedPath = pathDraft;
+
+        // Export provenance: ResolveGamePath above throws away which archive
+        // entry the pick came from, so remember the tag next to the path — a
+        // fresh pick starts back at "don't copy"; any other edit of the path
+        // (typed, reset, import) invalidates the old tag/opt-in.
+        if (TextureExport != null)
+        {
+            if (pickedViaBrowser)
+            {
+                var tag = picked != null ? SC2TerrainMaterialFactory.TryGetResourcePath(picked) : null;
+                TextureExport.Set(slot, tag != null && tag.StartsWith("archive:", System.StringComparison.Ordinal) ? tag : "", false);
+            }
+            else if (!string.Equals(pathDraft, pathBefore, System.StringComparison.Ordinal))
+                TextureExport.Set(slot, "", false);
+
+            var currentTag = TextureExport.GetTag(slot);
+            if (SC2VanillaArchiveClassifier.TagMatchesGamePath(currentTag, cachedPath) &&
+                SC2VanillaArchiveClassifier.IsVanillaSlotPath(currentTag))
+            {
+                var force = TextureExport.GetForce(slot);
+                var newForce = GUILayout.Toggle(force, "Copy into map on export");
+                if (newForce != force) TextureExport.Set(slot, currentTag, newForce);
+            }
+        }
         return cachedPath ?? "";
     }
 

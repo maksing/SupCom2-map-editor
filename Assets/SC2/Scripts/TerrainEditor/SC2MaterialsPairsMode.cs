@@ -133,9 +133,9 @@ public class SC2MaterialsMode
             // from two DIFFERENT real texture families — Mask then offers
             // both families' own Mask candidate as separate buttons rather
             // than only ever guessing from one arbitrarily preferred slot.
-            DrawTextureField(i, "Diffuse", ref mat.Diffuse, ref mat.DiffuseOverridePath, mat.Normal, mat.Mask);
-            DrawTextureField(i, "Normal", ref mat.Normal, ref mat.NormalOverridePath, mat.Diffuse, mat.Mask);
-            DrawTextureField(i, "Mask", ref mat.Mask, ref mat.MaskOverridePath, mat.Diffuse, mat.Normal);
+            DrawTextureField(i, "Diffuse", ref mat.Diffuse, ref mat.DiffuseOverridePath, ref mat.DiffuseForceExport, mat.Normal, mat.Mask);
+            DrawTextureField(i, "Normal", ref mat.Normal, ref mat.NormalOverridePath, ref mat.NormalForceExport, mat.Diffuse, mat.Mask);
+            DrawTextureField(i, "Mask", ref mat.Mask, ref mat.MaskOverridePath, ref mat.MaskForceExport, mat.Diffuse, mat.Normal);
         }
         SC2TerrainShell.EndUnifiedPanelBox();
         EditorGUILayout.Space(2);
@@ -164,7 +164,7 @@ public class SC2MaterialsMode
             terrain.Materials.Add(new SC2MaterialDocument { Id = mat.Id, Name = mat.Name });
     }
 
-    private void DrawTextureField(int materialIndex, string label, ref Texture2D texture, ref string overridePath, params Texture2D[] siblingHints)
+    private void DrawTextureField(int materialIndex, string label, ref Texture2D texture, ref string overridePath, ref bool forceExport, params Texture2D[] siblingHints)
     {
         var previous = texture;
         var previousPath = overridePath;
@@ -192,13 +192,16 @@ public class SC2MaterialsMode
         {
             _win.RecordUndoCheckpointFor(Data, "Change Material " + label + " Texture");
             var material = Data.Materials[materialIndex];
+            // The "copy into map on export" opt-in belongs to one specific
+            // texture — a different texture starts back at the default.
+            forceExport = false;
             // See the rename handler's own comment above for why this is
             // gated on Data==_win.Data (background materials have no
             // document representation to lazily create).
             if (_win.Data == Data)
             {
                 EnsureMaterialDocument(material);
-                _win.ExecuteCommand(new SC2SetMaterialTextureCommand(material.Id, TextureSlot(label), BuildTextureReference(next)));
+                _win.ExecuteCommand(new SC2SetMaterialTextureCommand(material.Id, TextureSlot(label), BuildTextureReference(next, forceExport)));
             }
             // A fresh browser pick used to ALWAYS clear
             // the override path, on the assumption Unity's own asset
@@ -233,6 +236,31 @@ public class SC2MaterialsMode
         }
         texture = next;
         overridePath = pathDraft;
+
+        // Only a texture that actually came out of a game archive can be
+        // "vanilla" — a Custom "file:" import always gets copied and a
+        // hand-typed real game path is never copied at all, so the opt-in
+        // would do nothing for either and is left out rather than shown dead.
+        var archiveTag = !string.IsNullOrEmpty(pathDraft) && pathDraft.StartsWith("archive:", StringComparison.Ordinal)
+            ? pathDraft
+            : (next != null ? SC2TerrainMaterialFactory.TryGetResourcePath(next) : null);
+        if (archiveTag != null && archiveTag.StartsWith("archive:", StringComparison.Ordinal))
+        {
+            var newForceExport = GUILayout.Toggle(forceExport, "Copy into map on export");
+            if (newForceExport != forceExport)
+            {
+                _win.RecordUndoCheckpointFor(Data, "Change Material " + label + " Copy On Export");
+                forceExport = newForceExport;
+                if (_win.Data == Data)
+                {
+                    var material = Data.Materials[materialIndex];
+                    EnsureMaterialDocument(material);
+                    _win.ExecuteCommand(new SC2SetMaterialTextureCommand(material.Id, TextureSlot(label), BuildTextureReference(next, forceExport)));
+                }
+                EditorUtility.SetDirty(Data);
+                _win.MarkDirtyAndRepaint();
+            }
+        }
     }
 
     private static SC2MaterialTextureSlot TextureSlot(string label)
@@ -242,9 +270,9 @@ public class SC2MaterialsMode
         return SC2MaterialTextureSlot.Diffuse;
     }
 
-    private static SC2TextureReference BuildTextureReference(Texture2D texture)
+    private static SC2TextureReference BuildTextureReference(Texture2D texture, bool forceExport)
     {
-        if (texture == null) return new SC2TextureReference();
+        if (texture == null) return new SC2TextureReference { ForceExport = forceExport };
         var path = SC2TerrainMaterialFactory.TryGetResourcePath(texture) ?? "";
         var custom = path.StartsWith("file:", StringComparison.Ordinal);
         var identityPath = custom ? path.Substring(5) : path;
@@ -259,6 +287,7 @@ public class SC2MaterialsMode
             GamePath = custom ? identityPath : catalogEntry?.GamePath ?? "",
             Source = custom ? "Custom" : catalogEntry?.Source.ToString() ?? "Vanilla",
             ContentHash = catalogEntry?.ContentHash ?? "",
+            ForceExport = forceExport,
         };
     }
 }

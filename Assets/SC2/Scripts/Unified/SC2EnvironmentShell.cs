@@ -133,6 +133,14 @@ public sealed class SC2EnvironmentShell
     /// field(s) changed and fire the matching command(s).</summary>
     private EnvSnapshot _lastCommitted;
 
+    /// <summary>Working copy of the 5 texture slots' export provenance/opt-in
+    /// (SC2EnvironmentTextureExport). The drawer mutates this instance in
+    /// place while the Textures tab is drawn; MaybeSnapshotTextureExport turns
+    /// any difference from the document into undoable commands, and Commit()
+    /// mirrors it into SC2TerrainData (which the runtime save path rebuilds the
+    /// document from).</summary>
+    private readonly SC2EnvironmentTextureExport _textureExport = new();
+
     public SC2EnvironmentShell(SC2TerrainShell terrainShell, SC2MapSession session)
     {
         _terrainShell = terrainShell;
@@ -321,6 +329,13 @@ public sealed class SC2EnvironmentShell
         env.TexturePath3 = _m.ReservedTexturePath;
         env.ColorCorrectionCube = _m.ColorCorrectionCube;
         env.FogOfWarCorrectionCube = _m.FogOfWarCorrectionCube;
+        _textureExport.CopyFrom(new SC2EnvironmentTextureExport
+        {
+            SourceTags = Data.EnvironmentTextureSourceTags,
+            ForceExport = Data.EnvironmentTextureForceExport,
+        });
+        _drawer.TextureExport = _textureExport;
+        env.TextureExport = _textureExport.Clone();
         _lastCommitted = new EnvSnapshot(_m);
 
         _loadedForData = Data;
@@ -338,6 +353,8 @@ public sealed class SC2EnvironmentShell
         Data.TexturePath3 = _m.ReservedTexturePath;
         Data.ColorCorrectionCube = _m.ColorCorrectionCube;
         Data.FogOfWarCorrectionCube = _m.FogOfWarCorrectionCube;
+        Data.EnvironmentTextureSourceTags = (string[])_textureExport.SourceTags.Clone();
+        Data.EnvironmentTextureForceExport = (bool[])_textureExport.ForceExport.Clone();
         _terrainShell.SaveTerrainState(writeAssets: true);
     }
 
@@ -350,6 +367,7 @@ public sealed class SC2EnvironmentShell
     /// fields from different tabs at once) by checking each independently.</summary>
     private void MaybeSnapshot()
     {
+        MaybeSnapshotTextureExport();
         if (_lastCommitted.MatchesCurrent(_m)) return;
 
         var document = _session.Document;
@@ -363,6 +381,25 @@ public sealed class SC2EnvironmentShell
         ExecuteIfChanged(document, SC2EnvironmentTextureSlot.FogOfWarCorrectionCube, _lastCommitted.FogOfWarCorrectionCube, _m.FogOfWarCorrectionCube);
 
         _lastCommitted = new EnvSnapshot(_m);
+        _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    }
+
+    /// <summary>Fires one command per texture slot whose provenance tag or
+    /// "copy into map on export" opt-in differs from the document's — same
+    /// diff-then-command approach as the path strings above.</summary>
+    private void MaybeSnapshotTextureExport()
+    {
+        var document = _session.Document;
+        var committed = document.Environment.TextureExport ??= new SC2EnvironmentTextureExport();
+        if (committed.ContentEquals(_textureExport)) return;
+        for (var i = 0; i < SC2EnvironmentTextureExport.SlotCount; i++)
+        {
+            var slot = (SC2EnvironmentTextureSlot)i;
+            var tag = _textureExport.GetTag(slot);
+            var force = _textureExport.GetForce(slot);
+            if (string.Equals(tag, committed.GetTag(slot), StringComparison.Ordinal) && force == committed.GetForce(slot)) continue;
+            _session.History.Execute(document, new SC2SetEnvironmentTextureExportCommand(slot, tag, force));
+        }
         _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
     }
 
@@ -429,6 +466,7 @@ public sealed class SC2EnvironmentShell
         _m.ReservedTexturePath = env.TexturePath3;
         _m.ColorCorrectionCube = env.ColorCorrectionCube;
         _m.FogOfWarCorrectionCube = env.FogOfWarCorrectionCube;
+        _textureExport.CopyFrom(env.TextureExport);
         _lastCommitted = new EnvSnapshot(_m);
     }
 

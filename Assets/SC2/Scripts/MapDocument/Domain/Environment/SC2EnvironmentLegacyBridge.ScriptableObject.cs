@@ -32,7 +32,9 @@ namespace SC2.MapEditor.Document
                 data.WaterDepthFalloffPower,
                 data.WaterDepthMinAlpha,
                 data.WaterDepthPaintBorder,
-                data.WaterDepthImageBorderOutline);
+                data.WaterDepthImageBorderOutline,
+                data.EnvironmentTextureSourceTags,
+                data.EnvironmentTextureForceExport);
         }
     }
 }

@@ -43,6 +43,9 @@ namespace SC2.MapEditor.Document
         public string TexturePath3 = "";
         public string ColorCorrectionCube = "";
         public string FogOfWarCorrectionCube = "";
+        /// <summary>Provenance + "copy into map on export" opt-in for the 5
+        /// texture paths above — see SC2EnvironmentTextureExport.</summary>
+        public SC2EnvironmentTextureExport TextureExport = new();
         public List<SC2UnknownInfoField> UnknownFields = new();
 
         /// <summary>Live water-plane geometry settings (SC2WaterPlane) — plain

@@ -70,6 +70,8 @@ public class MapDocumentSerializerTests
         doc.Environment.TexturePath3 = "/textures/env/extra.dds";
         doc.Environment.ColorCorrectionCube = "/textures/lut/default.dds";
         doc.Environment.FogOfWarCorrectionCube = "/textures/lut/fow.dds";
+        doc.Environment.TextureExport.Set(SC2EnvironmentTextureSlot.SkyMap, "archive:textures/env/sky.win.dds", true);
+        doc.Environment.TextureExport.Set(SC2EnvironmentTextureSlot.ColorCorrectionCube, "archive:textures/lut/default.win.dds", false);
         doc.Environment.WaterPlaneSize = 2048;
         doc.Environment.WaterUvScale = 512f;
         doc.Environment.WaterTexturePaths = new[] { "/textures/water/diffuse.dds", "/textures/water/normal.dds" };
@@ -171,7 +173,7 @@ public class MapDocumentSerializerTests
         doc.Terrain.Materials.Add(new SC2MaterialDocument
         {
             Id = "mat-1", Name = "Grass",
-            Diffuse = new SC2TextureReference { Id = "tex-1", Name = "grass_d", ResourcePath = "res/grass_d", GamePath = "/textures/grass_d.dds", Source = "Vanilla", ContentHash = "" },
+            Diffuse = new SC2TextureReference { Id = "tex-1", Name = "grass_d", ResourcePath = "res/grass_d", GamePath = "/textures/grass_d.dds", Source = "Vanilla", ContentHash = "", ForceExport = true },
             Normal = new SC2TextureReference { Name = "grass_n" },
             Mask = new SC2TextureReference { Name = "grass_m" },
             DebugColor = new Color(0.2f, 0.8f, 0.1f, 1f),
@@ -205,6 +207,7 @@ public class MapDocumentSerializerTests
         importedOverride.Flags["_EnableRNM"] = 1f;
         importedOverride.Vectors["_TextureScroll"] = new[] { 0.5f, -0.25f, 0f, 0f };
         importedOverride.BlendState = "TerrainAlphaBlendState";
+        importedOverride.TexturePathForceExport["_Diffuse1"] = true;
         doc.Terrain.ImportedEntries.Add(new SC2ImportedTerrainEntryDocument
         {
             Id = "imported-1", DisplayName = "Imported Rock",
@@ -246,6 +249,9 @@ public class MapDocumentSerializerTests
         doc.Decals.NormalAtlasPath = "/textures/decals/normal_atlas.dds";
         doc.Decals.DiffuseAtlasContent = new SC2BlobReference("decal-diffuse-hash", 4096);
         doc.Decals.NormalAtlasContent = new SC2BlobReference("decal-normal-hash", 4096);
+        doc.Decals.DiffuseAtlasSourceTag = "archive:textures/decals/diffuse_atlas.win.dds";
+        doc.Decals.DiffuseAtlasForceExport = true;
+        doc.Decals.NormalAtlasSourceTag = "archive:textures/decals/normal_atlas.win.dds";
         doc.Decals.AtlasWidth = 1024;
         doc.Decals.AtlasHeight = 1024;
         doc.Decals.AtlasSource = SC2DecalAtlasSource.Existing;
@@ -326,6 +332,11 @@ public class MapDocumentSerializerTests
         Assert.Equal(original.Environment.TexturePath3, restored.Environment.TexturePath3);
         Assert.Equal(original.Environment.ColorCorrectionCube, restored.Environment.ColorCorrectionCube);
         Assert.Equal(original.Environment.FogOfWarCorrectionCube, restored.Environment.FogOfWarCorrectionCube);
+        Assert.True(restored.Environment.TextureExport.GetForce(SC2EnvironmentTextureSlot.SkyMap));
+        Assert.Equal("archive:textures/env/sky.win.dds", restored.Environment.TextureExport.GetTag(SC2EnvironmentTextureSlot.SkyMap));
+        Assert.False(restored.Environment.TextureExport.GetForce(SC2EnvironmentTextureSlot.ColorCorrectionCube));
+        Assert.Equal("archive:textures/lut/default.win.dds", restored.Environment.TextureExport.GetTag(SC2EnvironmentTextureSlot.ColorCorrectionCube));
+        Assert.False(restored.Environment.TextureExport.GetForce(SC2EnvironmentTextureSlot.EnvironmentMap));
         Assert.Equal(original.Environment.WaterPlaneSize, restored.Environment.WaterPlaneSize);
         Assert.Equal(original.Environment.WaterUvScale, restored.Environment.WaterUvScale);
         Assert.Equal(original.Environment.WaterTexturePaths, restored.Environment.WaterTexturePaths);
@@ -410,6 +421,8 @@ public class MapDocumentSerializerTests
         Assert.Single(restored.Terrain.Materials);
         Assert.Equal("tex-1", restored.Terrain.Materials[0].Diffuse.Id);
         Assert.Equal("/textures/grass_d.dds", restored.Terrain.Materials[0].Diffuse.GamePath);
+        Assert.True(restored.Terrain.Materials[0].Diffuse.ForceExport);
+        Assert.False(restored.Terrain.Materials[0].Normal.ForceExport);
         Assert.Equal(new Color(0.2f, 0.8f, 0.1f, 1f), restored.Terrain.Materials[0].DebugColor);
         Assert.Single(restored.Terrain.MaterialPairs);
         Assert.Equal("mat-2", restored.Terrain.MaterialPairs[0].Material2Id);
@@ -446,6 +459,8 @@ public class MapDocumentSerializerTests
         Assert.Equal(1f, restoredImported.MaterialOverrides[0].Flags["_EnableRNM"]);
         Assert.Equal(new[] { 0.5f, -0.25f, 0f, 0f }, restoredImported.MaterialOverrides[0].Vectors["_TextureScroll"]);
         Assert.Equal("TerrainAlphaBlendState", restoredImported.MaterialOverrides[0].BlendState);
+        Assert.True(restoredImported.MaterialOverrides[0].TexturePathForceExport["_Diffuse1"]);
+        Assert.True(restoredImported.MaterialOverrides[0].Clone().TexturePathForceExport["_Diffuse1"]);
 
         Assert.Equal("scenario-lua-hash", restored.Scenario.OriginalScenarioLua.ContentHash);
         Assert.Equal("save-lua-hash", restored.Scenario.OriginalSaveLua.ContentHash);
@@ -465,6 +480,14 @@ public class MapDocumentSerializerTests
         Assert.Equal(400, restored.Decals.VertexCount);
         Assert.Equal("/textures/decals/diffuse_atlas.dds", restored.Decals.DiffuseAtlasPath);
         Assert.Equal("decal-diffuse-hash", restored.Decals.DiffuseAtlasContent.ContentHash);
+        Assert.Equal("archive:textures/decals/diffuse_atlas.win.dds", restored.Decals.DiffuseAtlasSourceTag);
+        Assert.True(restored.Decals.DiffuseAtlasForceExport);
+        Assert.Equal("archive:textures/decals/normal_atlas.win.dds", restored.Decals.NormalAtlasSourceTag);
+        Assert.False(restored.Decals.NormalAtlasForceExport);
+        // Clone/CopyFrom (used by every Decals commit) must carry them too.
+        var decalsClone = restored.Decals.Clone();
+        Assert.True(decalsClone.DiffuseAtlasForceExport);
+        Assert.Equal("archive:textures/decals/normal_atlas.win.dds", decalsClone.NormalAtlasSourceTag);
         Assert.Equal(1024, restored.Decals.AtlasWidth);
         Assert.Equal(SC2DecalAtlasSource.Existing, restored.Decals.AtlasSource);
         Assert.Equal(SC2DecalsSpatialState.Current, restored.Decals.SpatialState);

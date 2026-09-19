@@ -596,6 +596,8 @@ public static class SC2RuntimeTerrainPersistence
         public float Collision2HeightOffset;
         public byte[] EnvironmentHeader; // JsonUtility supports byte[] natively (base64), no BlockCopy workaround needed
         public string EnvironmentMap, SkyMap, TexturePath3, ColorCorrectionCube, FogOfWarCorrectionCube;
+        public string[] EnvironmentTextureSourceTags;
+        public bool[] EnvironmentTextureForceExport;
 
         // Lighting Bake Inputs (SC2TerrainData.RnmBakeSync*/RnmBakeOverride*/
         // RnmBakeShadowSoftRadius) — had no home in this DTO at all, so a
@@ -757,6 +759,8 @@ public static class SC2RuntimeTerrainPersistence
         dto.TexturePath3 = data.TexturePath3;
         dto.ColorCorrectionCube = data.ColorCorrectionCube;
         dto.FogOfWarCorrectionCube = data.FogOfWarCorrectionCube;
+        dto.EnvironmentTextureSourceTags = (string[])data.EnvironmentTextureSourceTags?.Clone();
+        dto.EnvironmentTextureForceExport = (bool[])data.EnvironmentTextureForceExport?.Clone();
 
         dto.RnmBakeSyncSunDirection = data.RnmBakeSyncSunDirection;
         dto.RnmBakeSyncSunColor = data.RnmBakeSyncSunColor;
@@ -922,6 +926,12 @@ public static class SC2RuntimeTerrainPersistence
         data.TexturePath3 = dto.TexturePath3 ?? "";
         data.ColorCorrectionCube = dto.ColorCorrectionCube ?? "";
         data.FogOfWarCorrectionCube = dto.FogOfWarCorrectionCube ?? "";
+        // Older saves have neither array — keep SC2TerrainData's own
+        // defaults (5 empty tags / 5 unchecked) instead of nulling them.
+        if (dto.EnvironmentTextureSourceTags != null && dto.EnvironmentTextureSourceTags.Length == 5)
+            data.EnvironmentTextureSourceTags = dto.EnvironmentTextureSourceTags;
+        if (dto.EnvironmentTextureForceExport != null && dto.EnvironmentTextureForceExport.Length == 5)
+            data.EnvironmentTextureForceExport = dto.EnvironmentTextureForceExport;
 
         // A save written before these existed deserializes with the Dto
         // field initializers above (JsonUtility only overwrites fields

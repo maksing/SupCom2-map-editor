@@ -37,6 +37,7 @@ namespace SC2.MapEditor.Document
         {
             public string Name = "";
             public string ResourcePath = "";
+            public bool ForceExport;
         }
 
         public sealed class TerrainResult
@@ -216,6 +217,7 @@ namespace SC2.MapEditor.Document
             {
                 Name = reference?.Name ?? "",
                 ResourcePath = resourcePath,
+                ForceExport = reference?.ForceExport ?? false,
             };
         }
 
@@ -329,6 +331,7 @@ namespace SC2.MapEditor.Document
             public string TexturePath3 = "";
             public string ColorCorrectionCube = "";
             public string FogOfWarCorrectionCube = "";
+            public SC2EnvironmentTextureExport TextureExport = new();
             public int WaterPlaneSize = 4096;
             public float WaterUvScale = 1024f;
             public string[] WaterTexturePaths = Array.Empty<string>();
@@ -355,6 +358,7 @@ namespace SC2.MapEditor.Document
                 TexturePath3 = doc.TexturePath3 ?? "",
                 ColorCorrectionCube = doc.ColorCorrectionCube ?? "",
                 FogOfWarCorrectionCube = doc.FogOfWarCorrectionCube ?? "",
+                TextureExport = (doc.TextureExport ?? new SC2EnvironmentTextureExport()).Clone(),
                 WaterPlaneSize = doc.WaterPlaneSize,
                 WaterUvScale = doc.WaterUvScale,
                 WaterTexturePaths = doc.WaterTexturePaths ?? Array.Empty<string>(),

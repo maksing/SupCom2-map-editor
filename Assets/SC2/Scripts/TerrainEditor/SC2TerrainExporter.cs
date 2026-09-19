@@ -286,9 +286,22 @@ public static class SC2TerrainExporter
         // for an override-only reference), so two materials referencing the
         // same archive entry only copy it once.
         var rawPathReg = new Dictionary<string, string>(StringComparer.Ordinal);
-        string ResolveRawResourcePath(string rawPath, Texture2D tex)
+        // forceExport: the per-texture "copy into map on export" opt-in. Only
+        // meaningful for an "archive:" marker — a texture owned by
+        // textures.scd/z_dlc1.scd/z_dlc1_map_shared.scd is otherwise
+        // referenced by its real game path with no copy
+        // (SC2VanillaArchiveClassifier); a "file:" custom import and any
+        // non-vanilla archive always copy.
+        string ResolveRawResourcePath(string rawPath, Texture2D tex, bool forceExport = false)
         {
             if (string.IsNullOrEmpty(rawPath)) return null;
+            // rawPathReg is keyed by the raw path alone. If an earlier slot
+            // already resolved this entry to its bare game path (no copy) and
+            // THIS slot asked for a real copy, drop the cached no-copy result
+            // so the copy below actually happens.
+            if (forceExport && rawPathReg.TryGetValue(rawPath, out var noCopy) && noCopy != null
+                && !noCopy.StartsWith("/Textures/", StringComparison.Ordinal))
+                rawPathReg.Remove(rawPath);
             if (rawPathReg.TryGetValue(rawPath, out var cached)) return cached;
 
             if (rawPath.StartsWith("file:", StringComparison.Ordinal))
@@ -317,6 +330,12 @@ public static class SC2TerrainExporter
                 // no ".win") — strip it here too, same as the
                 // AssetDatabase/tex.name fallback below already does for
                 // its own source filenames.
+                // Vanilla-archive texture: the game already ships it, so the
+                // exported bdf just needs its real path — no copy into
+                // Textures/ (unless this texture's own "copy into map on
+                // export" box is checked).
+                if (SC2VanillaArchiveClassifier.ShouldSkipCopy(reader, entryPath, forceExport))
+                    return rawPathReg[rawPath] = SC2VanillaArchiveClassifier.ToGamePath(entryPath);
                 var bn = Path.GetFileNameWithoutExtension(entryPath);
                 if (bn.EndsWith(".win", StringComparison.OrdinalIgnoreCase)) bn = bn[..^4];
                 var customFileName = UniqueFileName(MakeSafe(bn) + ".dds", tex);
@@ -334,7 +353,7 @@ public static class SC2TerrainExporter
             return null;
         }
 
-        string RegTex(Texture2D tex, string overridePath = null)
+        string RegTex(Texture2D tex, string overridePath = null, bool forceExport = false)
         {
             // A non-empty per-slot override path (SC2Material.
             // DiffuseOverridePath etc.) wins, regardless of whether "tex" is
@@ -356,11 +375,13 @@ public static class SC2TerrainExporter
             // it's neither marker (a real path, the original use case).
             if (!string.IsNullOrEmpty(overridePath))
             {
-                var resolvedOverride = ResolveRawResourcePath(overridePath, tex);
+                var resolvedOverride = ResolveRawResourcePath(overridePath, tex, forceExport);
                 return resolvedOverride ?? overridePath;
             }
             if (tex == null) return null;
-            if (texReg.TryGetValue(tex, out var p)) return p;
+            // A cached no-copy (bare game path) result must not satisfy a slot
+            // that opted into a real copy.
+            if (texReg.TryGetValue(tex, out var p) && (!forceExport || p == null || p.StartsWith("/Textures/", StringComparison.Ordinal))) return p;
 
             // NOTE: this used to short-circuit here for any texture
             // the catalog reported as SC2TextureSource.Vanilla — it wrote the
@@ -390,7 +411,7 @@ public static class SC2TerrainExporter
             // second, separate copy of the same "file:" logic right here;
             // removed rather than kept as an unreachable duplicate.
             var registeredPath = SC2TerrainMaterialFactory.TryGetResourcePath(tex);
-            var resolvedRegistered = ResolveRawResourcePath(registeredPath, tex);
+            var resolvedRegistered = ResolveRawResourcePath(registeredPath, tex, forceExport);
             if (resolvedRegistered != null) { texReg[tex] = resolvedRegistered; return resolvedRegistered; }
 
 #if UNITY_EDITOR
@@ -599,12 +620,12 @@ public static class SC2TerrainExporter
             var m2 = pair.Mat2Index >= 0 && pair.Mat2Index < data.Materials.Count ? data.Materials[pair.Mat2Index] : null;
 
             var mat = new TerrainMaterial { Name = pair.Name };
-            mat.TexturePaths[0]  = RegTex(m1?.Diffuse, m1?.DiffuseOverridePath);
-            mat.TexturePaths[1]  = RegTex(m2?.Diffuse, m2?.DiffuseOverridePath);
-            mat.TexturePaths[2]  = RegTex(m1?.Normal, m1?.NormalOverridePath);
-            mat.TexturePaths[3]  = RegTex(m2?.Normal, m2?.NormalOverridePath);
-            mat.TexturePaths[6]  = RegTex(m1?.Mask, m1?.MaskOverridePath) ?? "/textures/Engine/black_d.dds";
-            mat.TexturePaths[7]  = RegTex(m2?.Mask, m2?.MaskOverridePath) ?? "/textures/Engine/black_d.dds";
+            mat.TexturePaths[0]  = RegTex(m1?.Diffuse, m1?.DiffuseOverridePath, m1?.DiffuseForceExport ?? false);
+            mat.TexturePaths[1]  = RegTex(m2?.Diffuse, m2?.DiffuseOverridePath, m2?.DiffuseForceExport ?? false);
+            mat.TexturePaths[2]  = RegTex(m1?.Normal, m1?.NormalOverridePath, m1?.NormalForceExport ?? false);
+            mat.TexturePaths[3]  = RegTex(m2?.Normal, m2?.NormalOverridePath, m2?.NormalForceExport ?? false);
+            mat.TexturePaths[6]  = RegTex(m1?.Mask, m1?.MaskOverridePath, m1?.MaskForceExport ?? false) ?? "/textures/Engine/black_d.dds";
+            mat.TexturePaths[7]  = RegTex(m2?.Mask, m2?.MaskOverridePath, m2?.MaskForceExport ?? false) ?? "/textures/Engine/black_d.dds";
             mat.TexturePaths[10] = ExportRnmMaskByName(pair.RnmMaskName, data, mapName, lightingDir, rnmCache);
 
             // Uses the flags from the pair's own settings (set in Pairs -> Shader Setup).
@@ -661,7 +682,7 @@ public static class SC2TerrainExporter
                 SC2Log.Log($"[SC2Exporter] merging imported terrain '{imported.Name}': " +
                            $"{imported.Model.Materials.Count} materials, {imported.Model.Vertices.Count} verts, {imported.Model.Triangles.Count} tris");
                 MergeImportedTerrain(model, imported, ResolveRawResourcePath);
-                CopyImportedTextures(imported.Model, outputDir, warnings);
+                CopyImportedTextures(imported.Model, outputDir, warnings, CollectForceExportBasePaths(imported));
             }
         }
 
@@ -771,12 +792,12 @@ public static class SC2TerrainExporter
                     var m1 = pair.Mat1Index >= 0 && pair.Mat1Index < bg.Materials.Count ? bg.Materials[pair.Mat1Index] : null;
                     var m2 = pair.Mat2Index >= 0 && pair.Mat2Index < bg.Materials.Count ? bg.Materials[pair.Mat2Index] : null;
                     var mat = new TerrainMaterial { Name = pair.Name };
-                    mat.TexturePaths[0] = RegTex(m1?.Diffuse, m1?.DiffuseOverridePath);
-                    mat.TexturePaths[1] = RegTex(m2?.Diffuse, m2?.DiffuseOverridePath);
-                    mat.TexturePaths[2] = RegTex(m1?.Normal, m1?.NormalOverridePath);
-                    mat.TexturePaths[3] = RegTex(m2?.Normal, m2?.NormalOverridePath);
-                    mat.TexturePaths[6] = RegTex(m1?.Mask, m1?.MaskOverridePath) ?? "/textures/Engine/black_d.dds";
-                    mat.TexturePaths[7] = RegTex(m2?.Mask, m2?.MaskOverridePath) ?? "/textures/Engine/black_d.dds";
+                    mat.TexturePaths[0] = RegTex(m1?.Diffuse, m1?.DiffuseOverridePath, m1?.DiffuseForceExport ?? false);
+                    mat.TexturePaths[1] = RegTex(m2?.Diffuse, m2?.DiffuseOverridePath, m2?.DiffuseForceExport ?? false);
+                    mat.TexturePaths[2] = RegTex(m1?.Normal, m1?.NormalOverridePath, m1?.NormalForceExport ?? false);
+                    mat.TexturePaths[3] = RegTex(m2?.Normal, m2?.NormalOverridePath, m2?.NormalForceExport ?? false);
+                    mat.TexturePaths[6] = RegTex(m1?.Mask, m1?.MaskOverridePath, m1?.MaskForceExport ?? false) ?? "/textures/Engine/black_d.dds";
+                    mat.TexturePaths[7] = RegTex(m2?.Mask, m2?.MaskOverridePath, m2?.MaskForceExport ?? false) ?? "/textures/Engine/black_d.dds";
                     // Real Paint-Blend mask (SC2PaintMode's own "Paint Blend"
                     // tool paints pair.RnmMaskBytes directly) — reuses
                     // ExportRnmMaskByName exactly like the core's own
@@ -1122,6 +1143,39 @@ public static class SC2TerrainExporter
         // used for TerrainTypes above).
         EditorUtility.DisplayProgressBar("Export", "Building info.bdf...", 0.99f);
         var infoModel = BuildInfoModel(data, session);
+
+        // Environment textures are referenced by their real game path and
+        // NOT copied into the map by default. A slot whose per-texture "copy
+        // into map on export" box is checked (SC2EnvironmentTextureExport) is
+        // copied through the same ResolveRawResourcePath the terrain materials
+        // use, and its path is rewritten to the local copy. The stored tag is
+        // only honored while it still describes the slot's current path — a
+        // path that was edited/undone/reset since the pick has a stale tag.
+        {
+            var envDocument = session?.Document?.Environment;
+            var envHeader = envDocument?.WorkingHeader;
+            var envUsesDocument = envHeader != null && envHeader.Length == 508
+                && !System.Array.TrueForAll(envHeader, b => b == 0);
+            var envOptions = envUsesDocument && envDocument.TextureExport != null
+                ? envDocument.TextureExport
+                : new SC2EnvironmentTextureExport
+                {
+                    SourceTags = data.EnvironmentTextureSourceTags,
+                    ForceExport = data.EnvironmentTextureForceExport,
+                };
+            string ApplyEnvTextureExport(SC2EnvironmentTextureSlot slot, string currentPath)
+            {
+                if (!envOptions.GetForce(slot)) return currentPath;
+                var tag = envOptions.GetTag(slot);
+                if (!SC2VanillaArchiveClassifier.TagMatchesGamePath(tag, currentPath)) return currentPath;
+                return ResolveRawResourcePath(tag, null, true) ?? currentPath;
+            }
+            infoModel.EnvironmentMap = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.EnvironmentMap, infoModel.EnvironmentMap);
+            infoModel.SkyMap = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.SkyMap, infoModel.SkyMap);
+            infoModel.ReservedTexturePath = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.TexturePath3, infoModel.ReservedTexturePath);
+            infoModel.ColorCorrectionCube = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.ColorCorrectionCube, infoModel.ColorCorrectionCube);
+            infoModel.FogOfWarCorrectionCube = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.FogOfWarCorrectionCube, infoModel.FogOfWarCorrectionCube);
+        }
 
         // Requested directly: auto-generate the real per-map waterDepth
         // texture (Mask1, WaterTexturePaths[6]) instead of leaving whatever
@@ -1891,7 +1945,7 @@ public static class SC2TerrainExporter
         return (normals, tangents, binormals);
     }
 
-    internal static void MergeImportedTerrain(TerrainModel model, SC2ImportedTerrainExportData imported, Func<string, Texture2D, string> resolveRawResourcePath = null)
+    internal static void MergeImportedTerrain(TerrainModel model, SC2ImportedTerrainExportData imported, Func<string, Texture2D, bool, string> resolveRawResourcePath = null)
     {
         var source = imported.Model;
         var t = imported.Transform;
@@ -2001,7 +2055,7 @@ public static class SC2TerrainExporter
         {
             var renderer = t.GetComponent<MeshRenderer>();
             if (renderer != null)
-                SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, renderer.sharedMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath);
+                SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, renderer.sharedMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath, imported.TexturePathForceExport);
         }
 
         foreach (var mat in source.Materials)
@@ -2032,7 +2086,31 @@ public static class SC2TerrainExporter
     /// build can read either, so this step is a no-op there — same
     /// Editor/Play-mode-only limitation as the import-time copy).
     /// </summary>
-    private static void CopyImportedTextures(TerrainModel source, string outputDir, List<string> warnings)
+    /// <summary>The set of imported-terrain texture base paths (extension
+    /// stripped, same normalization CopyImportedTextures uses) whose per-slot
+    /// "copy into map on export" box is checked — read from the model AFTER
+    /// MergeImportedTerrain/ApplyFromScene ran, so a slot's value is whatever
+    /// path actually got exported for it.</summary>
+    private static HashSet<string> CollectForceExportBasePaths(SC2ImportedTerrainExportData imported)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (imported?.TexturePathForceExport == null || imported.Model == null) return result;
+        foreach (var kv in imported.TexturePathForceExport)
+        {
+            if (!kv.Value) continue;
+            var colon = kv.Key.IndexOf(':');
+            if (colon <= 0 || !int.TryParse(kv.Key.Substring(0, colon), out var materialIndex)) continue;
+            if (!SC2TerrainMaterialExporter.PathSlotByShaderProp.TryGetValue(kv.Key.Substring(colon + 1), out var slot)) continue;
+            if (materialIndex < 0 || materialIndex >= imported.Model.Materials.Count) continue;
+            var paths = imported.Model.Materials[materialIndex].TexturePaths;
+            if (paths == null || slot >= paths.Length || string.IsNullOrEmpty(paths[slot])) continue;
+            var normalized = SC2TerrainMaterialFactory.NormalizePath(paths[slot]);
+            result.Add(SC2TerrainMaterialFactory.StripExtension(normalized));
+        }
+        return result;
+    }
+
+    private static void CopyImportedTextures(TerrainModel source, string outputDir, List<string> warnings, HashSet<string> forceExportBasePaths = null)
     {
 #if UNITY_EDITOR
         var resourcesRoot = Path.Combine(Application.dataPath, "SC2", "Resources",
@@ -2058,6 +2136,15 @@ public static class SC2TerrainExporter
                 continue;
             var basePath = SC2TerrainMaterialFactory.StripExtension(normalized);
             if (!seen.Add(basePath)) continue;
+
+            // A texture served by one of the vanilla game archives is already
+            // present in every install — the exported bdf keeps its original
+            // game path and nothing is copied, unless this slot's own "copy
+            // into map on export" box is checked. Anything not found in a
+            // vanilla archive (map-local textures from the imported map's own
+            // .scd, or no game install configured) copies exactly as before.
+            var forceCopy = forceExportBasePaths != null && forceExportBasePaths.Contains(basePath);
+            if (!forceCopy && SC2VanillaArchiveClassifier.IsVanillaGamePath(normalized)) continue;
 
             string sourceFound = null;
             foreach (var ext in sourceExtensions)

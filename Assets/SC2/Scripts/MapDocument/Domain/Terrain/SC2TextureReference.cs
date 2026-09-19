@@ -22,6 +22,11 @@ namespace SC2.MapEditor.Document
         public string GamePath = "";
         public string Source = "";
         public string ContentHash = "";
+        // Copy this texture into the exported map's own Textures folder even
+        // if it comes from a vanilla game archive (default false: reference
+        // it by its real in-game path instead) — see
+        // SC2VanillaArchiveClassifier.
+        public bool ForceExport;
 
         public bool IsAssigned => !string.IsNullOrEmpty(Id) || !string.IsNullOrEmpty(ResourcePath)
             || !string.IsNullOrEmpty(GamePath) || !string.IsNullOrEmpty(Name);
@@ -29,7 +34,7 @@ namespace SC2.MapEditor.Document
         public SC2TextureReference Clone() => new SC2TextureReference
         {
             Id = Id, Name = Name, ResourcePath = ResourcePath, GamePath = GamePath,
-            Source = Source, ContentHash = ContentHash,
+            Source = Source, ContentHash = ContentHash, ForceExport = ForceExport,
         };
 
         public void CopyFrom(SC2TextureReference other)
@@ -41,6 +46,7 @@ namespace SC2.MapEditor.Document
             GamePath = other.GamePath ?? "";
             Source = other.Source ?? "";
             ContentHash = other.ContentHash ?? "";
+            ForceExport = other.ForceExport;
         }
     }
 }

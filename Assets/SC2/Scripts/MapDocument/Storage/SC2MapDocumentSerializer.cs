@@ -275,6 +275,18 @@ namespace SC2.MapEditor.Document
             o.Set("texturePath3", SC2JsonValue.Of(e.TexturePath3));
             o.Set("colorCorrectionCube", SC2JsonValue.Of(e.ColorCorrectionCube));
             o.Set("fogOfWarCorrectionCube", SC2JsonValue.Of(e.FogOfWarCorrectionCube));
+            var textureExport = SC2JsonValue.NewObject();
+            var textureSourceTags = SC2JsonValue.NewArray();
+            var textureForceExport = SC2JsonValue.NewArray();
+            var exportOptions = e.TextureExport ?? new SC2EnvironmentTextureExport();
+            for (var i = 0; i < SC2EnvironmentTextureExport.SlotCount; i++)
+            {
+                textureSourceTags.Add(SC2JsonValue.Of(exportOptions.SourceTags != null && i < exportOptions.SourceTags.Length ? exportOptions.SourceTags[i] ?? "" : ""));
+                textureForceExport.Add(SC2JsonValue.Of(exportOptions.ForceExport != null && i < exportOptions.ForceExport.Length && exportOptions.ForceExport[i]));
+            }
+            textureExport.Set("sourceTags", textureSourceTags);
+            textureExport.Set("forceExport", textureForceExport);
+            o.Set("textureExport", textureExport);
             o.Set("waterPlaneSize", SC2JsonValue.Of(e.WaterPlaneSize));
             o.Set("waterUvScale", SC2JsonValue.Of(e.WaterUvScale));
             var waterTexturePaths = SC2JsonValue.NewArray();
@@ -320,6 +332,19 @@ namespace SC2.MapEditor.Document
                 WaterDepthPaintBorder = o.Get("waterDepthPaintBorder").AsBool(true),
                 WaterDepthImageBorderOutline = o.Get("waterDepthImageBorderOutline").AsBool(false),
             };
+            var textureExportJson = o.Get("textureExport");
+            var tagIndex = 0;
+            foreach (var v in textureExportJson.Get("sourceTags").Items())
+            {
+                if (tagIndex < SC2EnvironmentTextureExport.SlotCount) e.TextureExport.SourceTags[tagIndex] = v.AsString("") ?? "";
+                tagIndex++;
+            }
+            var forceIndex = 0;
+            foreach (var v in textureExportJson.Get("forceExport").Items())
+            {
+                if (forceIndex < SC2EnvironmentTextureExport.SlotCount) e.TextureExport.ForceExport[forceIndex] = v.AsBool(false);
+                forceIndex++;
+            }
             var waterTexturePaths = new List<string>();
             foreach (var v in o.Get("waterTexturePaths").Items()) waterTexturePaths.Add(v.AsString(""));
             e.WaterTexturePaths = waterTexturePaths.ToArray();
@@ -984,6 +1009,9 @@ namespace SC2.MapEditor.Document
             foreach (var kv in m.Vectors) vectors.Set(kv.Key, WriteFloatArray(kv.Value));
             o.Set("vectors", vectors);
             o.Set("blendState", SC2JsonValue.Of(m.BlendState));
+            var forceExport = SC2JsonValue.NewObject();
+            foreach (var kv in m.TexturePathForceExport) forceExport.Set(kv.Key, SC2JsonValue.Of(kv.Value));
+            o.Set("forceExport", forceExport);
             return o;
         }
 
@@ -994,6 +1022,7 @@ namespace SC2.MapEditor.Document
             foreach (var kv in o.Get("flags").Members()) m.Flags[kv.Key] = (float)kv.Value.AsDouble(0);
             foreach (var kv in o.Get("vectors").Members()) m.Vectors[kv.Key] = ReadFloatArray(kv.Value, 4, new float[4]);
             m.BlendState = o.Get("blendState").AsString("");
+            foreach (var kv in o.Get("forceExport").Members()) m.TexturePathForceExport[kv.Key] = kv.Value.AsBool(false);
             return m;
         }
 
@@ -1074,6 +1103,7 @@ namespace SC2.MapEditor.Document
             o.Set("gamePath", SC2JsonValue.Of(r.GamePath));
             o.Set("source", SC2JsonValue.Of(r.Source));
             o.Set("contentHash", SC2JsonValue.Of(r.ContentHash));
+            o.Set("forceExport", SC2JsonValue.Of(r.ForceExport));
             return o;
         }
 
@@ -1085,6 +1115,7 @@ namespace SC2.MapEditor.Document
             GamePath = o.Get("gamePath").AsString("") ?? "",
             Source = o.Get("source").AsString("") ?? "",
             ContentHash = o.Get("contentHash").AsString("") ?? "",
+            ForceExport = o.Get("forceExport").AsBool(false),
         };
 
         private static SC2JsonValue WriteMaterialPair(SC2MaterialPairDocument p)
@@ -1286,6 +1317,10 @@ namespace SC2.MapEditor.Document
             o.Set("normalAtlasPath", SC2JsonValue.Of(d.NormalAtlasPath));
             o.Set("diffuseAtlasContent", WriteBlobRef(d.DiffuseAtlasContent));
             o.Set("normalAtlasContent", WriteBlobRef(d.NormalAtlasContent));
+            o.Set("diffuseAtlasSourceTag", SC2JsonValue.Of(d.DiffuseAtlasSourceTag));
+            o.Set("normalAtlasSourceTag", SC2JsonValue.Of(d.NormalAtlasSourceTag));
+            o.Set("diffuseAtlasForceExport", SC2JsonValue.Of(d.DiffuseAtlasForceExport));
+            o.Set("normalAtlasForceExport", SC2JsonValue.Of(d.NormalAtlasForceExport));
             o.Set("atlasWidth", SC2JsonValue.Of(d.AtlasWidth));
             o.Set("atlasHeight", SC2JsonValue.Of(d.AtlasHeight));
             o.Set("atlasSource", SC2JsonValue.Of(d.AtlasSource.ToString()));
@@ -1311,6 +1346,10 @@ namespace SC2.MapEditor.Document
                 NormalAtlasPath = o.Get("normalAtlasPath").AsString(""), AtlasWidth = o.Get("atlasWidth").AsInt(0),
                 DiffuseAtlasContent = ReadBlobRef(o.Get("diffuseAtlasContent")),
                 NormalAtlasContent = ReadBlobRef(o.Get("normalAtlasContent")),
+                DiffuseAtlasSourceTag = o.Get("diffuseAtlasSourceTag").AsString(""),
+                NormalAtlasSourceTag = o.Get("normalAtlasSourceTag").AsString(""),
+                DiffuseAtlasForceExport = o.Get("diffuseAtlasForceExport").AsBool(false),
+                NormalAtlasForceExport = o.Get("normalAtlasForceExport").AsBool(false),
                 AtlasHeight = o.Get("atlasHeight").AsInt(0), AtlasSource = ParseEnum(o.Get("atlasSource"), SC2DecalAtlasSource.None),
                 KeepOriginalBakedLayer = o.Get("keepOriginalBakedLayer").AsBool(true),
                 SpatialState = ParseEnum(o.Get("spatialState"), SC2DecalsSpatialState.Missing),

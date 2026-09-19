@@ -32,8 +32,28 @@ public static class SC2DecalsExportService
         diffuseAtlas = ReadBlob(session, document.DiffuseAtlasContent);
         normalAtlas = ReadBlob(session, document.NormalAtlasContent);
         var exportDocument = document.Clone();
-        if (diffuseAtlas != null) exportDocument.DiffuseAtlasPath = $"/maps/{mapName}/decals/decals_diffuse.dds";
-        if (normalAtlas != null) exportDocument.NormalAtlasPath = $"/maps/{mapName}/decals/decals_normal.dds";
+        // An atlas picked from a vanilla game archive is referenced by its
+        // real game path and NOT written into the map (a null byte[] here is
+        // the caller's "nothing to write" signal) — unless this atlas's own
+        // "copy into map on export" box is checked. Anything else (custom,
+        // generated, non-vanilla archive) is exported as its own copy exactly
+        // as before.
+        var diffuseEntry = SC2VanillaArchiveClassifier.EntryPathFromTag(document.DiffuseAtlasSourceTag);
+        if (diffuseAtlas != null && diffuseEntry != null &&
+            SC2VanillaArchiveClassifier.ShouldSkipCopy(diffuseEntry, document.DiffuseAtlasForceExport))
+        {
+            exportDocument.DiffuseAtlasPath = SC2VanillaArchiveClassifier.ToGamePath(diffuseEntry);
+            diffuseAtlas = null;
+        }
+        else if (diffuseAtlas != null) exportDocument.DiffuseAtlasPath = $"/maps/{mapName}/decals/decals_diffuse.dds";
+        var normalEntry = SC2VanillaArchiveClassifier.EntryPathFromTag(document.NormalAtlasSourceTag);
+        if (normalAtlas != null && normalEntry != null &&
+            SC2VanillaArchiveClassifier.ShouldSkipCopy(normalEntry, document.NormalAtlasForceExport))
+        {
+            exportDocument.NormalAtlasPath = SC2VanillaArchiveClassifier.ToGamePath(normalEntry);
+            normalAtlas = null;
+        }
+        else if (normalAtlas != null) exportDocument.NormalAtlasPath = $"/maps/{mapName}/decals/decals_normal.dds";
         exportDocument.DiffuseAtlasPath = NormalizeAtlasPath(exportDocument.DiffuseAtlasPath);
         exportDocument.NormalAtlasPath = NormalizeAtlasPath(exportDocument.NormalAtlasPath);
         var authored = SC2DecalGeometryBuilder.Build(exportDocument, surfaces.Collect(exportDocument, liveTerrainSampleHeight));

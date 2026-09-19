@@ -275,6 +275,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // no override, fall back to the existing Texture-based resolution
         // (SC2TerrainMaterialExporter.TextureToBdfPath) exactly as before.
         public Dictionary<string, string> TexturePathOverrides = new();
+        // Per-slot "copy into map on export" opt-in (same key convention as
+        // TexturePathOverrides) — see SC2VanillaArchiveClassifier.
+        public Dictionary<string, bool> TexturePathForceExport = new();
         public Material[] FlatColorMaterials;   // lazily built, cached for Mats view — flat HSV-by-index color
         public Material[] PairColorMaterials;   // lazily built, cached for Pairs view — blended avg(Diffuse1,Diffuse2) color
         public Material VertexColorMaterial;    // shared SC2/VertexColorUnlit material for Slope/Height
@@ -529,6 +532,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                             }
                         ov.BlendState = SC2TerrainMaterialFactory.ReverseLookupBlendState(mat) ?? "";
                     }
+                    // TexturePathForceExport lives on the entry keyed
+                    // "materialIndex:shaderProp" (same as TexturePathOverrides),
+                    // not on the Material — this override list is index-aligned
+                    // with OriginalMaterials, so the next index to be added is
+                    // this material's own.
+                    var materialIndex = doc.MaterialOverrides.Count;
+                    foreach (var prop in ImportedMaterialTextureProps)
+                        if (entry.TexturePathForceExport.TryGetValue(materialIndex + ":" + prop, out var force) && force)
+                            ov.TexturePathForceExport[prop] = true;
                     doc.MaterialOverrides.Add(ov);
                 }
 
@@ -615,11 +627,14 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // for that exact slot, and the picker's own path field showed
             // blank instead of the path it had actually resolved to.
             var restoredPathOverrides = new Dictionary<string, string>();
+            var restoredForceExport = new Dictionary<string, bool>();
             for (var i = 0; i < originalMaterials.Length && i < doc.MaterialOverrides.Count; i++)
             {
                 var mat = originalMaterials[i];
                 if (mat == null) continue;
                 var ov = doc.MaterialOverrides[i];
+                foreach (var kv in ov.TexturePathForceExport)
+                    if (kv.Value) restoredForceExport[i + ":" + kv.Key] = true;
                 foreach (var kv in ov.TextureResourcePaths)
                 {
                     // Only a "file:"/"archive:" tag needs to survive as an
@@ -676,6 +691,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     .ToArray(),
                 RecomputeNormals = doc.RecomputeNormals,
                 TexturePathOverrides = restoredPathOverrides,
+                TexturePathForceExport = restoredForceExport,
             };
             _importedTerrains.Add(entry);
         }
@@ -4827,6 +4843,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 Name = entry.DisplayName,
                 AuthoredEnableRnm = entry.OriginalEnableRnm,
                 TexturePathOverrides = entry.TexturePathOverrides,
+                TexturePathForceExport = entry.TexturePathForceExport,
                 IsBackgroundTerrain = entry.IsBackgroundTerrain
             });
         }
@@ -5375,6 +5392,25 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
         if (!string.IsNullOrEmpty(pathDraft)) entry.TexturePathOverrides[overrideKey] = pathDraft;
         else entry.TexturePathOverrides.Remove(overrideKey);
+
+        // Per-texture "copy into map on export" opt-in — only offered when
+        // this slot actually points at a texture served by a vanilla game
+        // archive (anything else is always copied, or never needs to be).
+        var effectivePath = !string.IsNullOrEmpty(pathDraft) ? pathDraft : (picked != null ? SC2TerrainMaterialFactory.TryGetResourcePath(picked) : null);
+        if (string.IsNullOrEmpty(effectivePath)) effectivePath = fallbackPath;
+        // A different texture starts back at the default.
+        if (picked != current) entry.TexturePathForceExport.Remove(overrideKey);
+        if (SC2VanillaArchiveClassifier.IsVanillaSlotPath(effectivePath))
+        {
+            entry.TexturePathForceExport.TryGetValue(overrideKey, out var forceExport);
+            var newForceExport = GUILayout.Toggle(forceExport, "Copy into map on export");
+            if (newForceExport != forceExport)
+            {
+                RecordImportedTerrainsUndo();
+                if (newForceExport) entry.TexturePathForceExport[overrideKey] = true;
+                else entry.TexturePathForceExport.Remove(overrideKey);
+            }
+        }
     }
 
     /// <summary>

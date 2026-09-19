@@ -24,7 +24,16 @@ using BdfIO.Formats.Terrain;
 
 public static class SC2TerrainMaterialExporter
 {
-    public static void ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null, System.Func<string, Texture2D, string> resolveRawResourcePath = null)
+    /// <summary>Shader property -> TerrainMaterial.TexturePaths slot, the
+    /// mapping documented at the top of this file (also mirrored privately
+    /// by SC2GameViewEditorUI.kImportedTexturePathSlots for display).</summary>
+    public static readonly System.Collections.Generic.Dictionary<string, int> PathSlotByShaderProp = new()
+    {
+        { "_Diffuse1", 0 }, { "_Diffuse2", 1 }, { "_Normal1", 2 }, { "_Normal2", 3 },
+        { "_Mask1", 6 }, { "_Mask2", 7 }, { "_Ramp", 8 }, { "_RNMMask0", 10 },
+    };
+
+    public static void ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null, System.Func<string, Texture2D, bool, string> resolveRawResourcePath = null, System.Collections.Generic.Dictionary<string, bool> texturePathForceExport = null)
     {
         for (var i = 0; i < materials.Count && i < sharedMaterials.Length; i++)
         {
@@ -52,7 +61,11 @@ public static class SC2TerrainMaterialExporter
                     return null;
                 if (resolveRawResourcePath == null) return p;
                 var tex = unityMat.HasProperty(prop) ? unityMat.GetTexture(prop) as Texture2D : null;
-                return resolveRawResourcePath(p, tex) ?? p;
+                // The per-slot "copy into map on export" opt-in (same
+                // materialIndex:shaderProp key as the override itself).
+                var forceExport = texturePathForceExport != null
+                    && texturePathForceExport.TryGetValue(i + ":" + prop, out var force) && force;
+                return resolveRawResourcePath(p, tex, forceExport) ?? p;
             }
 
             // Real slots per the MaterialData structure.
