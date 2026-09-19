@@ -148,6 +148,7 @@ public static class SC2TextureBrowser
         Query.Usage = expectedUsage == SC2TextureUsage.Unknown ? null : expectedUsage;
         Query.Search = "";
         Query.Source = null;
+        Query.Community = null;
         // Same "derive a UI default from the picker's own key" convention
         // SC2TerrainShell.TextureUsageForPicker already uses for Usage —
         // opening the browser from a decal atlas slot (pickerKey containing
@@ -268,9 +269,20 @@ public static class SC2TextureBrowser
         DrawBorder(rect, new Color(0.16f, 0.18f, 0.22f, 1f));
         var y = rect.y + 10f;
         GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 20f), "SOURCE", MiniBold()); y += 24f;
-        DrawFilterButton(ref y, rect, "All", !Query.Source.HasValue, () => Query.Source = null);
-        foreach (SC2TextureSource source in Enum.GetValues(typeof(SC2TextureSource)))
-            DrawFilterButton(ref y, rect, source.ToString(), Query.Source == source, () => Query.Source = source);
+        // Four groups, not the raw SC2TextureSource enum (Map/Generated never
+        // had a real use here, and Vanilla mixed the base game's own
+        // archives with community map packs):
+        //   Vanilla   - textures.scd / z_dlc1.scd / z_dlc1_map_shared.scd
+        //   Community - any OTHER archive in the game folder
+        //   Imported  - textures imported into this editor's TextureLibrary
+        //               (Source == Custom)
+        DrawFilterButton(ref y, rect, "All", !Query.Source.HasValue, () => { Query.Source = null; Query.Community = null; });
+        DrawFilterButton(ref y, rect, "Vanilla", Query.Source == SC2TextureSource.Vanilla && Query.Community == false,
+            () => { Query.Source = SC2TextureSource.Vanilla; Query.Community = false; });
+        DrawFilterButton(ref y, rect, "Community", Query.Source == SC2TextureSource.Vanilla && Query.Community == true,
+            () => { Query.Source = SC2TextureSource.Vanilla; Query.Community = true; });
+        DrawFilterButton(ref y, rect, "Imported", Query.Source == SC2TextureSource.Custom,
+            () => { Query.Source = SC2TextureSource.Custom; Query.Community = null; });
         y += 8f;
         GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 20f), "USAGE", MiniBold()); y += 24f;
         DrawFilterButton(ref y, rect, "Any", !Query.Usage.HasValue, () => Query.Usage = null);

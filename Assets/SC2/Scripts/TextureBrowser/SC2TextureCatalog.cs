@@ -216,6 +216,9 @@ public sealed class SC2TextureCatalog
             {
                 Source = SC2TextureSource.Vanilla,
                 ArchiveEntryPath = path,
+                // Owned by an archive other than textures.scd/z_dlc1.scd/
+                // z_dlc1_map_shared.scd (a community map pack, etc.).
+                IsCommunity = !SC2VanillaArchiveClassifier.IsVanillaOwnedEntry(reader, path, out _),
                 Usage = InferUsage(path),
                 Encoding = ext.TrimStart('.').ToUpperInvariant(),
                 Id = SC2TextureCatalogEntry.BuildStableId(SC2TextureSource.Vanilla, path),

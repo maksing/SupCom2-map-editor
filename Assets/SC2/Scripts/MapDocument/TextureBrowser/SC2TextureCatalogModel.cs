@@ -41,6 +41,13 @@ namespace SC2.MapEditor.Textures
         /// path alone (no separate "which .scd" field) is enough to find
         /// the entry regardless of which specific archive it lives in.</summary>
         public string ArchiveEntryPath = "";
+        /// <summary>True for an archive entry served by any game-folder
+        /// archive OTHER than the three vanilla ones (textures.scd/z_dlc1.scd/
+        /// z_dlc1_map_shared.scd — see SC2VanillaArchiveClassifier), e.g. a
+        /// community map pack. Such an entry still has Source == Vanilla (the
+        /// enum is baked into stable ids and saved documents); the texture
+        /// browser's "Vanilla"/"Community" filters split on this flag.</summary>
+        public bool IsCommunity;
         public string Category = "";
         public string SearchKey = "";
         public SC2TextureSource Source;
@@ -157,6 +164,10 @@ namespace SC2.MapEditor.Textures
     {
         public string Search = "";
         public SC2TextureSource? Source;
+        /// <summary>null = don't care; true/false narrows to community-
+        /// archive / vanilla-archive entries (SC2TextureCatalogEntry.
+        /// IsCommunity). Only meaningful together with Source == Vanilla.</summary>
+        public bool? Community;
         public SC2TextureUsage? Usage;
         public string Category = "";
         public bool FavoritesOnly;
@@ -164,6 +175,7 @@ namespace SC2.MapEditor.Textures
         public string CacheKey => string.Join("|",
             (Search ?? "").Trim().ToLowerInvariant(),
             Source?.ToString() ?? "*",
+            Community.HasValue ? (Community.Value ? "1" : "0") : "*",
             Usage?.ToString() ?? "*",
             (Category ?? "").Trim().ToLowerInvariant(),
             FavoritesOnly ? "1" : "0");
