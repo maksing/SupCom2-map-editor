@@ -1388,6 +1388,9 @@ public static class SC2TerrainExporter
             // the DDS file itself. See SC2MapPreviewCapture.
             // FlipRowsVertically's own doc comment.
             var ddsBgra = SC2MapPreviewCapture.FlipRowsVertically(data.MapShotBgraPixels, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, 4);
+            // Re-stamped at export so a preview captured before the frame
+            // matched vanilla still ships with the vanilla frame.
+            SC2MapShotFrameMask.ApplyToBgra(ddsBgra, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, bottomRowFirst: false);
             File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}_PC_mapshot.dds"),
                 SC2DdsEncoder.BuildBgra32(SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, ddsBgra));
         }

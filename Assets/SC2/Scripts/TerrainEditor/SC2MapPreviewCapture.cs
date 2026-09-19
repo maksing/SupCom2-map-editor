@@ -1,4 +1,5 @@
 using System;
+using SC2.MapEditor.Document;
 using UnityEngine;
 
 /// <summary>
@@ -202,30 +203,14 @@ public static class SC2MapPreviewCapture
         tex.Apply(false, false);
     }
 
-    // Soft alpha falloff near the image edges, matching the feathered
-    // border real vanilla _PC_mapshot.dds files have baked in (measured
-    // directly against real files: alpha ramps from near-zero at the very
-    // edge to fully opaque over roughly 20 pixels — an approximation, not a
-    // pixel-exact match, since the exact curve isn't load-bearing for what
-    // is a cosmetic vignette).
-    private const float VignetteFeatherPixels = 20f;
-
+    // The alpha frame is the exact one real vanilla _PC_mapshot.dds files
+    // carry (feathered edge, rounded corners, diagonally cut bottom-left) —
+    // see SC2MapShotFrameMask.
     private static void ApplyEdgeVignette(Texture2D tex)
     {
-        var w = tex.width; var h = tex.height;
-        var pixels = tex.GetPixels32();
-        for (var y = 0; y < h; y++)
-        for (var x = 0; x < w; x++)
-        {
-            var distanceToEdge = Mathf.Min(Mathf.Min(x, w - 1 - x), Mathf.Min(y, h - 1 - y));
-            var t = Mathf.Clamp01(distanceToEdge / VignetteFeatherPixels);
-            var eased = t * t * (3f - 2f * t); // smoothstep
-            var idx = y * w + x;
-            var p = pixels[idx];
-            p.a = (byte)Mathf.RoundToInt(eased * 255f);
-            pixels[idx] = p;
-        }
-        tex.SetPixels32(pixels);
+        var pixels = tex.GetRawTextureData(); // RGBA32, bottom row first; alpha is byte 3
+        SC2MapShotFrameMask.ApplyToBgra(pixels, tex.width, tex.height, bottomRowFirst: true);
+        tex.LoadRawTextureData(pixels);
         tex.Apply(false, false);
     }
 

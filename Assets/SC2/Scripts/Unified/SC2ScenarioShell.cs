@@ -260,6 +260,8 @@ public sealed class SC2ScenarioShell
             rgba[i + 2] = pixels[i];     // B
             rgba[i + 3] = pixels[i + 3]; // A
         }
+        // Same vanilla frame the export stamps, so the preview matches it.
+        SC2MapShotFrameMask.ApplyToBgra(rgba, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, bottomRowFirst: true);
         var tex = new Texture2D(SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave };
         tex.LoadRawTextureData(rgba);
         tex.Apply(false, false);
