@@ -1244,6 +1244,7 @@ namespace SC2.MapEditor.Document
             o.Set("originalSaveLua", WriteBlobRef(s.OriginalSaveLua));
             o.Set("originalScriptLua", WriteBlobRef(s.OriginalScriptLua));
             o.Set("knownFields", WriteScenarioKnownFields(s.KnownFields));
+            o.Set("lobbyStartPositions", WriteLobbyStartPositions(s.LobbyStartPositions));
             o.Set("scenarioMode", SC2JsonValue.Of(s.ScenarioMode.ToString()));
             o.Set("saveMode", SC2JsonValue.Of(s.SaveMode.ToString()));
             o.Set("scriptMode", SC2JsonValue.Of(s.ScriptMode.ToString()));
@@ -1257,11 +1258,50 @@ namespace SC2.MapEditor.Document
             OriginalSaveLua = ReadBlobRef(o.Get("originalSaveLua")),
             OriginalScriptLua = ReadBlobRef(o.Get("originalScriptLua")),
             KnownFields = ReadScenarioKnownFields(o.Get("knownFields")),
+            LobbyStartPositions = ReadLobbyStartPositions(o.Get("lobbyStartPositions")),
             ScenarioMode = ParseEnum(o.Get("scenarioMode"), SC2LuaPatchMode.OriginalPassthrough),
             SaveMode = ParseEnum(o.Get("saveMode"), SC2LuaPatchMode.OriginalPassthrough),
             ScriptMode = ParseEnum(o.Get("scriptMode"), SC2LuaPatchMode.OriginalPassthrough),
             State = ParseEnum(o.Get("state"), SC2DerivedState.Original),
         };
+
+        private static SC2JsonValue WriteLobbyStartPositions(List<SC2LobbyStartPosition> list)
+        {
+            var arr = SC2JsonValue.NewArray();
+            if (list != null)
+                foreach (var p in list)
+                {
+                    var o = SC2JsonValue.NewObject();
+                    o.Set("army", SC2JsonValue.Of(p.ArmyName));
+                    o.Set("x", SC2JsonValue.Of(p.X));
+                    o.Set("y", SC2JsonValue.Of(p.Y));
+                    o.Set("z", SC2JsonValue.Of(p.Z));
+                    o.Set("hasBase", SC2JsonValue.Of(p.HasBase));
+                    o.Set("baseX", SC2JsonValue.Of(p.BaseX));
+                    o.Set("baseZ", SC2JsonValue.Of(p.BaseZ));
+                    arr.Add(o);
+                }
+            return arr;
+        }
+
+        // A save written before lobby positions existed has no key at all:
+        // an empty list, i.e. every army exports its marker position.
+        private static List<SC2LobbyStartPosition> ReadLobbyStartPositions(SC2JsonValue arr)
+        {
+            var list = new List<SC2LobbyStartPosition>();
+            foreach (var o in arr.Items())
+                list.Add(new SC2LobbyStartPosition
+                {
+                    ArmyName = o.Get("army").AsString(""),
+                    X = (float)o.Get("x").AsDouble(0),
+                    Y = (float)o.Get("y").AsDouble(0),
+                    Z = (float)o.Get("z").AsDouble(0),
+                    HasBase = o.Get("hasBase").AsBool(false),
+                    BaseX = (float)o.Get("baseX").AsDouble(0),
+                    BaseZ = (float)o.Get("baseZ").AsDouble(0),
+                });
+            return list;
+        }
 
         private static SC2JsonValue WriteScenarioKnownFields(SC2ScenarioKnownFields k)
         {

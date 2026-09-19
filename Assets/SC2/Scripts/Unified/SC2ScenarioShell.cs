@@ -34,8 +34,16 @@ public sealed class SC2ScenarioShell
     private readonly SC2TerrainShell _terrainShell;
     private readonly SC2MapSession _session;
     public System.Action RepaintHost;
+    /// <summary>Opens the Lobby Spawns window (owned by SC2GameViewEditorUI,
+    /// like the other overlay panels).</summary>
+    public System.Action OpenLobbySpawnEditor;
 
     private long _lastActionTimestamp;
+
+    /// <summary>The Lobby Spawns window records its own document commands
+    /// (through _session.History) — this makes them the "latest action" for
+    /// the shared Ctrl+Z dispatch, exactly as this shell's own edits do.</summary>
+    public void NoteExternalAction() => _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
 
     /// <summary>See SC2ObjectsShell's identical property for why.</summary>
     public bool HasUndo => _session != null && _session.History.CanUndo;
@@ -233,6 +241,13 @@ public sealed class SC2ScenarioShell
         GUI.enabled = guiEnabledBeforeCapture;
         if (!string.IsNullOrEmpty(_captureStatus))
             SC2TerrainShell.DrawUnifiedNote(_captureStatus);
+
+        GUILayout.Space(12);
+
+        SC2EnvFieldGui.SectionLabel("Lobby Spawns");
+        SC2TerrainShell.DrawUnifiedNote("Where each army's start marker is drawn on the minimap in the game lobby (_scenario.lua). Only the lobby picture changes — the armies' real spawn positions (_save.lua) stay exactly where they are.");
+        if (GUILayout.Button("Edit Lobby Spawns...", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            OpenLobbySpawnEditor?.Invoke();
     }
 
     /// <summary>Rebuilds the on-screen thumbnail only when Data.

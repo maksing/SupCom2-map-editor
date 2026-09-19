@@ -342,6 +342,11 @@ public static class SC2RuntimeTerrainPersistence
         doc.Scenario = SC2ScenarioLegacyBridge.BuildFromLegacy(scenarioLuaBytes, saveLuaBytes, scriptLuaBytes, blobStore);
         if (string.IsNullOrEmpty(doc.Scenario.KnownFields.Name))
             doc.Scenario.KnownFields.Name = data.MapName ?? "";
+        // The lobby-minimap positions exist only on the session's document
+        // (no SC2TerrainData field mirrors them, like Decals below) — the
+        // fresh Scenario built above knows nothing about them.
+        if (session?.Document?.Scenario?.LobbyStartPositions != null)
+            doc.Scenario.LobbyStartPositions = SC2LobbyStartPosition.CloneList(session.Document.Scenario.LobbyStartPositions);
 
         // Prefer the ACTIVE session's Decals document when one exists —
         // SC2DecalsShell has no legacy SC2TerrainData field to fall back to

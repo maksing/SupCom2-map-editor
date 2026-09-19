@@ -93,6 +93,8 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ObjectsModel.cs" Link="Source\SC2ObjectsModel.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2MarkerDeduplication.cs" Link="Source\SC2MarkerDeduplication.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaField.cs" Link="Source\SC2LuaField.cs" />
+    <!-- Pure symmetry/lobby-spawn math (Vector3 + System only). -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2LobbySpawnMath.cs" Link="Source\SC2LobbySpawnMath.cs" />
     <!-- SC2MapDocument_Implementation_Plan.md Этап 1 infrastructure. Every
          file under here is either plain .NET or (Session/SC2WorkspaceState.cs)
          only touches UnityEngine.Vector3 — a plain value struct, same

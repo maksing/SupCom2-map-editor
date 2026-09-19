@@ -318,6 +318,13 @@ public static class SC2MapImportOrchestrator
                     var scenarioDoc = SC2ScenarioLegacyBridge.BuildFromLegacy(scenarioBytes, saveBytes, scriptBytes, session.BlobStore);
                     session.Document.Scenario = scenarioDoc;
                     result.ScenarioDocument = scenarioDoc;
+                    // Lobby positions read from scenario.lua apply to the army
+                    // spawns as they are now; if one is moved later the lobby
+                    // marker follows it again (SC2LobbyStartPosition.IsCurrent).
+                    var importedRealPositions = new Dictionary<string, Vector3>();
+                    foreach (var marker in data.ObjMarkers)
+                        if (!importedRealPositions.ContainsKey(marker.Name)) importedRealPositions[marker.Name] = marker.Position;
+                    SC2LobbyStartPosition.AdoptBases(scenarioDoc.LobbyStartPositions, importedRealPositions);
 
                     // _script.lua is never fully parsed (real mission-logic
                     // Lua needing live engine globals — see

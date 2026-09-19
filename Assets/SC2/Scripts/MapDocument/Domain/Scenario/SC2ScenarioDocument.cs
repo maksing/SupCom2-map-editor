@@ -31,10 +31,10 @@ namespace SC2.MapEditor.Document
     /// out of this typed shape and land in ExtraFields instead:
     ///  - the per-army norushoffsetX_/norushoffsetY_ARMY_* pairs (key name
     ///    depends on how many armies the map has — not a fixed field set);
-    ///  - Configurations/StartPositions (nested tables, not scalars — the
-    ///    Objects domain already owns start-position-shaped data via
-    ///    SC2ObjArmy/markers; duplicating it here would be a second source
-    ///    of truth for the same positions).</summary>
+    ///  - Configurations (nested tables, not scalars). StartPositions is
+    ///    NOT in ExtraFields either: it is the lobby-minimap position of each
+    ///    army, kept apart from the in-game spawn the Objects domain owns
+    ///    (SC2ObjArmy/markers), in SC2ScenarioDocument.LobbyStartPositions.</summary>
     public sealed class SC2ScenarioKnownFields
     {
         public string Name = "";
@@ -84,6 +84,13 @@ namespace SC2.MapEditor.Document
         public SC2BlobReference OriginalScriptLua;
 
         public SC2ScenarioKnownFields KnownFields = new();
+
+        /// <summary>Where each army's marker is drawn on the lobby minimap
+        /// (_scenario.lua StartPositions) — edited in the Lobby Spawns window,
+        /// never touches the in-game spawns in _save.lua. An army with no
+        /// entry here exports its marker position (see
+        /// SC2ObjectsExport.RegenerateScenarioLua).</summary>
+        public List<SC2LobbyStartPosition> LobbyStartPositions = new();
 
         public SC2LuaPatchMode ScenarioMode;
         public SC2LuaPatchMode SaveMode;

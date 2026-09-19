@@ -533,7 +533,13 @@ public static class SC2ObjectsExport
     /// parameter doc comment — same reasoning,
     /// SC2MapDocument.Objects.ScenarioLuaTextOriginal in place of
     /// data.ObjScenarioLuaTextOriginal.</param>
-    public static string RegenerateScenarioLua(SC2TerrainData data, string sanitizedMapName = null, string originalTextOverride = null)
+    /// <param name="lobbyStartPositions">Where each army's marker is drawn on
+    /// the LOBBY minimap (SC2ScenarioDocument.LobbyStartPositions, army name →
+    /// position). Only _scenario.lua StartPositions uses these; an army without
+    /// an entry is written at its in-game marker position, and _save.lua's
+    /// markers are never affected.</param>
+    public static string RegenerateScenarioLua(SC2TerrainData data, string sanitizedMapName = null, string originalTextOverride = null,
+        IReadOnlyDictionary<string, Vector3> lobbyStartPositions = null)
     {
         data.EnsureObjectIds();
         var original = string.IsNullOrEmpty(originalTextOverride) ? data.ObjScenarioLuaTextOriginal : originalTextOverride;
@@ -562,18 +568,15 @@ public static class SC2ObjectsExport
         var (spOpen, spClose) = SC2LuaBlocks.FindBlock(text, "StartPositions = ");
         if (spOpen >= 0)
         {
-            var sb = new StringBuilder();
-            sb.Append("\r\n");
+            var armyPositions = new List<KeyValuePair<string, Vector3>>();
             foreach (var m in data.ObjMarkers)
             {
                 if (!ArmyPositionRe.IsMatch(m.Name)) continue;
                 armyNames.Add(m.Name);
-                sb.Append("        ['").Append(m.Name).Append("'] = { ")
-                  .Append(Fmt(m.Position.x)).Append(", ").Append(Fmt(m.Position.y)).Append(", ").Append(Fmt(m.Position.z))
-                  .Append(" },\r\n");
+                armyPositions.Add(new KeyValuePair<string, Vector3>(m.Name, m.Position));
             }
-            sb.Append("    ");
-            text = SC2LuaBlocks.ReplaceBlockContent(text, spOpen, spClose, sb.ToString());
+            text = SC2LuaBlocks.ReplaceBlockContent(text, spOpen, spClose,
+                SC2LobbySpawnMath.BuildStartPositionsBody(armyPositions, lobbyStartPositions));
         }
         else
         {

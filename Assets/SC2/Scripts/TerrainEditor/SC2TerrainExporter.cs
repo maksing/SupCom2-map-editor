@@ -1271,7 +1271,16 @@ public static class SC2TerrainExporter
         var scenarioLuaSource = !string.IsNullOrEmpty(documentObjects?.ScenarioLuaTextOriginal) ? "SC2MapDocument" : "SC2TerrainData/legacy";
         SC2Log.Log($"[SC2Exporter] _save.lua original text (source: {saveLuaSource}), _scenario.lua original text (source: {scenarioLuaSource})");
         var newSaveLua = SC2ObjectsExport.RegenerateSaveLua(data, documentObjects?.SaveLuaTextOriginal, session?.Document?.Environment?.WorkingHeader);
-        var newScenarioLua = SC2ObjectsExport.RegenerateScenarioLua(data, mapName, documentObjects?.ScenarioLuaTextOriginal);
+        // Lobby-minimap positions are authored in the Lobby Spawns window and
+        // live only in the document (see SC2ScenarioDocument.LobbyStartPositions);
+        // they feed _scenario.lua's StartPositions alone.
+        // An army whose real spawn was moved (Objects tab) after its lobby
+        // position was set is rolled back: the lobby follows the real spawn.
+        var armyRealPositions = new Dictionary<string, Vector3>();
+        foreach (var marker in data.ObjMarkers)
+            if (!armyRealPositions.ContainsKey(marker.Name)) armyRealPositions[marker.Name] = marker.Position;
+        var lobbyStartPositions = SC2LobbyStartPosition.CurrentOverrides(session?.Document?.Scenario?.LobbyStartPositions, armyRealPositions);
+        var newScenarioLua = SC2ObjectsExport.RegenerateScenarioLua(data, mapName, documentObjects?.ScenarioLuaTextOriginal, lobbyStartPositions);
         var newScriptLua = SC2ObjectsExport.RegenerateScriptLua(data);
         SC2Log.Log("[SC2Exporter] _save.lua/_scenario.lua/_script.lua text built (Objects blocks regenerated).");
 

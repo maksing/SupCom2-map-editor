@@ -1437,6 +1437,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Same reasoning — must actually work in a real Build & Run player,
         // not just the Editor (a real EditorWindow never can).
         _infoBdfEditorPanel?.DrawOverlay(width, height);
+        _lobbySpawnPanel?.DrawOverlay(width, height);
 
         GUI.enabled = true;
         GUI.color = Color.white;
@@ -1461,7 +1462,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // correct behavior anyway: a modal should block viewport
             // painting/placing/navigation underneath it, not just visually
             // cover it.
-            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen;
+            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false) || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen;
             if (!anyModalOpen)
             {
                 ReleaseStuckNumericFocusOnViewportClick();
@@ -3271,7 +3272,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         EnsureTerrainShell();
         if (_scenarioShell == null)
-            _scenarioShell = new SC2ScenarioShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView };
+            _scenarioShell = new SC2ScenarioShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView, OpenLobbySpawnEditor = OpenLobbySpawnPanel };
     }
 
     private void DrawExportInspector()
@@ -3525,6 +3526,21 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 ReportStatus = SetStatus,
             };
         }
+    }
+
+    // Lobby minimap spawn editor — opened from Scenario > Preview. Edits
+    // only SC2MapDocument.Scenario.LobbyStartPositions (_scenario.lua).
+    private SC2LobbySpawnPanel _lobbySpawnPanel;
+
+    private void OpenLobbySpawnPanel()
+    {
+        EnsureScenarioShell();
+        _lobbySpawnPanel ??= new SC2LobbySpawnPanel(() => _terrainShell, () => _mapSession, () => _scenarioShell)
+        {
+            RepaintHost = RepaintGameView,
+            ReportStatus = SetStatus,
+        };
+        _lobbySpawnPanel.Open();
     }
 
     private void OpenInfoBdfEditorPanel()

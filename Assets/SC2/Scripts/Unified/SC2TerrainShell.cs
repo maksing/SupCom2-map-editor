@@ -677,6 +677,10 @@ public class SC2TerrainShell : ScriptableObject
             env.FogOfWarCorrectionCube = data.FogOfWarCorrectionCube;
 
             Session.Document.Scenario.KnownFields.Name = data.MapName;
+            // A different map must not inherit the previous one's lobby
+            // minimap positions; a load/import assigns the real ones right
+            // after this (LoadFromDisk / SC2MapImportOrchestrator).
+            Session.Document.Scenario.LobbyStartPositions = new System.Collections.Generic.List<SC2.MapEditor.Document.SC2LobbyStartPosition>();
         }
         // SchedulePreviewBuild (not an immediate DisposeSubEditors/DestroyPreview
         // + next-frame EnsurePreview) — same reasoning as "Create flat terrain"/
@@ -4081,6 +4085,15 @@ public class SC2TerrainShell : ScriptableObject
         // loadedDocument is null on the legacy-JSON fallback path (no
         // document package existed), which SetData above already handled
         // correctly on its own.
+        if (loadedDocument != null && Session?.Document?.Scenario != null)
+        {
+            var lobby = SC2.MapEditor.Document.SC2LobbyStartPosition.CloneList(loadedDocument.Scenario?.LobbyStartPositions);
+            var realPositions = new System.Collections.Generic.Dictionary<string, Vector3>();
+            foreach (var marker in loaded.ObjMarkers)
+                if (!realPositions.ContainsKey(marker.Name)) realPositions[marker.Name] = marker.Position;
+            SC2.MapEditor.Document.SC2LobbyStartPosition.AdoptBases(lobby, realPositions);
+            Session.Document.Scenario.LobbyStartPositions = lobby;
+        }
         if (loadedDocument != null && Session?.Document?.Decals != null)
         {
             Session.Document.Decals.CopyFrom(loadedDocument.Decals);

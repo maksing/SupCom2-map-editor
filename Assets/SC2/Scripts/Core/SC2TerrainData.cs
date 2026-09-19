@@ -1025,47 +1025,8 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
 
     // ── Symmetry ──────────────────────────────────────────────────────────────
 
-    public List<Vector3> GetSymmetricPositions(Vector3 pos)
-    {
-        var c=SymmetryCenter; var rel=pos-c;
-        var list=new List<Vector3>{pos};
-        switch(Symmetry)
-        {
-            case SymmetryMode.X:  list.Add(c+new Vector3(-rel.x,rel.y,rel.z));break;
-            case SymmetryMode.Y:  list.Add(c+new Vector3(rel.x,rel.y,-rel.z));break;
-            case SymmetryMode.XY:
-                list.Add(c+new Vector3(-rel.x,rel.y,rel.z));
-                list.Add(c+new Vector3(rel.x,rel.y,-rel.z));
-                list.Add(c+new Vector3(-rel.x,rel.y,-rel.z));break;
-            // Reflect across relX==relZ (top-left/bottom-right) — swaps the
-            // two horizontal components, Y untouched same as every other
-            // mode here.
-            case SymmetryMode.DiagonalTLBR: list.Add(c+new Vector3(rel.z,rel.y,rel.x));break;
-            // Reflect across relX==-relZ (top-right/bottom-left).
-            case SymmetryMode.DiagonalTRBL: list.Add(c+new Vector3(-rel.z,rel.y,-rel.x));break;
-            case SymmetryMode.DiagonalBoth:
-                list.Add(c+new Vector3(rel.z,rel.y,rel.x));
-                list.Add(c+new Vector3(-rel.z,rel.y,-rel.x));
-                list.Add(c+new Vector3(-rel.x,rel.y,-rel.z));break;
-            case SymmetryMode.Radial:
-                // Shared with Costs (SC2Symmetry.GetSymmetricCells) and
-                // Objects (SC2ObjectsShell.InferCanonicalFromSlot) via
-                // SC2RadialSymmetryMath.RotationAngleSteps, so all three
-                // domains always agree on what N-way symmetry means. Calls
-                // SC2RadialSymmetryMath (Scripts/Core), not SC2Symmetry
-                // (Scripts/, no asmdef) — this file is part of SC2.Core.asmdef,
-                // which can't reference the implicit default assembly SC2Symmetry
-                // compiles into.
-                var ang=Mathf.Atan2(rel.z,rel.x); var r=new Vector2(rel.x,rel.z).magnitude;
-                foreach(var deg in SC2RadialSymmetryMath.RotationAngleSteps(RadialCount))
-                {
-                    var a=ang+deg*Mathf.Deg2Rad;
-                    list.Add(c+new Vector3(r*Mathf.Cos(a),rel.y,r*Mathf.Sin(a)));
-                }
-                break;
-        }
-        return list;
-    }
+    public List<Vector3> GetSymmetricPositions(Vector3 pos) =>
+        SC2SymmetryMath.GetSlots(Symmetry,SymmetryCenter,RadialCount,pos);
 
     // Was returning Materials[p.Mat1Index].Color (the underlying material's
     // own diffuse tint) instead of the pair's own explicitly user-set

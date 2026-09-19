@@ -33,7 +33,8 @@ namespace SC2.MapEditor.Document
         private static readonly HashSet<string> PromotedFieldNames = new(StringComparer.Ordinal)
         {
             "name", "description", "type", "campaignID", "starts", "preview",
-            "reverbPreset", "size", "map", "save", "script", "UIDeactivate", "norushradius"
+            "reverbPreset", "size", "map", "save", "script", "UIDeactivate", "norushradius",
+            "StartPositions"
         };
 
         public static SC2ScenarioDocument BuildFromLegacy(
@@ -68,7 +69,9 @@ namespace SC2.MapEditor.Document
 
             try
             {
-                doc.KnownFields = ReadKnownFields(scenarioLuaBytes);
+                var lobbyStartPositions = new List<SC2LobbyStartPosition>();
+                doc.KnownFields = ReadKnownFields(scenarioLuaBytes, lobbyStartPositions);
+                doc.LobbyStartPositions = lobbyStartPositions;
                 doc.State = SC2DerivedState.Current;
             }
             catch (Exception ex)
@@ -95,7 +98,7 @@ namespace SC2.MapEditor.Document
             return blobStore.Put(new MemoryStream(bytes));
         }
 
-        private static SC2ScenarioKnownFields ReadKnownFields(byte[] scenarioLuaBytes)
+        private static SC2ScenarioKnownFields ReadKnownFields(byte[] scenarioLuaBytes, List<SC2LobbyStartPosition> lobbyStartPositions)
         {
             var chars = new char[scenarioLuaBytes.Length];
             for (var i = 0; i < scenarioLuaBytes.Length; i++) chars[i] = (char)scenarioLuaBytes[i];
@@ -131,6 +134,7 @@ namespace SC2.MapEditor.Document
                 NoRushRadius = GetFloat(L, "norushradius"),
             };
             (fields.SizeX, fields.SizeY) = GetIntPair(L, "size");
+            ReadStartPositions(L, lobbyStartPositions);
 
             // ScenarioInfo is on top of the stack here — walk every key and
             // stash anything not already promoted above into ExtraFields,
@@ -149,6 +153,35 @@ namespace SC2.MapEditor.Document
 
             Lua.lua_pop(L, 1); // pop ScenarioInfo
             return fields;
+        }
+
+        /// <summary>ScenarioInfo.StartPositions — <c>['ARMY_1'] = { x, y, z }</c>
+        /// per army — read through the Lua API like every other field, so it
+        /// works for compiled bytecode (every vanilla map) and plain text
+        /// alike. ScenarioInfo must be on top of the stack; it is left there.
+        /// Sorted by army number so the order doesn't depend on Lua's table
+        /// iteration order.</summary>
+        private static void ReadStartPositions(lua_State L, List<SC2LobbyStartPosition> into)
+        {
+            Lua.lua_getfield(L, -1, "StartPositions");
+            if (Lua.lua_type(L, -1) == Lua.LUA_TTABLE)
+            {
+                Lua.lua_pushnil(L);
+                while (Lua.lua_next(L, -2) != 0)
+                {
+                    if (Lua.lua_type(L, -2) == Lua.LUA_TSTRING && Lua.lua_type(L, -1) == Lua.LUA_TTABLE)
+                    {
+                        var entry = new SC2LobbyStartPosition { ArmyName = Lua.lua_tostring(L, -2).ToString() };
+                        Lua.lua_rawgeti(L, -1, 1); entry.X = (float)Lua.lua_tonumber(L, -1); Lua.lua_pop(L, 1);
+                        Lua.lua_rawgeti(L, -1, 2); entry.Y = (float)Lua.lua_tonumber(L, -1); Lua.lua_pop(L, 1);
+                        Lua.lua_rawgeti(L, -1, 3); entry.Z = (float)Lua.lua_tonumber(L, -1); Lua.lua_pop(L, 1);
+                        into.Add(entry);
+                    }
+                    Lua.lua_pop(L, 1); // pop value, keep key for lua_next
+                }
+            }
+            Lua.lua_pop(L, 1); // pop StartPositions (or the nil standing in for it)
+            into.Sort((a, b) => SC2LobbySpawnMath.CompareArmyNames(a.ArmyName, b.ArmyName));
         }
 
         private static string GetString(lua_State L, string key)
