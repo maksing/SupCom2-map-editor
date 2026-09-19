@@ -48,6 +48,13 @@ namespace SC2.MapEditor.Document
         public SC2BlendDocument Blend;
         public SC2RnmDocument Rnm = new();
 
+        /// <summary>RNM masks baked for LAYERS of imported terrain.bdf objects
+        /// (Terrain > Lighting Bake > Imported Objects), by those layers' own
+        /// UV2. A namespace of its own, apart from <see cref="Rnm"/> (the core
+        /// terrain's and the background's masks), so an imported mask can never
+        /// collide with `mask01`/`background`.</summary>
+        public SC2RnmDocument ImportedRnm = new();
+
         /// <summary>The Lighting Bake tab's own 4 sync toggles + override
         /// values (SC2TerrainData.RnmBakeSync*/RnmBakeOverride*) — had no
         /// document schema home at all, so a save/reload silently reset every

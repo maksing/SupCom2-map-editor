@@ -867,6 +867,7 @@ namespace SC2.MapEditor.Document
             o.Set("pairAssignments", WriteTrianglePairMap(t.PairAssignments));
             o.Set("blend", t.Blend == null ? SC2JsonValue.Null : WriteBlend(t.Blend));
             o.Set("rnm", WriteRnm(t.Rnm));
+            o.Set("importedRnm", WriteRnm(t.ImportedRnm));
             var simplification = SC2JsonValue.NewObject();
             simplification.Set("enabled", SC2JsonValue.Of(t.Simplification.Enabled));
             o.Set("simplification", simplification);
@@ -924,6 +925,7 @@ namespace SC2.MapEditor.Document
                 Grid = ReadTerrainGrid(o.Get("grid")),
                 PairAssignments = ReadTrianglePairMap(o.Get("pairAssignments")),
                 Rnm = ReadRnm(o.Get("rnm")),
+                ImportedRnm = ReadRnm(o.Get("importedRnm")),
                 IsInitialized = o.Get("isInitialized").AsBool(false),
                 DataVersion = o.Get("dataVersion").AsInt(0),
                 ImportOnlyMode = o.Get("importOnlyMode").AsBool(false),
@@ -1012,6 +1014,7 @@ namespace SC2.MapEditor.Document
             var forceExport = SC2JsonValue.NewObject();
             foreach (var kv in m.TexturePathForceExport) forceExport.Set(kv.Key, SC2JsonValue.Of(kv.Value));
             o.Set("forceExport", forceExport);
+            if (!string.IsNullOrEmpty(m.RnmBakeMaskName)) o.Set("rnmBakeMaskName", SC2JsonValue.Of(m.RnmBakeMaskName));
             return o;
         }
 
@@ -1023,6 +1026,7 @@ namespace SC2.MapEditor.Document
             foreach (var kv in o.Get("vectors").Members()) m.Vectors[kv.Key] = ReadFloatArray(kv.Value, 4, new float[4]);
             m.BlendState = o.Get("blendState").AsString("");
             foreach (var kv in o.Get("forceExport").Members()) m.TexturePathForceExport[kv.Key] = kv.Value.AsBool(false);
+            m.RnmBakeMaskName = o.Get("rnmBakeMaskName").AsString("");
             return m;
         }
 

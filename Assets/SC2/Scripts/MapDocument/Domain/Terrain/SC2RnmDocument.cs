@@ -32,6 +32,12 @@ namespace SC2.MapEditor.Document
         public SC2BlobReference BakedRgb1;
         public SC2BlobReference BakedRgb2;
         public SC2BlobReference BakedShadowAlpha;
+
+        public SC2RnmMaskSetDocument Clone() => new()
+        {
+            Id = Id, Name = Name, Width = Width, Height = Height, MaskBytes = MaskBytes,
+            BakedRgb0 = BakedRgb0, BakedRgb1 = BakedRgb1, BakedRgb2 = BakedRgb2, BakedShadowAlpha = BakedShadowAlpha,
+        };
     }
 
     public sealed class SC2RnmDocument
@@ -44,6 +50,13 @@ namespace SC2.MapEditor.Document
                 if (set.Id == id)
                     return set;
             return null;
+        }
+
+        public List<SC2RnmMaskSetDocument> CloneMaskSets()
+        {
+            var list = new List<SC2RnmMaskSetDocument>(MaskSets.Count);
+            foreach (var set in MaskSets) list.Add(set.Clone());
+            return list;
         }
     }
 }

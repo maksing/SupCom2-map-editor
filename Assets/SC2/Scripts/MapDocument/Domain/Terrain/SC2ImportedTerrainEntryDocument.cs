@@ -26,9 +26,13 @@ namespace SC2.MapEditor.Document
         // copied into the exported map even if it comes from a vanilla game
         // archive (see SC2VanillaArchiveClassifier). Absent = default false.
         public Dictionary<string, bool> TexturePathForceExport = new();
+        /// <summary>Name of the imported RNM mask (SC2TerrainDocument.ImportedRnm)
+        /// this layer's lighting is baked onto; "" = not baked.</summary>
+        public string RnmBakeMaskName = "";
 
         public SC2ImportedTerrainMaterialOverrideDocument Clone() => new()
         {
+            RnmBakeMaskName = RnmBakeMaskName,
             TextureResourcePaths = new Dictionary<string, string>(TextureResourcePaths),
             Flags = new Dictionary<string, float>(Flags),
             Vectors = new Dictionary<string, float[]>(Vectors),

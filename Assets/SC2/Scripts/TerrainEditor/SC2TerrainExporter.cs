@@ -681,7 +681,9 @@ public static class SC2TerrainExporter
             {
                 SC2Log.Log($"[SC2Exporter] merging imported terrain '{imported.Name}': " +
                            $"{imported.Model.Materials.Count} materials, {imported.Model.Vertices.Count} verts, {imported.Model.Triangles.Count} tris");
+                var firstImportedMaterial = model.Materials.Count;
                 MergeImportedTerrain(model, imported, ResolveRawResourcePath);
+                ApplyImportedRnmMasks(model, firstImportedMaterial, imported, session, mapName, lightingDir, rnmCache, warnings);
                 CopyImportedTextures(imported.Model, outputDir, warnings, CollectForceExportBasePaths(imported));
             }
         }
@@ -2270,13 +2272,79 @@ public static class SC2TerrainExporter
         var rgb2 = maskPair?.RnmBakedRgb2 != null && maskPair.RnmBakedRgb2.Length == n*3 ? maskPair.RnmBakedRgb2 : neutralRgb;
         var shadowAlpha = maskPair?.RnmBakedShadowAlpha != null && maskPair.RnmBakedShadowAlpha.Length == n ? maskPair.RnmBakedShadowAlpha : fullA;
 
-        File.WriteAllBytes(Path.Combine(lightingDir, $"{safe}_0.win.dds"), SC2DdsEncoder.BuildDxt5(mw,mh,rgb0,shadowAlpha));
-        File.WriteAllBytes(Path.Combine(lightingDir, $"{safe}_1.win.dds"), SC2DdsEncoder.BuildDxt5(mw,mh,rgb1,blendA));
-        File.WriteAllBytes(Path.Combine(lightingDir, $"{safe}_2.win.dds"), SC2DdsEncoder.BuildDxt5(mw,mh,rgb2,fullA));
+        WriteRnmMaskFiles(lightingDir, safe, mw, mh, rgb0, shadowAlpha, rgb1, blendA, rgb2, fullA);
 
         var bdfPath = $"/maps/{mapName}/lighting/{safe}.dds";
         cache[safe] = bdfPath;
         return bdfPath;
+    }
+
+    /// <summary>The three RNM slice files of one mask: _0 = light + shadow
+    /// alpha, _1 = light + blend alpha, _2 = light + opaque.</summary>
+    private static void WriteRnmMaskFiles(string lightingDir, string stem, int mw, int mh,
+        byte[] rgb0, byte[] shadowAlpha, byte[] rgb1, byte[] blendAlpha, byte[] rgb2, byte[] opaqueAlpha)
+    {
+        File.WriteAllBytes(Path.Combine(lightingDir, $"{stem}_0.win.dds"), SC2DdsEncoder.BuildDxt5(mw, mh, rgb0, shadowAlpha));
+        File.WriteAllBytes(Path.Combine(lightingDir, $"{stem}_1.win.dds"), SC2DdsEncoder.BuildDxt5(mw, mh, rgb1, blendAlpha));
+        File.WriteAllBytes(Path.Combine(lightingDir, $"{stem}_2.win.dds"), SC2DdsEncoder.BuildDxt5(mw, mh, rgb2, opaqueAlpha));
+    }
+
+    /// <summary>Points the layers of one merged imported object that are
+    /// assigned an imported RNM mask (Lighting Bake &gt; Imported Objects) at
+    /// that mask: writes <c>lighting/imp_&lt;name&gt;_0/_1/_2.win.dds</c> once per
+    /// mask and sets RNM Mask slot [10] of each such layer's exported material.
+    /// The material is CLONED for the export model — MergeImportedTerrain
+    /// shares the imported object's own material instances, and the object's
+    /// authored data must not change because of an export. A layer whose mask
+    /// was never baked keeps its original mask.</summary>
+    private static void ApplyImportedRnmMasks(TerrainModel model, int firstMaterialIndex, SC2ImportedTerrainExportData imported,
+        SC2MapSession session, string mapName, string lightingDir, Dictionary<string, string> rnmCache, List<string> warnings)
+    {
+        var names = imported.RnmBakeMaskNames;
+        if (names == null || session?.Document == null || session.BlobStore == null) return;
+        var rnm = session.Document.Terrain.ImportedRnm;
+
+        for (var i = 0; i < names.Length; i++)
+        {
+            var name = names[i];
+            if (string.IsNullOrEmpty(name)) continue;
+            var index = firstMaterialIndex + i;
+            if (index >= model.Materials.Count) continue;
+
+            var set = SC2ImportedRnmMasks.Find(rnm, name);
+            if (!SC2ImportedRnmMasks.HasBake(set))
+            {
+                warnings.Add($"Imported RNM mask '{name}' (layer {i} of '{imported.Name}') has not been baked - the layer keeps its original mask.");
+                continue;
+            }
+
+            var stem = SC2ImportedRnmMasks.ExportStem(name);
+            if (!rnmCache.TryGetValue(stem, out var path))
+            {
+                var store = session.BlobStore;
+                var n = set.Width * set.Height;
+                var blend = SC2ImportedRnmMasks.ReadBlendAlpha(store, set) ?? new byte[n];
+                var opaque = new byte[n];
+                for (var t = 0; t < n; t++) opaque[t] = 255;
+                WriteRnmMaskFiles(lightingDir, stem, set.Width, set.Height,
+                    SC2ImportedRnmMasks.Read(store, set.BakedRgb0), SC2ImportedRnmMasks.Read(store, set.BakedShadowAlpha),
+                    SC2ImportedRnmMasks.Read(store, set.BakedRgb1), blend,
+                    SC2ImportedRnmMasks.Read(store, set.BakedRgb2), opaque);
+                path = $"/maps/{mapName}/lighting/{stem}.dds";
+                rnmCache[stem] = path; // also keeps the files through the stale-lighting cleanup
+            }
+
+            var source = model.Materials[index];
+            var clone = new TerrainMaterial
+            {
+                Name = source.Name, ShaderFile = source.ShaderFile, ShaderPrefix = source.ShaderPrefix, State = source.State,
+                TextureScroll = (float[])source.TextureScroll.Clone(),
+                TexturePaths = (string[])source.TexturePaths.Clone(),
+            };
+            foreach (var entry in source.ShaderSetup) clone.ShaderSetup.Add(entry);
+            clone.TexturePaths[10] = path;
+            model.Materials[index] = clone;
+        }
     }
 
     /// <summary>Internal (not private) so SC2WaterPlane.BuildWaterMaterial

@@ -278,6 +278,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Per-slot "copy into map on export" opt-in (same key convention as
         // TexturePathOverrides) — see SC2VanillaArchiveClassifier.
         public Dictionary<string, bool> TexturePathForceExport = new();
+        /// <summary>Per-layer (index = layer/material index of Model) name of
+        /// the imported RNM mask this layer's lighting is baked onto — see
+        /// SC2ImportedTerrainExportData.RnmBakeMaskNames. "" = not baked.</summary>
+        public string[] RnmBakeMaskNames = System.Array.Empty<string>();
         public Material[] FlatColorMaterials;   // lazily built, cached for Mats view — flat HSV-by-index color
         public Material[] PairColorMaterials;   // lazily built, cached for Pairs view — blended avg(Diffuse1,Diffuse2) color
         public Material VertexColorMaterial;    // shared SC2/VertexColorUnlit material for Slope/Height
@@ -538,9 +542,21 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     // with OriginalMaterials, so the next index to be added is
                     // this material's own.
                     var materialIndex = doc.MaterialOverrides.Count;
+                    // "RNM Lighting" is saved from the AUTHORED value, not the
+                    // live material's _EnableRNM: the Textured/RNM preview
+                    // toolbar forces that property (Textured = off), so
+                    // reading it here saved whatever the toolbar happened to
+                    // show and the checkbox came back unchecked after every
+                    // Save/Load. The restore reads the authored array back
+                    // from this same value (OriginalEnableRnm is rebuilt from
+                    // the restored material's _EnableRNM).
+                    if (entry.OriginalEnableRnm != null && materialIndex < entry.OriginalEnableRnm.Length)
+                        ov.Flags["_EnableRNM"] = entry.OriginalEnableRnm[materialIndex];
                     foreach (var prop in ImportedMaterialTextureProps)
                         if (entry.TexturePathForceExport.TryGetValue(materialIndex + ":" + prop, out var force) && force)
                             ov.TexturePathForceExport[prop] = true;
+                    if (materialIndex < entry.RnmBakeMaskNames.Length)
+                        ov.RnmBakeMaskName = entry.RnmBakeMaskNames[materialIndex] ?? "";
                     doc.MaterialOverrides.Add(ov);
                 }
 
@@ -570,6 +586,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _selectedImportedTerrain = -1;
         _importedUndoStack.Clear();
         _importedRedoStack.Clear();
+        _importedRnmOriginals.Clear(); // keyed by the materials just destroyed
 
         if (entries == null || entries.Count == 0 || _mapSession?.BlobStore == null)
             return;
@@ -692,12 +709,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 RecomputeNormals = doc.RecomputeNormals,
                 TexturePathOverrides = restoredPathOverrides,
                 TexturePathForceExport = restoredForceExport,
+                RnmBakeMaskNames = doc.MaterialOverrides.Select(o => o.RnmBakeMaskName ?? "").ToArray(),
             };
             _importedTerrains.Add(entry);
         }
 
         if (_importedTerrains.Count > 0)
             _selectedImportedTerrain = 0;
+        // The freshly re-parsed materials carry their ORIGINAL RNM masks —
+        // put the baked imported masks back on the layers that target one.
+        RefreshImportedRnmMasks();
         _terrainShell?.InvalidateLiveHeightGrid();
     }
 
@@ -2804,6 +2825,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _terrainShell.DrawImportedTerrainsContent = DrawImportedTerrainsLeftPanelContent;
         _terrainShell.PreSaveSync = SyncImportedTerrainsToDocument;
         _terrainShell.GetImportedTerrainsForExport = GetImportedTerrainsForExport;
+        _terrainShell.GetImportedRnmTargets = GetImportedRnmTargets;
+        _terrainShell.SetImportedRnmTarget = SetImportedRnmTarget;
+        _terrainShell.RefreshImportedRnmMasks = RefreshImportedRnmMasks;
         // Same colliders _objectsShell already gets (below), shared via
         // BuildImportedTerrainColliders so SC2CostsShell (which holds a
         // reference to this _terrainShell, not to this class) can raycast
@@ -4860,10 +4884,171 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 AuthoredEnableRnm = entry.OriginalEnableRnm,
                 TexturePathOverrides = entry.TexturePathOverrides,
                 TexturePathForceExport = entry.TexturePathForceExport,
+                RnmBakeMaskNames = entry.RnmBakeMaskNames,
+                Materials = entry.OriginalMaterials,
                 IsBackgroundTerrain = entry.IsBackgroundTerrain
             });
         }
         return result;
+    }
+
+    // ── Lighting Bake > Imported Objects ────────────────────────────────────
+    // Which imported RNM mask (SC2TerrainDocument.ImportedRnm) each LAYER of
+    // each imported terrain.bdf is baked onto. The list/UI lives in
+    // SC2TerrainShell.DrawLightingBakePanel; this class owns the entries.
+
+    private static void EnsureRnmTargetArray(SC2ImportedTerrainEntry entry)
+    {
+        var layers = entry.Model?.Layers.Count ?? 0;
+        if (entry.RnmBakeMaskNames.Length == layers) return;
+        var resized = new string[layers];
+        for (var i = 0; i < layers; i++)
+            resized[i] = i < entry.RnmBakeMaskNames.Length ? entry.RnmBakeMaskNames[i] ?? "" : "";
+        entry.RnmBakeMaskNames = resized;
+    }
+
+    private List<SC2ImportedRnmObjectInfo> GetImportedRnmTargets()
+    {
+        var result = new List<SC2ImportedRnmObjectInfo>();
+        foreach (var entry in _importedTerrains)
+        {
+            if (entry?.Root == null || entry.Model == null) continue;
+            EnsureRnmTargetArray(entry);
+            var info = new SC2ImportedRnmObjectInfo { ObjectId = entry.Id, Name = entry.DisplayName ?? entry.Root.name };
+            for (var i = 0; i < entry.Model.Layers.Count; i++)
+            {
+                var material = i < entry.Model.Materials.Count ? entry.Model.Materials[i].Name : "";
+                info.Layers.Add(new SC2ImportedRnmLayerInfo
+                {
+                    MaterialName = string.IsNullOrEmpty(material) ? $"(unnamed material {i})" : material,
+                    Triangles = CountImportedLayerTriangles(entry.Model, i),
+                    MaskName = entry.RnmBakeMaskNames[i],
+                });
+            }
+            result.Add(info);
+        }
+        return result;
+    }
+
+    private void SetImportedRnmTarget(string objectId, int layerIndex, string maskName)
+    {
+        var entry = _importedTerrains.FirstOrDefault(e => e.Id == objectId);
+        if (entry?.Model == null) return;
+        EnsureRnmTargetArray(entry);
+        if (layerIndex < 0 || layerIndex >= entry.RnmBakeMaskNames.Length) return;
+        entry.RnmBakeMaskNames[layerIndex] = maskName ?? "";
+        RefreshImportedRnmMasks();
+    }
+
+    // One texture triple per imported mask, shared by every layer targeting it.
+    private readonly Dictionary<string, Texture2D[]> _importedRnmTextures = new();
+
+    // The RNM masks (and _HasRNM) a material had BEFORE a baked imported mask
+    // replaced them, so un-assigning the layer puts them back.
+    private sealed class OriginalRnmSlots
+    {
+        public Texture[] Masks = new Texture[3];
+        public float HasRnm;
+    }
+    private readonly Dictionary<Material, OriginalRnmSlots> _importedRnmOriginals = new();
+
+    /// <summary>Puts each baked imported mask onto the live materials of the
+    /// layers that target it (`_RNMMask0/1/2`, same RGB+alpha composition the
+    /// export writes: slice 0 = light + shadow alpha, slice 1 = light + blend
+    /// alpha, slice 2 = light + opaque), so the viewport shows the bake.</summary>
+    private void RefreshImportedRnmMasks()
+    {
+        foreach (var textures in _importedRnmTextures.Values)
+            foreach (var texture in textures)
+                if (texture != null) UnityEngine.Object.Destroy(texture);
+        _importedRnmTextures.Clear();
+
+        var session = _mapSession;
+        if (session?.Document == null || session.BlobStore == null) return;
+        var rnm = session.Document.Terrain.ImportedRnm;
+
+        foreach (var entry in _importedTerrains)
+        {
+            if (entry?.OriginalMaterials == null || entry.Model == null) continue;
+            EnsureRnmTargetArray(entry);
+            for (var i = 0; i < entry.RnmBakeMaskNames.Length && i < entry.OriginalMaterials.Length; i++)
+            {
+                var name = entry.RnmBakeMaskNames[i];
+                var material = entry.OriginalMaterials[i];
+                if (material == null) continue;
+
+                Texture2D[] textures = null;
+                var set = string.IsNullOrEmpty(name) ? null : SC2ImportedRnmMasks.Find(rnm, name);
+                if (SC2ImportedRnmMasks.HasBake(set))
+                {
+                    if (!_importedRnmTextures.TryGetValue(name, out textures))
+                        _importedRnmTextures[name] = textures = BuildImportedRnmTextures(session.BlobStore, set);
+                }
+
+                if (textures == null)
+                {
+                    // Not targeted (or nothing baked yet): give back whatever
+                    // masks the material had before a bake replaced them.
+                    if (_importedRnmOriginals.TryGetValue(material, out var original))
+                    {
+                        for (var slice = 0; slice < 3; slice++)
+                            if (material.HasProperty("_RNMMask" + slice)) material.SetTexture("_RNMMask" + slice, original.Masks[slice]);
+                        if (material.HasProperty("_HasRNM")) material.SetFloat("_HasRNM", original.HasRnm);
+                        _importedRnmOriginals.Remove(material);
+                    }
+                    continue;
+                }
+
+                if (!_importedRnmOriginals.ContainsKey(material))
+                {
+                    var original = new OriginalRnmSlots { HasRnm = material.HasProperty("_HasRNM") ? material.GetFloat("_HasRNM") : 0f };
+                    for (var slice = 0; slice < 3; slice++)
+                        original.Masks[slice] = material.HasProperty("_RNMMask" + slice) ? material.GetTexture("_RNMMask" + slice) : null;
+                    _importedRnmOriginals[material] = original;
+                }
+                for (var slice = 0; slice < 3; slice++)
+                    if (material.HasProperty("_RNMMask" + slice)) material.SetTexture("_RNMMask" + slice, textures[slice]);
+                if (material.HasProperty("_HasRNM")) material.SetFloat("_HasRNM", 1f);
+            }
+        }
+        RepaintGameView();
+    }
+
+    private static Texture2D[] BuildImportedRnmTextures(ISC2BlobStore store, SC2RnmMaskSetDocument set)
+    {
+        var rgb = new[]
+        {
+            SC2ImportedRnmMasks.Read(store, set.BakedRgb0),
+            SC2ImportedRnmMasks.Read(store, set.BakedRgb1),
+            SC2ImportedRnmMasks.Read(store, set.BakedRgb2),
+        };
+        var shadow = SC2ImportedRnmMasks.Read(store, set.BakedShadowAlpha);
+        var blend = SC2ImportedRnmMasks.ReadBlendAlpha(store, set);
+        int w = set.Width, h = set.Height, n = w * h;
+        if (rgb.Any(a => a == null || a.Length != n * 3) || shadow == null || shadow.Length != n) return null;
+
+        var textures = new Texture2D[3];
+        for (var slice = 0; slice < 3; slice++)
+        {
+            var raw = new byte[n * 4];
+            for (var i = 0; i < n; i++)
+            {
+                raw[i * 4] = rgb[slice][i * 3];
+                raw[i * 4 + 1] = rgb[slice][i * 3 + 1];
+                raw[i * 4 + 2] = rgb[slice][i * 3 + 2];
+                raw[i * 4 + 3] = slice == 0 ? shadow[i] : slice == 1 ? (blend != null ? blend[i] : (byte)0) : (byte)255;
+            }
+            // Linear, no mips, clamped — same handling as the imported
+            // _RNMMask* textures themselves (raw lighting data, not colour).
+            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false, true)
+            {
+                name = $"ImportedRNM{slice}_{set.Name}", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear,
+            };
+            tex.LoadRawTextureData(raw);
+            tex.Apply(false);
+            textures[slice] = tex;
+        }
+        return textures;
     }
 
     private static int CountImportedLayerTriangles(BdfIO.Formats.Terrain.TerrainModel model, int layerIndex)
@@ -4904,6 +5089,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (removedTris > 0) model.Triangles.RemoveRange(tStart, removedTris);
         model.Layers.RemoveAt(layerIndex);
         if (layerIndex < model.Materials.Count) model.Materials.RemoveAt(layerIndex);
+        if (layerIndex < entry.RnmBakeMaskNames.Length)
+            entry.RnmBakeMaskNames = entry.RnmBakeMaskNames.Where((_, i) => i != layerIndex).ToArray();
 
         for (var i = layerIndex; i < model.Layers.Count; i++)
         {

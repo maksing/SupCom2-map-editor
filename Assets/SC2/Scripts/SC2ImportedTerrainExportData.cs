@@ -54,6 +54,17 @@ public sealed class SC2ImportedTerrainExportData
 
     public string Name;
 
+    /// <summary>Per-layer (per-material) name of the imported RNM mask this
+    /// layer's lighting is baked onto (Terrain > Lighting Bake > Imported
+    /// Objects); index = layer/material index of <see cref="Model"/>, "" or a
+    /// missing entry = not baked. Null = none. See SC2RnmBakeService.</summary>
+    public string[] RnmBakeMaskNames;
+
+    /// <summary>The object's authored live materials (index-aligned with
+    /// <see cref="Model"/>'s layers) — the bake reads each layer's current
+    /// _RNMMask1 alpha from here to carry its blend over to a new mask.</summary>
+    public Material[] Materials;
+
     /// <summary>Per-material real "RNM Lighting" value, kept in sync with
     /// the user's own Shader Setup checkbox edits (SC2GameViewEditorUI) —
     /// NEVER with the Textured/RNM debug preview toolbar, which forces the

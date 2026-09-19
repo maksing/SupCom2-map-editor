@@ -488,6 +488,18 @@ public class SC2TerrainShell : ScriptableObject
     /// </summary>
     public System.Func<System.Collections.Generic.List<SC2ImportedTerrainExportData>> GetImportedTerrainsForExport { get; set; }
 
+    /// <summary>Lighting Bake &gt; Imported Objects: the imported terrain.bdf
+    /// objects with their layers and each layer's target RNM mask (host
+    /// callback, same reasoning as GetImportedTerrainsForExport).</summary>
+    public System.Func<System.Collections.Generic.List<SC2ImportedRnmObjectInfo>> GetImportedRnmTargets { get; set; }
+
+    /// <summary>(objectId, layerIndex, maskName) — "" clears the target.</summary>
+    public System.Action<string, int, string> SetImportedRnmTarget { get; set; }
+
+    /// <summary>Re-applies the baked imported masks to the live imported
+    /// materials (after a bake, an undo/redo, or a mask edit).</summary>
+    public System.Action RefreshImportedRnmMasks { get; set; }
+
     /// <summary>Same live scene colliders SC2ObjectsShell's
     /// own GetImportedTerrainColliders already exposes (imported terrain.bdf
     /// GameObjects carry a real MeshCollider, set at import time), wired here
@@ -681,6 +693,8 @@ public class SC2TerrainShell : ScriptableObject
             // minimap positions; a load/import assigns the real ones right
             // after this (LoadFromDisk / SC2MapImportOrchestrator).
             Session.Document.Scenario.LobbyStartPositions = new System.Collections.Generic.List<SC2.MapEditor.Document.SC2LobbyStartPosition>();
+            // Same for the imported-layer RNM masks: they belong to one map.
+            Session.Document.Terrain.ImportedRnm = new SC2.MapEditor.Document.SC2RnmDocument();
         }
         // SchedulePreviewBuild (not an immediate DisposeSubEditors/DestroyPreview
         // + next-frame EnsurePreview) — same reasoning as "Create flat terrain"/
@@ -859,6 +873,9 @@ public class SC2TerrainShell : ScriptableObject
                 if (doc != null)
                     p.Name = doc.Name;
             }
+
+        // An undo/redo may have changed the imported RNM masks too.
+        RefreshImportedRnmMasks?.Invoke();
     }
 
     public bool Undo()
@@ -1557,13 +1574,158 @@ public class SC2TerrainShell : ScriptableObject
         if (GUILayout.Button("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
             RecordUndoCheckpoint("Bake Lighting");
-            _bakeStatus = SC2RnmBakeService.Bake(_data, GetImportedTerrainsForExport?.Invoke(), Session);
+            _bakeStatus = SC2RnmBakeService.Bake(_data, GetImportedTerrainsForExport?.Invoke(), Session, CommitImportedRnmMasks);
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
         if (!string.IsNullOrEmpty(_bakeStatus))
             EditorGUILayout.LabelField(_bakeStatus, EditorStyles.miniLabel);
-        DrawUnifiedNote("Manual trigger only — the shadow horizon-march is real per-texel work across up to 2048x2048 texels per mask, so it never runs silently on export.");
+        DrawUnifiedNote("Manual trigger only — the shadow horizon-march is real per-texel work across up to 2048x2048 texels per mask, so it never runs silently on export. Also bakes the imported layers assigned to a mask below.");
+
+        DrawImportedRnmBakeSection();
+    }
+
+    // ── Lighting Bake > Imported Objects ────────────────────────────────────
+    // Masks of their own (SC2TerrainDocument.ImportedRnm), separate from the
+    // core terrain's and the background's; each LAYER of an imported
+    // terrain.bdf is assigned to one (or none). Bake Lighting bakes them by
+    // the layers' own UV2.
+
+    private readonly System.Collections.Generic.Queue<System.Action> _pendingImportedRnmActions = new();
+
+    private void CommitImportedRnmMasks(System.Collections.Generic.List<SC2.MapEditor.Document.SC2RnmMaskSetDocument> masks)
+    {
+        ExecuteCommand(new SC2.MapEditor.Document.SC2SetImportedRnmMasksCommand(masks));
+        RefreshImportedRnmMasks?.Invoke();
+    }
+
+    private void DrawImportedRnmBakeSection()
+    {
+        var document = Session?.Document;
+        if (document == null) return;
+
+        // Edits queued by the buttons below run here, at the top of the next
+        // layout pass, so the control tree never changes between an event
+        // pass and the repaint that follows it.
+        while (_pendingImportedRnmActions.Count > 0) _pendingImportedRnmActions.Dequeue()();
+
+        EditorGUILayout.Space(10);
+        DrawUnifiedSectionLabel("Imported Objects");
+        DrawUnifiedNote("Bake lighting onto imported terrain.bdf objects that bring their own UV2. Create masks here (separate from the terrain's mask01/background), assign each LAYER of an object to a mask — several layers or objects may share one mask if their UV2 doesn't overlap — then press Bake Lighting. The layer's material needs RNM Lighting on.");
+
+        var masks = document.Terrain.ImportedRnm.MaskSets;
+        var objects = GetImportedRnmTargets?.Invoke() ?? new System.Collections.Generic.List<SC2ImportedRnmObjectInfo>();
+
+        // ---- masks
+        SC2EnvFieldGui.SectionLabel("Masks");
+        if (masks.Count == 0)
+            DrawUnifiedNote("No masks yet — press \"+ New mask\".");
+        var resLabels = new[] { "512", "1024", "2048", "4096" };
+        foreach (var set in masks)
+        {
+            var users = 0;
+            foreach (var o in objects) foreach (var l in o.Layers) if (l.MaskName == set.Name) users++;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"{set.Name}  —  {(SC2.MapEditor.Document.SC2ImportedRnmMasks.HasBake(set) ? "baked" : "not baked")}, {users} layer(s)");
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(60f))))
+            {
+                var name = set.Name;
+                _pendingImportedRnmActions.Enqueue(() => DeleteImportedRnmMask(name));
+            }
+            GUILayout.EndHorizontal();
+
+            var resIndex = System.Array.IndexOf(SC2.MapEditor.Document.SC2ImportedRnmMasks.Resolutions, set.Width);
+            var newRes = GUILayout.SelectionGrid(resIndex < 0 ? 1 : resIndex, resLabels, 4);
+            if (newRes != resIndex && newRes >= 0)
+            {
+                var name = set.Name;
+                var size = SC2.MapEditor.Document.SC2ImportedRnmMasks.Resolutions[newRes];
+                _pendingImportedRnmActions.Enqueue(() => ResizeImportedRnmMask(name, size));
+            }
+            if (users > 1)
+                DrawUnifiedNote($"{users} layers share \"{set.Name}\" — their UV2 islands must not overlap.");
+        }
+        if (GUILayout.Button("+ New mask"))
+            _pendingImportedRnmActions.Enqueue(AddImportedRnmMask);
+
+        // ---- layers
+        EditorGUILayout.Space(6);
+        SC2EnvFieldGui.SectionLabel("Layers");
+        if (objects.Count == 0)
+        {
+            DrawUnifiedNote("No imported terrain.bdf in the scene — use File > Import terrain.bdf.");
+            return;
+        }
+        var options = new string[masks.Count + 1];
+        options[0] = "None";
+        for (var i = 0; i < masks.Count; i++) options[i + 1] = masks[i].Name;
+        foreach (var obj in objects)
+        {
+            GUILayout.Label(obj.Name, EditorStyles.boldLabel);
+            for (var li = 0; li < obj.Layers.Count; li++)
+            {
+                var layer = obj.Layers[li];
+                GUILayout.Label($"{layer.MaterialName}  ({layer.Triangles} tris)");
+                var current = 0;
+                for (var i = 0; i < masks.Count; i++) if (masks[i].Name == layer.MaskName) current = i + 1;
+                var chosen = GUILayout.SelectionGrid(current, options, Mathf.Min(options.Length, 3));
+                if (chosen != current)
+                {
+                    var objectId = obj.ObjectId; var layerIndex = li;
+                    var maskName = chosen == 0 ? "" : masks[chosen - 1].Name;
+                    _pendingImportedRnmActions.Enqueue(() =>
+                    {
+                        SetImportedRnmTarget?.Invoke(objectId, layerIndex, maskName);
+                        MarkDirtyAndRepaint();
+                    });
+                }
+            }
+        }
+    }
+
+    private void AddImportedRnmMask()
+    {
+        var document = Session?.Document;
+        if (document == null) return;
+        var next = document.Terrain.ImportedRnm.CloneMaskSets();
+        var name = SC2.MapEditor.Document.SC2ImportedRnmMasks.NextName(next);
+        var size = SC2.MapEditor.Document.SC2ImportedRnmMasks.DefaultResolution;
+        next.Add(new SC2.MapEditor.Document.SC2RnmMaskSetDocument { Id = name, Name = name, Width = size, Height = size });
+        ExecuteCommand(new SC2.MapEditor.Document.SC2SetImportedRnmMasksCommand(next));
+        MarkDirtyAndRepaint();
+    }
+
+    private void ResizeImportedRnmMask(string name, int size)
+    {
+        var document = Session?.Document;
+        if (document == null) return;
+        var next = document.Terrain.ImportedRnm.CloneMaskSets();
+        var set = next.Find(s => s.Name == name);
+        if (set == null || set.Width == size) return;
+        // A new resolution invalidates whatever was baked at the old one.
+        set.Width = size; set.Height = size;
+        set.MaskBytes = default; set.BakedRgb0 = default; set.BakedRgb1 = default; set.BakedRgb2 = default; set.BakedShadowAlpha = default;
+        ExecuteCommand(new SC2.MapEditor.Document.SC2SetImportedRnmMasksCommand(next));
+        RefreshImportedRnmMasks?.Invoke();
+        MarkDirtyAndRepaint();
+    }
+
+    private void DeleteImportedRnmMask(string name)
+    {
+        var document = Session?.Document;
+        if (document == null) return;
+        // Layers pointing at it go back to "None" first.
+        var objects = GetImportedRnmTargets?.Invoke();
+        if (objects != null)
+            foreach (var obj in objects)
+                for (var li = 0; li < obj.Layers.Count; li++)
+                    if (obj.Layers[li].MaskName == name) SetImportedRnmTarget?.Invoke(obj.ObjectId, li, "");
+        var next = document.Terrain.ImportedRnm.CloneMaskSets();
+        next.RemoveAll(s => s.Name == name);
+        ExecuteCommand(new SC2.MapEditor.Document.SC2SetImportedRnmMasksCommand(next));
+        RefreshImportedRnmMasks?.Invoke();
+        MarkDirtyAndRepaint();
     }
 
     // Override widgets below use SC2EnvFieldGui (the same real Vector3/
@@ -4094,6 +4256,11 @@ public class SC2TerrainShell : ScriptableObject
             SC2.MapEditor.Document.SC2LobbyStartPosition.AdoptBases(lobby, realPositions);
             Session.Document.Scenario.LobbyStartPositions = lobby;
         }
+        if (loadedDocument?.Terrain?.ImportedRnm != null && Session?.Document?.Terrain != null)
+            Session.Document.Terrain.ImportedRnm = new SC2.MapEditor.Document.SC2RnmDocument
+            {
+                MaskSets = loadedDocument.Terrain.ImportedRnm.CloneMaskSets(),
+            };
         if (loadedDocument != null && Session?.Document?.Decals != null)
         {
             Session.Document.Decals.CopyFrom(loadedDocument.Decals);

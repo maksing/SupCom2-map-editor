@@ -326,6 +326,11 @@ public static class SC2RuntimeTerrainPersistence
             foreach (var e in session.Document.Terrain.ImportedEntries)
                 doc.Terrain.ImportedEntries.Add(e.Clone());
         }
+        // Same passthrough for the imported-layer RNM masks (Lighting Bake >
+        // Imported Objects): they exist only on the session's document, the
+        // fresh BuildFromLegacy above knows nothing about them.
+        if (session?.Document?.Terrain?.ImportedRnm != null)
+            doc.Terrain.ImportedRnm = new SC2RnmDocument { MaskSets = session.Document.Terrain.ImportedRnm.CloneMaskSets() };
         doc.Hfield = SC2HfieldLegacyBridge.BuildFromLegacy(data, blobStore);
         doc.Costs = SC2CostsLegacyBridge.BuildFromLegacy(data, blobStore);
         doc.Collision2 = SC2CollisionLegacyBridge.BuildFromLegacy(data);
