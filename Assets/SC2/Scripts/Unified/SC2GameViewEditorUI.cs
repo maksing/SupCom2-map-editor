@@ -4895,6 +4895,29 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             model.Layers[i].CumulativeIndices -= removedTris * 3;
         }
 
+        // Nothing left to render, collide with or export: drop the whole
+        // imported object instead of leaving an empty mesh (and its
+        // sidebar entry) behind. Destroyed, not deactivated like "Remove
+        // From Scene" — this deletion isn't undoable, and undo snapshots
+        // already skip entries whose Root is gone.
+        if (model.Layers.Count == 0 || model.Triangles.Count == 0)
+        {
+            var name = entry.DisplayName;
+            var index = _importedTerrains.IndexOf(entry);
+            _importedTerrains.Remove(entry);
+            _importedTerrainsRemoved.Remove(entry);
+            var emptyMesh = entry.Root.GetComponent<MeshFilter>()?.sharedMesh;
+            UnityEngine.Object.DestroyImmediate(entry.Root);
+            if (emptyMesh != null) UnityEngine.Object.DestroyImmediate(emptyMesh);
+            _selectedImportedTerrain = _importedTerrains.Count == 0
+                ? -1
+                : Mathf.Clamp(index, 0, _importedTerrains.Count - 1);
+            _terrainShell?.InvalidateLiveHeightGrid();
+            _terrainShell?.MarkDirtyAndRepaint();
+            SetStatus($"Deleted the last material geometry — removed imported terrain '{name}'.");
+            return;
+        }
+
         // Rebuild the live mesh+materials from the now-modified model,
         // reusing the exact same real builder used at import time - build
         // into a scratch GameObject and steal its output onto the existing
@@ -5668,7 +5691,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     {
                         var triCount = CountImportedLayerTriangles(entry.Model, mi);
                         if (EditorUtility.DisplayDialog("Delete material geometry",
-                            $"Permanently remove '{label}' ({triCount} triangles) from this imported object?\n\nThis cannot be undone via this panel's ↩ Undo.",
+                            $"Permanently remove '{label}' ({triCount} triangles) from this imported object?\n\nThis cannot be undone via this panel's ↩ Undo."
+                            + (materials.Count == 1 ? "\n\nThis is the last material — the whole imported object will be removed." : ""),
                             "Delete", "Cancel"))
                         {
                             DeleteImportedMaterialLayer(entry, mi);
