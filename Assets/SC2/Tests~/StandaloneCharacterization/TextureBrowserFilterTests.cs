@@ -82,6 +82,62 @@ public class TextureBrowserFilterTests
         Assert.Equal(Entries.Length, Run(new SC2TextureQuery()).Count);
     }
 
+    [Theory]
+    [InlineData("textures/Engine/FullGlow_m.win.dds")]
+    [InlineData("textures/Engine/Gray_d.win.dds")]
+    [InlineData("textures/Engine/Red_d.win.dds")]
+    [InlineData("textures/Engine/Spec00_m.win.dds")]
+    [InlineData("textures/Engine/Spec50_m.win.dds")]
+    [InlineData("textures/Engine/Spec100_m.win.dds")]
+    [InlineData("TEXTURES/ENGINE/SPEC50_M.WIN.DDS")]
+    [InlineData("/textures/engine/spec50_m.dds")]
+    public void EngineWhitelist_AcceptsTheSixListedTextures(string path) =>
+        Assert.True(SC2TextureCatalogEntry.IsEngineTexturePath(path));
+
+    [Theory]
+    [InlineData("textures/Engine/Other_m.win.dds")]
+    [InlineData("textures/Engine/Spec25_m.win.dds")]
+    [InlineData("textures/Engine/sub/Gray_d.win.dds")]
+    [InlineData("textures/Terrain/Gray_d.win.dds")]
+    [InlineData("")]
+    public void EngineWhitelist_RejectsEverythingElse(string path) =>
+        Assert.False(SC2TextureCatalogEntry.IsEngineTexturePath(path));
+
+    [Fact]
+    public void EngineTexture_IsFiledUnderTheEngineCategory()
+    {
+        var entry = new SC2TextureCatalogEntry
+        {
+            Source = SC2TextureSource.Vanilla,
+            ArchiveEntryPath = "textures/Engine/Gray_d.win.dds",
+        };
+        entry.Normalize();
+        Assert.Equal(SC2TextureCatalogEntry.EngineCategory, entry.Category);
+    }
+
+    [Fact]
+    public void EngineCategoryFilter_SelectsOnlyEngineEntries()
+    {
+        var engine = new SC2TextureCatalogEntry
+        {
+            Id = "vanilla:textures/engine/spec00_m.win.dds", Source = SC2TextureSource.Vanilla,
+            ArchiveEntryPath = "textures/Engine/Spec00_m.win.dds", Usage = SC2TextureUsage.Mask,
+        };
+        var terrain = new SC2TextureCatalogEntry
+        {
+            Id = "vanilla:textures/terrain/a_m.win.dds", Source = SC2TextureSource.Vanilla,
+            ArchiveEntryPath = "textures/Terrain/a_m.win.dds", Usage = SC2TextureUsage.Mask,
+        };
+        engine.Normalize();
+        terrain.Normalize();
+        var entries = new[] { engine, terrain };
+        var query = new SC2TextureCatalogQueryEngine();
+        query.SetEntries(entries, 1);
+        var hits = query.Execute(new SC2TextureQuery { Category = SC2TextureCatalogEntry.EngineCategory })
+            .Select(i => entries[i].Id).ToList();
+        Assert.Equal(new[] { engine.Id }, hits);
+    }
+
     [Fact]
     public void CacheKey_DistinguishesCommunityFromVanilla()
     {

@@ -330,6 +330,11 @@ public static class SC2TextureBrowser
         DrawUsageButton(ref y, rect, "Diffuse", SC2TextureUsage.Diffuse);
         DrawUsageButton(ref y, rect, "Normal", SC2TextureUsage.Normal);
         DrawUsageButton(ref y, rect, "Mask", SC2TextureUsage.Mask);
+        // The whitelisted textures/Engine/ fills (see
+        // SC2TextureCatalogEntry.IsEngineTexturePath) — a Category toggle
+        // like Decals, placed under Mask since they are all mask-usage.
+        DrawFilterButton(ref y, rect, "Engine", string.Equals(Query.Category, SC2TextureCatalogEntry.EngineCategory, StringComparison.OrdinalIgnoreCase),
+            () => Query.Category = string.Equals(Query.Category, SC2TextureCatalogEntry.EngineCategory, StringComparison.OrdinalIgnoreCase) ? "" : SC2TextureCatalogEntry.EngineCategory);
         // Everything with no button of its own (Rnm, Heightmap, and textures
         // whose usage couldn't be inferred) — see SC2TextureUsageFilter.
         DrawUsageButton(ref y, rect, "Other", SC2TextureUsage.Unknown);

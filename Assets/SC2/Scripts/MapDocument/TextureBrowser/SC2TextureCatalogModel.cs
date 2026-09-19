@@ -121,7 +121,37 @@ namespace SC2.MapEditor.Textures
             // deliberately excluded so it doesn't get lumped in here.
             if (IsDecalPath(pathForNaming))
                 Category = "Decals";
+            if (IsEngineTexturePath(pathForNaming))
+                Category = EngineCategory;
             SearchKey = BuildSearchKey(Name, ResourcePath, GamePath, Category, Source, Usage);
+        }
+
+        public const string EngineCategory = "Engine";
+
+        // The only textures cataloged from textures/Engine/ — the folder holds
+        // many engine-internal files a mapmaker never picks, but these six are
+        // the stock flat mask/color fills that materials reference by default.
+        private static readonly string[] EngineTextureStems =
+        {
+            "fullglow_m", "gray_d", "red_d", "spec00_m", "spec50_m", "spec100_m",
+        };
+
+        /// <summary>True for one of the whitelisted textures sitting directly in
+        /// textures/Engine/ (matched case-insensitively, ".win" infix and image
+        /// extension ignored). Such entries are cataloged despite the folder
+        /// being outside the browser's normal scan, and are filed under
+        /// <see cref="EngineCategory"/> as Mask-usage textures.</summary>
+        public static bool IsEngineTexturePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            var normalized = NormalizePath(path);
+            const string folder = "textures/engine/";
+            if (!normalized.StartsWith(folder, StringComparison.OrdinalIgnoreCase)) return false;
+            var leaf = normalized.Substring(folder.Length);
+            if (leaf.IndexOf('/') >= 0) return false;
+            var dot = leaf.IndexOf('.');
+            var stem = dot >= 0 ? leaf.Substring(0, dot) : leaf;
+            return Array.Exists(EngineTextureStems, s => string.Equals(s, stem, StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool IsDecalPath(string path)

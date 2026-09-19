@@ -219,7 +219,7 @@ public sealed class SC2TextureCatalog
         foreach (var entryInfo in reader.Entries)
         {
             var path = entryInfo.NormalizedPath;
-            var inScope = false;
+            var inScope = SC2TextureCatalogEntry.IsEngineTexturePath(path);
             foreach (var prefix in AllowedTextureFolderPrefixes)
                 if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { inScope = true; break; }
             if (!inScope) continue;
@@ -268,6 +268,9 @@ public sealed class SC2TextureCatalog
 
     public static SC2TextureUsage InferUsage(string path)
     {
+        // The whitelisted textures/Engine/ fills (Gray_d, Red_d, ...) are all
+        // offered as masks, whatever their _d/_m suffix would otherwise say.
+        if (SC2TextureCatalogEntry.IsEngineTexturePath(path)) return SC2TextureUsage.Mask;
         var value = (path ?? "").ToLowerInvariant();
         var leaf = Path.GetFileNameWithoutExtension(value);
         // Real vanilla terrain textures commonly use a DOUBLE extension
