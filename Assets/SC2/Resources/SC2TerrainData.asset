@@ -32,6 +32,9 @@ MonoBehaviour:
     DiffuseOverridePath: 
     NormalOverridePath: 
     MaskOverridePath: 
+    DiffuseForceExport: 0
+    NormalForceExport: 0
+    MaskForceExport: 0
   - Id: 
     Name: Default Rock
     Diffuse: {fileID: 0}
@@ -41,6 +44,9 @@ MonoBehaviour:
     DiffuseOverridePath: 
     NormalOverridePath: 
     MaskOverridePath: 
+    DiffuseForceExport: 0
+    NormalForceExport: 0
+    MaskForceExport: 0
   Pairs:
   - Id: 
     Name: Default Pair
@@ -66205,6 +66211,13 @@ MonoBehaviour:
   TexturePath3: 
   ColorCorrectionCube: 
   FogOfWarCorrectionCube: 
+  EnvironmentTextureSourceTags:
+  - 
+  - 
+  - 
+  - 
+  - 
+  EnvironmentTextureForceExport: 0000000000
   PlayableAreaName: 
   CostsShoreHintOverrideMask: 
   ObjProps:
