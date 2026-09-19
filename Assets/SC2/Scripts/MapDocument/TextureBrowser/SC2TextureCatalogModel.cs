@@ -24,6 +24,25 @@ namespace SC2.MapEditor.Textures
         ColorCorrectionCube
     }
 
+    /// <summary>The texture browser's USAGE filter shows fewer buttons than
+    /// the SC2TextureUsage enum has values (the enum is baked into saved
+    /// catalogs, so it isn't trimmed): Sky is folded into Environment, and
+    /// Rnm/Heightmap/Unknown — usages with no button of their own — all fall
+    /// into a single "Other" bucket (represented by Unknown). Both the
+    /// filter value and each entry's own usage go through Normalize before
+    /// being compared, so a picker that asks for Sky/Rnm/Heightmap still
+    /// lands on the right bucket.</summary>
+    public static class SC2TextureUsageFilter
+    {
+        public static SC2TextureUsage Normalize(SC2TextureUsage usage) => usage switch
+        {
+            SC2TextureUsage.Sky => SC2TextureUsage.Environment,
+            SC2TextureUsage.Rnm => SC2TextureUsage.Unknown,
+            SC2TextureUsage.Heightmap => SC2TextureUsage.Unknown,
+            _ => usage,
+        };
+    }
+
     [Serializable]
     public sealed class SC2TextureCatalogEntry
     {

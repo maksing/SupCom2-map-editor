@@ -39,6 +39,39 @@ public static class SC2CustomTextureImporter
 {
     public static string LibraryDirectory => Path.Combine(Application.persistentDataPath, "TextureLibrary");
 
+    /// <summary>Deletes an imported texture's files from the library: the
+    /// converted .dds, its thumbnail (.thumb.png) and metadata
+    /// (.sc2tex.json). Only ever touches files inside LibraryDirectory —
+    /// anything outside it is skipped, so a mangled catalog entry can't
+    /// delete an arbitrary file. Removing the catalog entry itself is the
+    /// caller's job (SC2TextureCatalog.Remove).</summary>
+    public static bool TryDelete(SC2TextureCatalogEntry entry, out string error)
+    {
+        error = null;
+        if (entry == null || entry.Source != SC2TextureSource.Custom || string.IsNullOrEmpty(entry.GamePath))
+        {
+            error = "Not an imported texture.";
+            return false;
+        }
+        try
+        {
+            var library = Path.GetFullPath(LibraryDirectory).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            foreach (var path in new[] { entry.GamePath, entry.ThumbnailFilePath, entry.GamePath + ".sc2tex.json" })
+            {
+                if (string.IsNullOrEmpty(path)) continue;
+                var full = Path.GetFullPath(path);
+                if (!full.StartsWith(library, StringComparison.OrdinalIgnoreCase)) continue;
+                if (File.Exists(full)) File.Delete(full);
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     public static SC2CustomTextureImportResult Import(string sourcePath, SC2TextureUsage usage, bool overwrite)
     {
         var result = new SC2CustomTextureImportResult();
@@ -664,6 +697,24 @@ public static class SC2CustomTextureImporter
     private static bool IsBlockAligned(int width, int height, TextureFormat format) =>
         !IsCompressedFormat(format) || (width % 4 == 0 && height % 4 == 0);
 
+    // Textures whose DDS file carries no authored mip chain (header mipCount
+    // == 1, or a decode path that only ever builds level 0). For a COMPRESSED
+    // format Unity cannot generate the missing levels on the CPU
+    // (Texture2D.Apply(updateMipmaps: true) leaves them unfilled) even though
+    // Texture2D.mipmapCount still reports a full chain, so sampling any LOD
+    // above 0 from such a texture returns garbage — see BuildFilteredPreview,
+    // which rebuilds the chain on the GPU for these. The terrain shader path
+    // never hit this because the GPU builds its own mips there.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Texture, object> _unreliableMips = new();
+
+    public static bool HasUnreliableMips(Texture texture) => texture != null && _unreliableMips.TryGetValue(texture, out _);
+
+    private static Texture2D MarkUnreliableMips(Texture2D texture)
+    {
+        if (texture != null) _unreliableMips.GetValue(texture, _ => new object());
+        return texture;
+    }
+
     private static bool TryBuildDdsFlat(byte[] bytes, int width, int height, int mipCount, TextureFormat format, DdsSpecialDecode specialDecode, bool linear, out Texture2D texture, out string error, bool disableMipmaps = false)
     {
         texture = null;
@@ -689,6 +740,7 @@ public static class SC2CustomTextureImporter
                     { hideFlags = HideFlags.DontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Repeat };
                 texture.LoadRawTextureData(rgba);
                 texture.Apply(false, false);
+                MarkUnreliableMips(texture);
                 return true;
             }
 
@@ -728,6 +780,7 @@ public static class SC2CustomTextureImporter
                     { hideFlags = HideFlags.DontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Repeat };
                 texture.SetPixelData(level, 0);
                 texture.Apply(false, false);
+                MarkUnreliableMips(texture);
                 return true;
             }
 
@@ -790,6 +843,7 @@ public static class SC2CustomTextureImporter
                     h = Math.Max(1, h / 2);
                 }
                 texture.Apply(updateMipmaps: mipCount == 1, makeNoLongerReadable: false);
+                if (mipCount == 1) MarkUnreliableMips(texture);
                 return true;
             }
 
@@ -820,6 +874,7 @@ public static class SC2CustomTextureImporter
                 { hideFlags = HideFlags.DontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Repeat };
             texture.LoadRawTextureData(topLevel);
             texture.Apply(false, false);
+            MarkUnreliableMips(texture);
             return true;
         }
         catch (Exception ex)
@@ -1189,23 +1244,52 @@ public static class SC2CustomTextureImporter
         var previous = RenderTexture.active;
         var previousSRGBWrite = GL.sRGBWrite;
         Texture2D result = null;
+        RenderTexture mipSource = null;
         try
         {
             GL.sRGBWrite = !linear;
             var sourceWidth = Mathf.Max(1, source.width);
             var desiredLod = Mathf.Log(Mathf.Max(1f, (float)sourceWidth / size), 2f);
+
+            // A texture with no authored mip chain (see HasUnreliableMips)
+            // has nothing valid above level 0 to sample at desiredLod, so
+            // sampling it straight reads garbage — visible as regular
+            // stripes in the browser grid/details and the Materials panel's
+            // slot preview. Copy level 0 into a render texture and let the
+            // GPU build a real chain there instead, then sample THAT at the
+            // same LOD. Explicit graphics formats (not a pooled
+            // RenderTextureReadWrite) so the sRGB handling is unambiguous:
+            // an sRGB target for color, plain UNorm for linear data
+            // (normals/RNM), matching GL.sRGBWrite above.
+            Texture sampleFrom = source;
+            if (sourceWidth > size && HasUnreliableMips(source))
+            {
+                mipSource = new RenderTexture(source.width, source.height, 0,
+                    linear ? UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm
+                           : UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_SRGB)
+                {
+                    useMipMap = true,
+                    autoGenerateMips = false,
+                    hideFlags = HideFlags.DontSave,
+                };
+                mipSource.Create();
+                Graphics.Blit(source, mipSource);
+                mipSource.GenerateMips();
+                sampleFrom = mipSource;
+            }
+
             var blitMat = GetBlitExplicitLodMaterial();
             if (blitMat != null)
             {
                 blitMat.SetFloat("_Lod", desiredLod);
-                Graphics.Blit(source, target, blitMat);
+                Graphics.Blit(sampleFrom, target, blitMat);
             }
             else
             {
                 // Shader failed to load — fall back to a plain blit (mip 0
                 // aliasing risk, but no shared-asset-state mutation either
                 // way) rather than silently producing a blank preview.
-                Graphics.Blit(source, target);
+                Graphics.Blit(sampleFrom, target);
             }
             RenderTexture.active = target;
             result = new Texture2D(size, size, TextureFormat.RGBA32, false) { hideFlags = HideFlags.DontSave };
@@ -1234,6 +1318,11 @@ public static class SC2CustomTextureImporter
             GL.sRGBWrite = previousSRGBWrite;
             RenderTexture.active = previous;
             RenderTexture.ReleaseTemporary(target);
+            if (mipSource != null)
+            {
+                mipSource.Release();
+                UnityEngine.Object.Destroy(mipSource);
+            }
         }
         return result;
     }

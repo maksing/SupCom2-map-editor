@@ -82,6 +82,20 @@ public sealed class SC2TextureCatalog
         EnsureLoaded();
     }
 
+    /// <summary>Drops an entry from the in-memory catalog (e.g. after its
+    /// imported file was deleted); the next session's scan won't find it
+    /// either once the file is gone.</summary>
+    public bool Remove(string id)
+    {
+        EnsureLoaded();
+        if (string.IsNullOrEmpty(id) || !_byId.TryGetValue(id, out var entry)) return false;
+        _entries.Remove(entry);
+        _byId.Remove(id);
+        _version++;
+        _query.SetEntries(_entries, _version);
+        return true;
+    }
+
     public void AddOrReplace(SC2TextureCatalogEntry entry)
     {
         EnsureLoaded();

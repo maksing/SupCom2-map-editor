@@ -33,7 +33,7 @@ namespace SC2.MapEditor.Textures
                 if (entry == null) continue;
                 if (query.Source.HasValue && entry.Source != query.Source.Value) continue;
                 if (query.Community.HasValue && entry.IsCommunity != query.Community.Value) continue;
-                if (query.Usage.HasValue && entry.Usage != query.Usage.Value) continue;
+                if (query.Usage.HasValue && SC2TextureUsageFilter.Normalize(entry.Usage) != SC2TextureUsageFilter.Normalize(query.Usage.Value)) continue;
                 if (category.Length > 0 && !string.Equals(entry.Category, category, StringComparison.OrdinalIgnoreCase)) continue;
                 if (query.FavoritesOnly && (favorites == null || !favorites.Contains(entry.Id))) continue;
                 var haystack = entry.SearchKey ?? "";

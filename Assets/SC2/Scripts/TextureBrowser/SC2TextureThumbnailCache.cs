@@ -63,6 +63,22 @@ public sealed class SC2TextureThumbnailCache
         return Get(fullEntry);
     }
 
+    /// <summary>Drops (and destroys, if owned) the cached thumbnail for an
+    /// entry that no longer exists.</summary>
+    public void Evict(SC2TextureCatalogEntry entry)
+    {
+        if (entry == null) return;
+        var key = ThumbnailCacheKey(entry);
+        if (_items.TryGetValue(key, out var item))
+        {
+            if (item.Owned && item.Texture != null) UnityEngine.Object.Destroy(item.Texture);
+            _items.Remove(key);
+        }
+        _pinned.Remove(key);
+        _pinned.Remove(entry.Id);
+        _pinned.Remove("full:" + entry.Id);
+    }
+
     public void Clear()
     {
         foreach (var item in _items.Values)

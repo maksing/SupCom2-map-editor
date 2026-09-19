@@ -116,6 +116,11 @@ public static class SC2TextureBrowser
     private static GUIStyle _wrapDimStyle;
     private static GUIStyle _flatButtonStyle;
     private static GUIStyle _activeButtonStyle;
+    // The card's small round favorite button. FlatButton is left-aligned with
+    // the skin's own padding (right for the sidebar's text buttons, wrong for
+    // a single glyph in an 18px circle, which sat off-center).
+    private static GUIStyle _favoriteOffStyle;
+    private static GUIStyle _favoriteOnStyle;
 
     public static bool IsOpen => _open;
 
@@ -146,9 +151,13 @@ public static class SC2TextureBrowser
         _open = true;
         _pickerKey = pickerKey ?? "Texture";
         Query.Usage = expectedUsage == SC2TextureUsage.Unknown ? null : expectedUsage;
-        Query.Search = "";
-        Query.Source = null;
-        Query.Community = null;
+        // The search text is kept across reopening the browser too (in
+        // memory, and restored once from PlayerPrefs after an app restart)
+        // instead of being cleared every time — see SetSearch.
+        EnsureSearchLoaded();
+        // Source/Community deliberately NOT reset here — the last chosen
+        // SOURCE tab is kept across reopening the browser (see SetSourceTab).
+        EnsureSourceTabLoaded();
         // Same "derive a UI default from the picker's own key" convention
         // SC2TerrainShell.TextureUsageForPicker already uses for Usage —
         // opening the browser from a decal atlas slot (pickerKey containing
@@ -237,6 +246,18 @@ public static class SC2TextureBrowser
         DrawRect(window, new Color(0.075f, 0.082f, 0.098f, 1f));
         DrawBorder(window, new Color(0.25f, 0.28f, 0.34f, 1f));
 
+        // While the Build's own confirm dialog (Delete imported texture) is
+        // open, this browser is still drawn behind it but must not react:
+        // disabled controls, no keyboard shortcuts, and — crucially — it must
+        // not swallow the mouse events the dialog, drawn later in the same
+        // OnGUI, needs. (The Editor's dialog is a blocking OS modal.)
+        var previousEnabled = GUI.enabled;
+        var confirmOpen = false;
+#if !UNITY_EDITOR
+        confirmOpen = SC2RuntimeConfirm.IsOpen;
+#endif
+        if (confirmOpen) GUI.enabled = false;
+
         DrawHeader(new Rect(window.x, window.y, window.width, HeaderHeight));
         var body = new Rect(window.x, window.y + HeaderHeight, window.width, window.height - HeaderHeight - FooterHeight);
         var sidebar = new Rect(body.x, body.y, SidebarWidth, body.height);
@@ -247,6 +268,8 @@ public static class SC2TextureBrowser
         DrawDetails(details);
         DrawFooter(new Rect(window.x, window.yMax - FooterHeight, window.width, FooterHeight));
 
+        GUI.enabled = previousEnabled;
+        if (confirmOpen) return;
         HandleKeyboard(evt);
         if (evt != null && evt.type != EventType.Repaint && evt.type != EventType.Layout) evt.Use();
     }
@@ -258,9 +281,27 @@ public static class SC2TextureBrowser
         var search = new Rect(rect.x + 150f, rect.y + 8f, rect.width - 310f, 26f);
         GUI.SetNextControlName("SC2TextureBrowserSearch");
         var next = GUI.TextField(search, Query.Search ?? "");
-        if (next != Query.Search) { Query.Search = next; InvalidateQuery(true); }
-        if (GUI.Button(new Rect(search.xMax + 6f, search.y, 56f, 26f), "Clear")) { Query.Search = ""; InvalidateQuery(); }
-        if (GUI.Button(new Rect(rect.xMax - 82f, search.y, 68f, 26f), "Close")) _open = false;
+        if (next != Query.Search) { SetSearch(next); InvalidateQuery(true); }
+        if (GUI.Button(new Rect(search.xMax + 6f, search.y, 56f, 26f), "Clear")) { SetSearch(""); InvalidateQuery(); }
+        if (GUI.Button(new Rect(rect.xMax - 82f, search.y, 68f, 26f), "Close")) { _open = false; PlayerPrefs.Save(); }
+    }
+
+    private const string SearchPreferenceKey = "SC2.TextureBrowser.Search";
+    private static bool _searchLoaded;
+
+    // PlayerPrefs.SetString on every keystroke is cheap (in-memory); the disk
+    // write happens on Close / app quit rather than per character.
+    private static void SetSearch(string text)
+    {
+        Query.Search = text ?? "";
+        PlayerPrefs.SetString(SearchPreferenceKey, Query.Search);
+    }
+
+    private static void EnsureSearchLoaded()
+    {
+        if (_searchLoaded) return;
+        _searchLoaded = true;
+        Query.Search = PlayerPrefs.GetString(SearchPreferenceKey, "");
     }
 
     private static void DrawSidebar(Rect rect)
@@ -276,19 +317,28 @@ public static class SC2TextureBrowser
         //   Community - any OTHER archive in the game folder
         //   Imported  - textures imported into this editor's TextureLibrary
         //               (Source == Custom)
-        DrawFilterButton(ref y, rect, "All", !Query.Source.HasValue, () => { Query.Source = null; Query.Community = null; });
+        DrawFilterButton(ref y, rect, "All", !Query.Source.HasValue, () => SetSourceTab(SourceTabAll));
         DrawFilterButton(ref y, rect, "Vanilla", Query.Source == SC2TextureSource.Vanilla && Query.Community == false,
-            () => { Query.Source = SC2TextureSource.Vanilla; Query.Community = false; });
+            () => SetSourceTab(SourceTabVanilla));
         DrawFilterButton(ref y, rect, "Community", Query.Source == SC2TextureSource.Vanilla && Query.Community == true,
-            () => { Query.Source = SC2TextureSource.Vanilla; Query.Community = true; });
+            () => SetSourceTab(SourceTabCommunity));
         DrawFilterButton(ref y, rect, "Imported", Query.Source == SC2TextureSource.Custom,
-            () => { Query.Source = SC2TextureSource.Custom; Query.Community = null; });
+            () => SetSourceTab(SourceTabImported));
         y += 8f;
         GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 20f), "USAGE", MiniBold()); y += 24f;
         DrawFilterButton(ref y, rect, "Any", !Query.Usage.HasValue, () => Query.Usage = null);
-        foreach (SC2TextureUsage usage in Enum.GetValues(typeof(SC2TextureUsage)))
-            if (usage != SC2TextureUsage.Unknown)
-                DrawFilterButton(ref y, rect, usage.ToString(), Query.Usage == usage, () => Query.Usage = usage);
+        DrawUsageButton(ref y, rect, "Diffuse", SC2TextureUsage.Diffuse);
+        DrawUsageButton(ref y, rect, "Normal", SC2TextureUsage.Normal);
+        DrawUsageButton(ref y, rect, "Mask", SC2TextureUsage.Mask);
+        // Everything with no button of its own (Rnm, Heightmap, and textures
+        // whose usage couldn't be inferred) — see SC2TextureUsageFilter.
+        DrawUsageButton(ref y, rect, "Other", SC2TextureUsage.Unknown);
+        // Environment (sky included) and ColorCorrectionCube are a different
+        // kind of texture than the material Diffuse/Normal/Mask above, so
+        // they sit in their own visually separated block, like Decals below.
+        y += 8f;
+        DrawUsageButton(ref y, rect, "Environment", SC2TextureUsage.Environment);
+        DrawUsageButton(ref y, rect, "ColorCorrectionCube", SC2TextureUsage.ColorCorrectionCube);
         y += 8f;
         // A dedicated toggle rather than a full generic per-Category
         // section (there are a dozen+ real distinct categories - Terrain,
@@ -310,6 +360,41 @@ public static class SC2TextureBrowser
         DrawFilterButton(ref y, rect, "Favorites", Query.FavoritesOnly, () => Query.FavoritesOnly = !Query.FavoritesOnly);
     }
 
+    // Filter buttons compare through SC2TextureUsageFilter.Normalize so a
+    // picker that opened the browser asking for Sky/Rnm/Heightmap still lights
+    // up the button that actually covers it (Environment / Other).
+    private static void DrawUsageButton(ref float y, Rect parent, string label, SC2TextureUsage usage) =>
+        DrawFilterButton(ref y, parent, label,
+            Query.Usage.HasValue && SC2TextureUsageFilter.Normalize(Query.Usage.Value) == usage,
+            () => Query.Usage = usage);
+
+    private const int SourceTabAll = 0, SourceTabVanilla = 1, SourceTabCommunity = 2, SourceTabImported = 3;
+    private const string SourceTabPreferenceKey = "SC2.TextureBrowser.SourceTab";
+    private static bool _sourceTabLoaded;
+
+    private static void SetSourceTab(int tab)
+    {
+        switch (tab)
+        {
+            case SourceTabVanilla: Query.Source = SC2TextureSource.Vanilla; Query.Community = false; break;
+            case SourceTabCommunity: Query.Source = SC2TextureSource.Vanilla; Query.Community = true; break;
+            case SourceTabImported: Query.Source = SC2TextureSource.Custom; Query.Community = null; break;
+            default: Query.Source = null; Query.Community = null; tab = SourceTabAll; break;
+        }
+        PlayerPrefs.SetInt(SourceTabPreferenceKey, tab);
+        PlayerPrefs.Save();
+    }
+
+    /// <summary>The SOURCE tab is remembered, not reset to All every time the
+    /// browser opens: the in-memory Query already survives reopening within a
+    /// session; this restores it once from PlayerPrefs after an app restart.</summary>
+    private static void EnsureSourceTabLoaded()
+    {
+        if (_sourceTabLoaded) return;
+        _sourceTabLoaded = true;
+        SetSourceTab(PlayerPrefs.GetInt(SourceTabPreferenceKey, SourceTabAll));
+    }
+
     private static void DrawFilterButton(ref float y, Rect parent, string label, bool active, Action action)
     {
         var rect = new Rect(parent.x + 8f, y, parent.width - 16f, 24f);
@@ -321,8 +406,21 @@ public static class SC2TextureBrowser
     private static void DrawGrid(Rect rect)
     {
         DrawRect(rect, new Color(0.065f, 0.07f, 0.083f, 1f));
-        var range = SC2TextureVirtualGrid.Calculate(_results.Count, rect.width - 14f, _gridScroll.y, rect.height, CellWidth, CellHeight, 1);
-        var content = new Rect(0f, 0f, Mathf.Max(rect.width - 16f, range.Columns * CellWidth), Mathf.Max(rect.height, range.TotalHeight));
+        // Fit as many CellWidth-wide columns as the view holds, then stretch
+        // the cells to share the whole width — rather than leaving whatever
+        // is left over after the last column as a wide empty strip on the
+        // right. A card's height grows with its width (its thumbnail is
+        // square) by keeping the fixed label area below it (CellHeight -
+        // CellWidth) constant.
+        var layoutWidth = rect.width - 16f; // minus the vertical scrollbar
+        var columns = Mathf.Max(1, Mathf.FloorToInt(layoutWidth / CellWidth));
+        var cellWidth = layoutWidth / columns;
+        var cellHeight = cellWidth + (CellHeight - CellWidth);
+        // +0.01f: Calculate re-derives the column count by dividing, and
+        // layoutWidth / (layoutWidth / columns) can land a hair under
+        // `columns` in floating point.
+        var range = SC2TextureVirtualGrid.Calculate(_results.Count, columns * cellWidth + 0.01f, _gridScroll.y, rect.height, cellWidth, cellHeight, 1);
+        var content = new Rect(0f, 0f, layoutWidth, Mathf.Max(rect.height, range.TotalHeight));
         _gridScroll = GUI.BeginScrollView(rect, _gridScroll, content, false, true);
         var entries = SC2TextureCatalog.Instance.Entries;
         for (var visible = range.FirstIndex; visible < range.LastIndexExclusive; visible++)
@@ -332,7 +430,7 @@ public static class SC2TextureBrowser
             var entry = entries[catalogIndex];
             var column = visible % range.Columns;
             var row = visible / range.Columns;
-            DrawCard(new Rect(column * CellWidth + 6f, row * CellHeight + 6f, CellWidth - 10f, CellHeight - 10f), entry);
+            DrawCard(new Rect(column * cellWidth + 6f, row * cellHeight + 6f, cellWidth - 10f, cellHeight - 10f), entry);
         }
         GUI.EndScrollView();
     }
@@ -358,8 +456,14 @@ public static class SC2TextureBrowser
         else GUI.Label(preview, "not loaded", CenterMini());
         GUI.Label(new Rect(rect.x + 5f, preview.yMax + 4f, rect.width - 10f, 18f), entry.Name, CenterMini());
         GUI.Label(new Rect(rect.x + 5f, preview.yMax + 20f, rect.width - 10f, 16f), entry.Category, CenterDim());
-        var favoriteRect = new Rect(rect.xMax - 22f, rect.y + 5f, 18f, 18f);
-        if (GUI.Button(favoriteRect, Favorites.Contains(entry.Id) ? "*" : "+", FlatButton())) ToggleFavorite(entry.Id);
+        // Inset into the thumbnail's own top-right corner by the same margin
+        // on both sides, mirroring the "Suggested" badge at its top-left.
+        // It used to hang off the card's edge (xMax-22..xMax-4 against a
+        // thumbnail ending at xMax-7), so it poked past the thumbnail and
+        // sat unevenly against the card border.
+        var favoriteRect = new Rect(preview.xMax - 21f, preview.y + 3f, 18f, 18f);
+        var isFavorite = Favorites.Contains(entry.Id);
+        if (GUI.Button(favoriteRect, isFavorite ? "*" : "+", FavoriteButton(isFavorite))) ToggleFavorite(entry.Id);
         if (isSuggested)
         {
             // A small tag over the thumbnail's own top-left corner rather
@@ -452,12 +556,52 @@ public static class SC2TextureBrowser
     {
         DrawRect(rect, new Color(0.105f, 0.115f, 0.135f, 1f));
         GUI.Label(new Rect(rect.x + 12f, rect.y + 12f, 170f, 20f), _results.Count + " textures", CenterDim());
+        var previousEnabled = GUI.enabled;
         if (GUI.Button(new Rect(rect.x + 180f, rect.y + 7f, 112f, 28f), "Import...")) ImportCustom();
-        if (!string.IsNullOrEmpty(_message)) GUI.Label(new Rect(rect.x + 300f, rect.y + 10f, rect.width - 560f, 22f), _message, CenterDim());
+        var messageX = rect.x + 300f;
+        // Only an IMPORTED texture (the editor's own TextureLibrary) can be
+        // deleted — vanilla/community archive entries are read-only.
+        var selected = SC2TextureCatalog.Instance.Find(_selectedId);
+        if (selected != null && selected.Source == SC2TextureSource.Custom)
+        {
+            if (GUI.Button(new Rect(rect.x + 300f, rect.y + 7f, 84f, 28f), "Delete")) RequestDeleteImported(selected);
+            messageX = rect.x + 392f;
+        }
+        if (!string.IsNullOrEmpty(_message)) GUI.Label(new Rect(messageX, rect.y + 10f, rect.xMax - 260f - messageX, 22f), _message, CenterDim());
         if (GUI.Button(new Rect(rect.xMax - 238f, rect.y + 7f, 72f, 28f), "None")) Accept(null);
-        GUI.enabled = SC2TextureCatalog.Instance.Find(_selectedId) != null;
+        GUI.enabled = previousEnabled && selected != null;
         if (GUI.Button(new Rect(rect.xMax - 158f, rect.y + 7f, 144f, 28f), "Use Selected")) Accept(SC2TextureCatalog.Instance.Find(_selectedId));
-        GUI.enabled = true;
+        GUI.enabled = previousEnabled;
+    }
+
+    private static void RequestDeleteImported(SC2TextureCatalogEntry entry)
+    {
+        if (entry == null || entry.Source != SC2TextureSource.Custom) return;
+        const string title = "Delete Imported Texture";
+        var message = $"Delete '{entry.Name}' from the texture library? Maps that use it will lose this texture. This cannot be undone.";
+#if UNITY_EDITOR
+        if (EditorUtility.DisplayDialog(title, message, "Delete", "Cancel")) ApplyDeleteImported(entry);
+#else
+        SC2RuntimeConfirm.Open(title, message, "Delete", () => ApplyDeleteImported(entry));
+#endif
+    }
+
+    private static void ApplyDeleteImported(SC2TextureCatalogEntry entry)
+    {
+        if (!SC2CustomTextureImporter.TryDelete(entry, out var error))
+        {
+            _message = "Could not delete: " + error;
+            return;
+        }
+        SC2TextureCatalog.Instance.Remove(entry.Id);
+        Cache.Evict(entry);
+        var name = entry.Name;
+        if (Favorites.Remove(entry.Id) | Recent.Remove(entry.Id)) SavePreferences();
+        if (_selectedId == entry.Id) _selectedId = "";
+        // A deleted texture must not linger as a sibling suggestion card.
+        _siblingSuggestions.RemoveAll(s => SC2TextureCatalog.Instance.Find(s.Entry.Id) == null);
+        _message = "Deleted " + name;
+        InvalidateQuery();
     }
 
     private static void ImportCustom()
@@ -811,7 +955,14 @@ public static class SC2TextureBrowser
         _activeButtonStyle = new GUIStyle(_flatButtonStyle);
         _activeButtonStyle.normal.textColor = Color.white;
         _activeButtonStyle.hover.textColor = Color.white;
+        // "+" is vertically centered by its font metrics already; "*" is a
+        // superscript-style glyph that sits high in the em box, so it gets
+        // extra top padding to land at the circle's center too.
+        _favoriteOffStyle = new GUIStyle(GUI.skin.button)
+            { alignment = TextAnchor.MiddleCenter, padding = new RectOffset(0, 0, 0, 1), fontSize = 12 };
+        _favoriteOnStyle = new GUIStyle(_favoriteOffStyle) { padding = new RectOffset(0, 0, 5, 0) };
     }
+    private static GUIStyle FavoriteButton(bool isFavorite) { EnsureStyles(); return isFavorite ? _favoriteOnStyle : _favoriteOffStyle; }
     private static GUIStyle Bold() { EnsureStyles(); return _boldStyle; }
     private static GUIStyle MiniBold() { EnsureStyles(); return _miniBoldStyle; }
     private static GUIStyle CenterMini() { EnsureStyles(); return _centerMiniStyle; }
