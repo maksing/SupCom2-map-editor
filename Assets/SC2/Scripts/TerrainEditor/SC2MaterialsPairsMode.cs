@@ -237,14 +237,18 @@ public class SC2MaterialsMode
         texture = next;
         overridePath = pathDraft;
 
-        // Only a texture that actually came out of a game archive can be
-        // "vanilla" — a Custom "file:" import always gets copied and a
-        // hand-typed real game path is never copied at all, so the opt-in
-        // would do nothing for either and is left out rather than shown dead.
+        // Only a texture served by one of the three vanilla archives can be
+        // skipped at export, so only then is there anything to opt into — a
+        // community-pack archive texture and a Custom "file:" import are
+        // always copied, and a hand-typed real game path never is, so the
+        // box would do nothing for those and is left out rather than shown
+        // dead (an archive tag alone is not enough: community archives have
+        // one too — IsVanillaSlotPath checks the owning archive).
         var archiveTag = !string.IsNullOrEmpty(pathDraft) && pathDraft.StartsWith("archive:", StringComparison.Ordinal)
             ? pathDraft
             : (next != null ? SC2TerrainMaterialFactory.TryGetResourcePath(next) : null);
-        if (archiveTag != null && archiveTag.StartsWith("archive:", StringComparison.Ordinal))
+        if (archiveTag != null && archiveTag.StartsWith("archive:", StringComparison.Ordinal)
+            && SC2VanillaArchiveClassifier.IsVanillaSlotPath(archiveTag))
         {
             var newForceExport = GUILayout.Toggle(forceExport, "Copy into map on export");
             if (newForceExport != forceExport)
