@@ -167,6 +167,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private int _mainTab;
     private int _subTab;
+    // The sub-tab each main tab was on when it was left, so coming back to it (Objects > Props, then
+    // Terrain > Geometry, then Objects again) lands on Props instead of the first sub-tab.
+    private readonly Dictionary<int, int> _lastSubTabByMainTab = new();
+
+    /// <summary>Switches the main tab, remembering the sub-tab of the one being left. Without
+    /// <paramref name="subTab"/> the target tab returns to the sub-tab it was last on.</summary>
+    private void SelectMainTab(int mainTab, int? subTab = null)
+    {
+        if (mainTab != _mainTab) _lastSubTabByMainTab[_mainTab] = _subTab;
+        _mainTab = mainTab;
+        _subTab = subTab ?? (_lastSubTabByMainTab.TryGetValue(mainTab, out var remembered) ? remembered : 0);
+    }
     // Tracks HandleObjectsGameViewInput's own objectsTabActive across
     // frames, purely to detect the true->false transition (leaving the
     // Objects tab entirely) so any armed placement/paint/pick tool gets
@@ -2001,10 +2013,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // regardless of UI Scale. Let the style's fixedHeight govern
             // instead, same as every other segmented-tab button in this file.
             if (GUILayout.Button(GameMainTabs[i], style))
-            {
-                _mainTab = i;
-                _subTab = 0;
-            }
+                SelectMainTab(i);
         }
         GUILayout.EndHorizontal();
         GUILayout.EndArea();
@@ -3540,8 +3549,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             _importedTerrains.Add(entry);
             _selectedImportedTerrain = _importedTerrains.Count - 1;
             _terrainShell?.InvalidateLiveHeightGrid();
-            _mainTab = 0;
-            _subTab = System.Array.IndexOf(SC2EditorTabs.TerrainTabs, "Imported");
+            SelectMainTab(0, System.Array.IndexOf(SC2EditorTabs.TerrainTabs, "Imported"));
             if (_terrainShell != null)
                 ApplyPreviewModeToImportedTerrain(entry, _terrainShell.Prev);
         }
@@ -4786,8 +4794,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // Jump to Terrain -> Imported so the newly imported object's
             // editing panel (transform/textures/materials) is immediately
             // visible, same as switching subtabs by hand.
-            _mainTab = 0;
-            _subTab = System.Array.IndexOf(SC2EditorTabs.TerrainTabs, "Imported");
+            SelectMainTab(0, System.Array.IndexOf(SC2EditorTabs.TerrainTabs, "Imported"));
             var found = result.TextureAttempts?.Count(a => a.Found) ?? 0;
             var total = result.TextureAttempts?.Count ?? 0;
             var statusMsg = $"Imported '{result.Root.name}' from terrain.bdf. Textures: {found}/{total} loaded.";
@@ -6396,8 +6403,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (SC2Hotkeys.Matches("Global.ResetView", e)) { ResetView(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.CycleMainTab", e))
         {
-            _mainTab = (_mainTab + 1) % GameMainTabs.Length;
-            _subTab = 0;
+            SelectMainTab((_mainTab + 1) % GameMainTabs.Length);
             SetStatus("Tab selected: " + GameMainTabs[_mainTab]);
             e.Use();
         }
