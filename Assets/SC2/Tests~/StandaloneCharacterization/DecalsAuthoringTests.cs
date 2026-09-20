@@ -84,6 +84,35 @@ public class DecalsAuthoringTests
     }
 
     [Fact]
+    public void GeometryBuilder_MirrorsU_SoFlatDecalReadsLeftToRightAlongWorldX()
+    {
+        // Text in an atlas image must read left to right when the decal lies flat and is viewed
+        // from above with +X to the right: U increases along world +X, V along +Z.
+        var document = new SC2DecalsDocument { AtlasWidth = 64, AtlasHeight = 64 };
+        document.Entries.Add(new SC2DecalAtlasEntry { Id = "entry", X = 0, Y = 0, Width = 64, Height = 64 });
+        document.Placements.Add(new SC2DecalPlacement
+        {
+            AtlasEntryId = "entry", Position = new[] { 0f, 0f, 0f }, SurfaceNormal = new[] { 0f, 1f, 0f },
+            Rotation = 0f, Width = 4f, Length = 4f, ProjectionDepth = 4f, HeightOffset = 0f
+        });
+        var source = new[]
+        {
+            new SC2DecalSurfaceTriangle { AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = -2f },
+            new SC2DecalSurfaceTriangle { AX = -2f, AY = 0f, AZ = -2f, BX = -2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = 2f },
+        };
+        var model = SC2DecalGeometryBuilder.Build(document, source);
+        var left = model.Vertices.First(v => v.PositionX < -1.9f);
+        var right = model.Vertices.First(v => v.PositionX > 1.9f);
+        Assert.True(right.TexCoordX > left.TexCoordX, "U must increase toward +X");
+        var near = model.Vertices.First(v => v.PositionZ < -1.9f);
+        var far = model.Vertices.First(v => v.PositionZ > 1.9f);
+        Assert.True(far.TexCoordY > near.TexCoordY, "V must still increase toward +Z");
+        // the tangent follows +U (along +X here), the binormal +V (along +Z)
+        Assert.True(right.TangentXform0X > 0.9f);
+        Assert.True(right.TangentXform1Z > 0.9f);
+    }
+
+    [Fact]
     public void GeometryBuilder_UsesSmoothVertexNormals_NotAFlatPerTriangleNormal()
     {
         // Regression test: decals showed a visible

@@ -268,14 +268,17 @@ namespace SC2.MapEditor.Document
                         ? Normalize(BarycentricNormal(worldA, worldB, worldC, normalA, normalB, normalC, q.World))
                         : flatFaceNormal;
                     if (Dot(shadingNormal, normal) < 0) shadingNormal = shadingNormal * -1;
-                    var tangent = Normalize(right - shadingNormal * Dot(right, shadingNormal));
-                    var binormal = Normalize(Cross(shadingNormal, tangent));
+                    // U runs against `right` (the decal's atlas image is mirrored in U, otherwise text
+                    // in a decal reads right to left): the tangent follows +U, so it points along
+                    // -right; the binormal stays along +V, as it was.
+                    var tangent = Normalize(right * -1 - shadingNormal * Dot(right * -1, shadingNormal));
+                    var binormal = Normalize(Cross(shadingNormal, right - shadingNormal * Dot(right, shadingNormal)));
 
                     var world = q.World + shadingNormal * p.HeightOffset;
                     output.Vertices.Add(new DecalVertex
                     {
                         PositionX = (float)world.X, PositionY = (float)world.Y, PositionZ = (float)world.Z,
-                        TexCoordX = (float)(q.Local.X * 0.5 + 0.5), TexCoordY = (float)(q.Local.Z * 0.5 + 0.5), TexCoordZ = (float)(q.Local.Y + 0.5),
+                        TexCoordX = (float)(0.5 - q.Local.X * 0.5), TexCoordY = (float)(q.Local.Z * 0.5 + 0.5), TexCoordZ = (float)(q.Local.Y + 0.5),
                         ScaleOffsetX = e.Width / (float)atlasW, ScaleOffsetY = e.Height / (float)atlasH, ScaleOffsetZ = e.X / (float)atlasW, ScaleOffsetW = e.Y / (float)atlasH,
                         TangentXform0X = (float)tangent.X, TangentXform0Y = (float)tangent.Y, TangentXform0Z = (float)tangent.Z,
                         TangentXform1X = (float)binormal.X, TangentXform1Y = (float)binormal.Y, TangentXform1Z = (float)binormal.Z,
