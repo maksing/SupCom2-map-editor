@@ -1167,6 +1167,36 @@ public sealed class SC2ObjectsShell
         PropagateSymmetryMove(p.Id, newPos);
     }
 
+    /// <summary>Carries a rotation / scale edit of <paramref name="edited"/> over to the other
+    /// members of its live symmetry group: they get the same scale, and are turned by the same angle
+    /// — the opposite way for a mirrored copy, so the pair stays symmetric. Siblings keep whatever
+    /// orientation they already had apart from that change. <paramref name="editedBefore"/> is the
+    /// edited prop's rotation before the change; <paramref name="siblingBefore"/> (optional) holds the
+    /// siblings' rotation/scale before a gesture began, so a gesture recomputes from the start every
+    /// frame instead of accumulating; without it the siblings' current values are the base.
+    /// Members in <paramref name="skipIds"/> are left alone (they are edited themselves).</summary>
+    private void PropagateSymmetryRotationScale(SC2ObjProp edited, Quaternion editedBefore,
+        IReadOnlyDictionary<int, (Quaternion Rotation, float Scale)> siblingBefore = null, ISet<int> skipIds = null, bool applyScale = true)
+    {
+        var group = FindSymmetryGroup(edited.Id);
+        if (group == null) return;
+        var editedMember = group.Members.FirstOrDefault(m => m.ObjectId == edited.Id);
+        if (editedMember == null) return;
+        var delta = edited.Rotation * Quaternion.Inverse(editedBefore);
+        foreach (var member in group.Members)
+        {
+            if (member.ObjectId == edited.Id || (skipIds != null && skipIds.Contains(member.ObjectId))) continue;
+            var sibling = Data.ObjProps.FirstOrDefault(x => x.Id == member.ObjectId);
+            if (sibling == null) continue;
+            var baseRotation = sibling.Rotation;
+            if (siblingBefore != null && siblingBefore.TryGetValue(sibling.Id, out var before)) baseRotation = before.Rotation;
+            var siblingDelta = SC2SymmetryMath.TurnsOpposite(Data.Symmetry, editedMember.SlotIndex, member.SlotIndex)
+                ? Quaternion.Inverse(delta) : delta;
+            sibling.Rotation = siblingDelta * baseRotation;
+            if (applyScale) sibling.Scale = edited.Scale;
+        }
+    }
+
     /// <summary>Units were previously excluded from the live
     /// symmetry system entirely (viewport drag set u.Position directly,
     /// never through a symmetry-aware setter) — this is the Unit equivalent
@@ -3058,6 +3088,8 @@ public sealed class SC2ObjectsShell
         {
             PushUndo();
             foreach (var p in selected) p.Scale = scaleVal;
+            var bulkIds = new HashSet<int>(selected.Select(x => x.Id));
+            foreach (var p in selected) PropagateSymmetryRotationScale(p, p.Rotation, null, bulkIds);
             MarkObjectsDirty();
         }
         GUILayout.EndHorizontal();
@@ -3092,6 +3124,7 @@ public sealed class SC2ObjectsShell
         p.BlueprintPath = SC2EnvFieldGui.TextField("Blueprint", p.BlueprintPath, "propi_bp");
         if (SC2EnvFieldGui.Button("Choose prop blueprint", GUILayout.Height(SC2UiScale.Pxf(20f)))) OpenPropBrowser(p);
         p.Scale = SC2EnvFieldGui.FloatField("Scale", p.Scale, "propi_scale");
+        if (p.Scale != prevScale) PropagateSymmetryRotationScale(p, p.Rotation);
 
         DrawAnchorBlock(ref p.AnchorToTerrain, ref p.HeightOffset, p.Position.y,
             () => SetPropPosition(p, ReprojectedProp(p)),
@@ -4958,6 +4991,9 @@ public sealed class SC2ObjectsShell
     private Vector2 _gestureStartMouse;
     private float _gestureStartDistance;
     private readonly List<(SC2ObjProp prop, Quaternion originalRotation, float originalScale)> _gestureItems = new();
+    // Rotation/scale of the symmetry siblings (not selected themselves) of the gesture's props at
+    // its start, so every frame recomputes them from there and Esc can restore them.
+    private readonly Dictionary<int, (Quaternion Rotation, float Scale)> _gestureSiblingOriginals = new();
 
     // ── Copy/paste (Ctrl+C / Ctrl+V) — copies the current Prop/Marker/Unit
     // selection as plain field-value snapshots (not live references, so
@@ -5907,6 +5943,18 @@ public sealed class SC2ObjectsShell
                 var p = Data.ObjProps.FirstOrDefault(x => x.Id == id);
                 if (p != null) _gestureItems.Add((p, p.Rotation, p.Scale));
             }
+            _gestureSiblingOriginals.Clear();
+            foreach (var (gp, _, _) in _gestureItems)
+            {
+                var symGroup = FindSymmetryGroup(gp.Id);
+                if (symGroup == null) continue;
+                foreach (var member in symGroup.Members)
+                {
+                    if (_selProps.Contains(member.ObjectId)) continue;
+                    var sibling = Data.ObjProps.FirstOrDefault(x => x.Id == member.ObjectId);
+                    if (sibling != null) _gestureSiblingOriginals[sibling.Id] = (sibling.Rotation, sibling.Scale);
+                }
+            }
             PushUndo();
             Event.current.Use();
             RepaintHost?.Invoke();
@@ -6697,6 +6745,7 @@ public sealed class SC2ObjectsShell
                 : $"Scaled {_gestureItems.Count} prop(s).";
             _propsGestureKind = PropsGestureKind.None;
             _gestureItems.Clear();
+            _gestureSiblingOriginals.Clear();
             e.Use();
             RepaintHost?.Invoke();
             return;
@@ -6708,6 +6757,14 @@ public sealed class SC2ObjectsShell
                 prop.Rotation = originalRotation;
                 prop.Scale = originalScale;
             }
+            foreach (var (siblingId, original) in _gestureSiblingOriginals)
+            {
+                var sibling = Data.ObjProps.FirstOrDefault(x => x.Id == siblingId);
+                if (sibling == null) continue;
+                sibling.Rotation = original.Rotation;
+                sibling.Scale = original.Scale;
+            }
+            _gestureSiblingOriginals.Clear();
             _propsGestureKind = PropsGestureKind.None;
             _gestureItems.Clear();
             _lastActionSummary = "Cancelled.";
@@ -6729,8 +6786,12 @@ public sealed class SC2ObjectsShell
                 // here would spin the object the "wrong" way relative to
                 // how the mouse visibly circled the pivot on screen.
                 var deltaDegrees = -(currentAngle - startAngle) * Mathf.Rad2Deg;
+                var gestureIds = new HashSet<int>(_gestureItems.Select(x => x.prop.Id));
                 foreach (var (prop, originalRotation, _) in _gestureItems)
+                {
                     prop.Rotation = originalRotation * Quaternion.Euler(0f, deltaDegrees, 0f);
+                    PropagateSymmetryRotationScale(prop, originalRotation, _gestureSiblingOriginals, gestureIds, applyScale: false);
+                }
                 _lastActionSummary = $"Rotate: {deltaDegrees:0.#}° — click/Enter to confirm, Esc to cancel.";
             }
         }
@@ -6738,8 +6799,12 @@ public sealed class SC2ObjectsShell
         {
             var currentDistance = Mathf.Max(1f, Vector2.Distance(_gestureAnchorScreen, mousePosition));
             var factor = currentDistance / _gestureStartDistance;
-            foreach (var (prop, _, originalScale) in _gestureItems)
+            var gestureIds = new HashSet<int>(_gestureItems.Select(x => x.prop.Id));
+            foreach (var (prop, originalRotation, originalScale) in _gestureItems)
+            {
                 prop.Scale = Mathf.Max(0.01f, originalScale * factor);
+                PropagateSymmetryRotationScale(prop, prop.Rotation, _gestureSiblingOriginals, gestureIds);
+            }
             _lastActionSummary = $"Scale: {factor:0.00}x — click/Enter to confirm, Esc to cancel.";
         }
         RepaintHost?.Invoke();

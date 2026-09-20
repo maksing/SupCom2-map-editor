@@ -10,6 +10,32 @@ using UnityEngine;
 /// SC2TerrainData.GetSymmetricPositions, which delegates here).</summary>
 public static class SC2SymmetryMath
 {
+    /// <summary>True when the copy in <paramref name="slot"/> (see <see cref="GetSlots"/>) is a
+    /// reflection of slot 0 rather than a rotation of it. A reflected copy turns the opposite way
+    /// when the original is rotated.</summary>
+    public static bool SlotReflects(SymmetryMode mode, int slot)
+    {
+        if (slot <= 0) return false;
+        switch (mode)
+        {
+            case SymmetryMode.X:
+            case SymmetryMode.Y:
+            case SymmetryMode.DiagonalTLBR:
+            case SymmetryMode.DiagonalTRBL:
+                return true;
+            case SymmetryMode.XY:
+            case SymmetryMode.DiagonalBoth:
+                return slot == 1 || slot == 2; // slot 3 is the 180-degree rotation
+            default:
+                return false; // radial copies are rotations
+        }
+    }
+
+    /// <summary>Whether turning the object in slot <paramref name="from"/> by some angle turns the
+    /// object in slot <paramref name="to"/> the opposite way.</summary>
+    public static bool TurnsOpposite(SymmetryMode mode, int from, int to) =>
+        SlotReflects(mode, from) != SlotReflects(mode, to);
+
     public static List<Vector3> GetSlots(SymmetryMode mode, Vector3 center, int radialCount, Vector3 pos)
     {
         var c = center; var rel = pos - c;
