@@ -99,6 +99,8 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2CostsNavmeshRules.cs" Link="Source\SC2CostsNavmeshRules.cs" />
     <!-- Per-axis UV1 stretch profiles (Mathf/Vector2 only). -->
     <Compile Include="$(SC2Root)\Scripts\TerrainEditor\SC2TerrainUv1Unwrap.cs" Link="Source\SC2TerrainUv1Unwrap.cs" />
+    <!-- Blender-style Flatten area plane (Vector3 / Mathf only). -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2FlattenMath.cs" Link="Source\SC2FlattenMath.cs" />
     <!-- The per-texel RNM mask rasteriser (TerrainModel/HfieldModel + UnityEngine value types only). -->
     <Compile Include="$(SC2Root)\Scripts\TerrainEditor\SC2RnmMaskBaker.cs" Link="Source\SC2RnmMaskBaker.cs" />
     <!-- SC2MapDocument_Implementation_Plan.md Этап 1 infrastructure. Every

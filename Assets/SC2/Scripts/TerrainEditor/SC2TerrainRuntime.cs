@@ -784,7 +784,7 @@ public class SC2TerrainRuntime : IDisposable
     // Modifies CPU heights directly, then rebuilds dirty chunks
 
     public void SculptBrush(Vector3 worldPos, float radius, float strength, float hardness,
-                             int mode, float flattenTarget = 0f,
+                             int mode,
                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
                              float brushRotationRad = 0f)
     {
@@ -821,13 +821,56 @@ public class SC2TerrainRuntime : IDisposable
                 case 0: _heights[idx] += amt; break;
                 case 1: _heights[idx] -= amt; break;
                 case 2: _heights[idx]  = Mathf.Lerp(_heights[idx], AvgH(gx,gz), amt*.5f); break;
-                case 3: _heights[idx]  = Mathf.Lerp(_heights[idx], flattenTarget, amt); break;
                 case 4: _heights[idx] += (Mathf.PerlinNoise(wx*.05f,wz*.05f)-.5f)*amt*2; break;
             }
             _heights[idx] = SC2TerrainData.ClampHeight(_heights[idx]);
         }
         RebuildDirtyChunks(worldPos, radius);
     }
+
+    /// <summary>
+    /// Blender-style Flatten: samples the plane of the terrain under the brush (see SC2FlattenMath) and
+    /// pulls the vertices in the radius toward it. With <paramref name="lockPlane"/> the plane is sampled
+    /// once, on the first dab of a stroke, and kept in <paramref name="lockedPlane"/> for the rest of it
+    /// (Blender's "Original Plane"); otherwise it is re-sampled under the brush on every dab.
+    /// </summary>
+    public void SculptFlatten(Vector3 worldPos, float radius, float strength, float hardness,
+                              ref SC2FlattenPlane lockedPlane, bool lockPlane,
+                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
+                              float brushRotationRad = 0f, bool rebuildChunks = true)
+    {
+        var r2 = radius * radius;
+        float Weight(float dx, float dz)
+        {
+            var d2 = dx * dx + dz * dz;
+            if (d2 > r2) return 0f;
+            return brushMask != null
+                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad)
+                : SC2FlattenMath.SmoothFalloff(Mathf.Sqrt(d2) / radius, hardness);
+        }
+
+        SC2FlattenPlane plane;
+        if (lockPlane && lockedPlane.Valid) plane = lockedPlane;
+        else
+        {
+            // The plane comes from the middle of the brush only, unweighted (see SC2FlattenMath.AreaRadiusFactor).
+            var areaRadius = radius * SC2FlattenMath.AreaRadiusFactor;
+            plane = SC2FlattenMath.ComputeAreaPlane(_heights, GridWidth, GridHeight, CellSize, worldPos, areaRadius,
+                (dx, dz) => SC2FlattenMath.AreaWeight(radius, dx, dz));
+            if (lockPlane) lockedPlane = plane;
+        }
+
+        // Same per-dab power as the other sculpt brushes (SculptBrush's dt).
+        var amount = strength * 0.016f * 60f;
+        if (!SC2FlattenMath.ApplyToHeights(_heights, GridWidth, GridHeight, CellSize, worldPos, radius, amount, plane,
+                Weight, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight))
+            return;
+        if (rebuildChunks) RebuildDirtyChunks(worldPos, radius);
+    }
+
+    /// <summary>Rebuilds the chunk meshes within <paramref name="radius"/> of a position — for a caller
+    /// that applied several dabs with rebuildChunks off and rebuilds once over the swept area.</summary>
+    public void RebuildChunksAround(Vector3 worldPos, float radius) => RebuildDirtyChunks(worldPos, radius);
 
     /// <summary>
     /// Set exact height within brush radius with hardness-controlled edge.

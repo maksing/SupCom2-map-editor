@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEditor;
+using System.Collections.Generic;
 using System.IO;
 using SC2.MapEditor.SmartExport;
 
@@ -12,6 +13,7 @@ public struct SC2GeometryToolState
     public int Tool;
     public float Radius, Strength, Hardness, FlattenH, SetHeight;
     public bool StrengthScalesWithRadius;
+    public bool FlattenLockPlane;
 }
 
 /// <summary>
@@ -76,6 +78,16 @@ public class SC2GeometryMode
     private bool _strengthScalesWithRadius;
     private const float StrengthRadiusReference = 20f;
 
+    // Flatten works like Blender's: it samples a plane from the terrain under the brush on every dab.
+    // With _flattenLockPlane it samples once at the start of a stroke instead (Blender's "Original
+    // Plane"); _flattenPlanes holds that plane per symmetry copy for the stroke in progress.
+    private bool _flattenLockPlane = true;
+    private SC2FlattenPlane[] _flattenPlanes = System.Array.Empty<SC2FlattenPlane>();
+    // Flatten dabs are placed by distance along the stroke (Blender's spacing), not per mouse event;
+    // this is where the last one was placed. Null at the start of a stroke.
+    private Vector3? _lastFlattenDab;
+    private const int MaxFlattenDabsPerEvent = 48;
+
     private Vector3 _brushPos;
     private bool    _brushVis, _isPainting;
     private double  _lastApply;
@@ -122,6 +134,7 @@ public class SC2GeometryMode
         FlattenH = _flattenH,
         SetHeight = _setHeight,
         StrengthScalesWithRadius = _strengthScalesWithRadius,
+        FlattenLockPlane = _flattenLockPlane,
     };
 
     public void ApplyState(SC2GeometryToolState state)
@@ -133,6 +146,7 @@ public class SC2GeometryMode
         _flattenH = state.FlattenH;
         _setHeight = state.SetHeight;
         _strengthScalesWithRadius = state.StrengthScalesWithRadius;
+        _flattenLockPlane = state.FlattenLockPlane;
     }
 
     // ── Panel ─────────────────────────────────────────────────────────────────
@@ -212,25 +226,28 @@ public class SC2GeometryMode
             }
         }
 
-        if (_tool == Tool.Flatten || _tool == Tool.SetHeight)
+        if (_tool == Tool.Flatten)
         {
-            var label = _tool == Tool.SetHeight ? "Height" : "Flatten H";
-            if (_tool == Tool.SetHeight)
-                _setHeight = SC2TerrainShell.DrawCompactSlider(label, _setHeight, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight,
-                    onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Set Height"));
-            else
-                _flattenH = SC2TerrainShell.DrawCompactSlider(label, _flattenH, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight,
-                    onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Flatten Height"));
+            var newLock = EditorGUILayout.ToggleLeft(" Original plane (sample once per stroke)", _flattenLockPlane);
+            if (newLock != _flattenLockPlane)
+            {
+                _win.RecordUndoCheckpointFor(Data, "Toggle Flatten Original Plane");
+                _flattenLockPlane = newLock;
+            }
+            SC2TerrainShell.DrawUnifiedNote("Flatten pulls the terrain under the brush toward the plane of that terrain — the falloff-weighted average position and slope inside the radius — up or down, so a slope flattens into a slope, not a level floor. With 'Original plane' (default) the plane is taken where the stroke starts and kept while you drag, so the ground does not flow after the brush; without it the plane is re-sampled under the brush on every dab. The plane is sampled from the middle half of the brush. For an exact height use Set H.");
+        }
+        else if (_tool == Tool.SetHeight)
+        {
+            _setHeight = SC2TerrainShell.DrawCompactSlider("Height", _setHeight, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight,
+                onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Set Height"));
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Pick", GUILayout.Width(SC2UiScale.Pxf(40f))))
             {
                 _win.RecordUndoCheckpointFor(Data, "Pick Height");
-                if (_tool == Tool.SetHeight) _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
-                else _flattenH = SC2TerrainData.ClampHeight(_brushPos.y);
+                _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
             }
             EditorGUILayout.EndHorizontal();
-
         }
 
         EditorGUILayout.Space(4);
@@ -688,8 +705,8 @@ public class SC2GeometryMode
         // samples the height under the cursor into whichever target-height
         // field the active tool actually uses — the same action as the
         // "Pick" button in DrawPanel above, just reachable without leaving
-        // the viewport. Only meaningful for Flatten/SetHeight (the only two
-        // tools with a target height at all).
+        // the viewport. Only meaningful for SetHeight (the only tool with a
+        // target height; Flatten samples its plane from the terrain).
         //
         // A follow-up fix: this originally used a
         // plain middle-mouse-click, which broke camera orbit any time the
@@ -703,11 +720,10 @@ public class SC2GeometryMode
         // untouched by Alt) and already has a matching carve-out in the
         // normal paint down/drag below (!e.alt), so Alt+click can never
         // double as a paint stroke either.
-        if (e.type == EventType.MouseDown && e.button == 0 && e.alt && (_tool == Tool.Flatten || _tool == Tool.SetHeight))
+        if (e.type == EventType.MouseDown && e.button == 0 && e.alt && _tool == Tool.SetHeight)
         {
             _win.RecordUndoCheckpointFor(Data, "Pick Height");
-            if (_tool == Tool.SetHeight) _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
-            else _flattenH = SC2TerrainData.ClampHeight(_brushPos.y);
+            _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
             e.Use();
             _win.Repaint();
             return;
@@ -795,6 +811,8 @@ public class SC2GeometryMode
             _geoBrushRotationRad = (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation)
                 ? Random.Range(0f, Mathf.PI * 2f) : 0f;
             EnsureGeoBrushPixelCache();
+            _flattenPlanes = System.Array.Empty<SC2FlattenPlane>(); // "Original plane" is re-sampled for every stroke
+            _lastFlattenDab = null;
             // Heights[] is only re-synced from the runtime on MouseUp (see below),
             // so it already reflects the state before this stroke — one undo
             // checkpoint per stroke, not per drag frame.
@@ -802,7 +820,8 @@ public class SC2GeometryMode
         }
         if (!_isPainting || (!down && !drag)) return;
         var now = EditorApplication.timeSinceStartup;
-        if (!down && now - _lastApply < kMinInterval) return;
+        // (Flatten places its dabs by distance instead, so the mouse speed and event rate do not matter.)
+        if (!down && _tool != Tool.Flatten && now - _lastApply < kMinInterval) return;
         _lastApply = now;
 
         // A SEPARATE toggle from RandomizeGeometryBrushRotation — that one
@@ -837,10 +856,46 @@ public class SC2GeometryMode
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
         }
+        else if (_tool == Tool.Flatten)
+        {
+            // Dabs every 10% of the brush diameter along the stroke; the first one where it starts.
+            List<Vector3> dabs;
+            if (down || !_lastFlattenDab.HasValue)
+            {
+                dabs = new List<Vector3> { _brushPos };
+                _lastFlattenDab = _brushPos;
+            }
+            else
+            {
+                var spacing = Mathf.Max(_radius * SC2FlattenMath.SpacingRadiusFraction, Data.CellSize * 0.5f);
+                dabs = SC2FlattenMath.SpacedDabs(_lastFlattenDab.Value, _brushPos, spacing, MaxFlattenDabsPerEvent, out var jumped);
+                if (dabs.Count > 0) _lastFlattenDab = jumped ? _brushPos : dabs[dabs.Count - 1];
+            }
+
+            if (dabs.Count > 0)
+            {
+                foreach (var dab in dabs)
+                {
+                    var positions = _win.Data.GetSymmetricPositions(dab);
+                    if (_flattenPlanes.Length != positions.Count) _flattenPlanes = new SC2FlattenPlane[positions.Count];
+                    for (var i = 0; i < positions.Count; i++)
+                        _win.ActiveRuntime.SculptFlatten(positions[i] - offset, _radius, _strength, _hardness,
+                            ref _flattenPlanes[i], _flattenLockPlane,
+                            brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad, rebuildChunks: false);
+                }
+                // One mesh rebuild and one Objects/Decals notification for the whole swept area.
+                var middle = (dabs[0] + dabs[dabs.Count - 1]) * 0.5f;
+                var reach = notifyRadius + Vector3.Distance(dabs[0], dabs[dabs.Count - 1]) * 0.5f;
+                foreach (var pos in _win.Data.GetSymmetricPositions(middle))
+                {
+                    _win.ActiveRuntime.RebuildChunksAround(pos - offset, reach);
+                    _win.HeightBrushApplied?.Invoke(pos, reach);
+                }
+            }
+        }
         else
         {
             var mode = (int)_tool;
-            var target = _tool == Tool.Flatten ? _flattenH : 0f;
             var appliesRadiusCompensation = _strengthScalesWithRadius &&
                 (_tool == Tool.Raise || _tool == Tool.Lower || _tool == Tool.Smooth);
             var effectiveStrength = appliesRadiusCompensation
@@ -848,7 +903,7 @@ public class SC2GeometryMode
                 : _strength;
             foreach (var pos in _win.Data.GetSymmetricPositions(_brushPos))
             {
-                _win.ActiveRuntime.SculptBrush(pos - offset, _radius, effectiveStrength, _hardness, mode, target,
+                _win.ActiveRuntime.SculptBrush(pos - offset, _radius, effectiveStrength, _hardness, mode,
                     brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
