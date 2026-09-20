@@ -19,6 +19,7 @@ MonoBehaviour:
   CellSize: 4
   IsInitialized: 1
   MapShotBgraPixels: 
+  CustomMinimapPng: 
   ImportOnlyMode: 0
   SingleBspNodePerLayer: 0
   VanillaCandidateBspSplit: 1
