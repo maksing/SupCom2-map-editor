@@ -65,7 +65,12 @@ public static class SC2TerrainMaterialExporter
                 // materialIndex:shaderProp key as the override itself).
                 var forceExport = texturePathForceExport != null
                     && texturePathForceExport.TryGetValue(i + ":" + prop, out var force) && force;
-                return resolveRawResourcePath(p, tex, forceExport) ?? p;
+                // An override that cannot be resolved (typically a custom texture picked on
+                // another machine) must not be written as it is: the slot then keeps the path
+                // the imported terrain.bdf originally had.
+                var resolved = resolveRawResourcePath(p, tex, forceExport);
+                if (resolved != null) return resolved;
+                return SC2.MapEditor.Document.SC2TexturePathSafety.IsUnexportable(p) ? null : p;
             }
 
             // Real slots per the MaterialData structure.

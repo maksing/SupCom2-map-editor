@@ -307,7 +307,12 @@ public static class SC2TerrainExporter
             if (rawPath.StartsWith("file:", StringComparison.Ordinal))
             {
                 var sourceFile = rawPath.Substring(5);
-                if (!File.Exists(sourceFile)) return null;
+                if (!File.Exists(sourceFile))
+                {
+                    warnings.Add($"Custom texture file '{sourceFile}' does not exist on this machine (imported by another user and not part of the map) — the slot keeps its original texture path instead.");
+                    rawPathReg[rawPath] = null; // warn once per file
+                    return null;
+                }
                 var customFileName = UniqueFileName(MakeSafe(Path.GetFileNameWithoutExtension(sourceFile)) + ".dds", tex);
                 var customDestination = Path.Combine(texDir, customFileName);
                 try { File.Copy(sourceFile, customDestination, true); copied++; }
@@ -376,7 +381,11 @@ public static class SC2TerrainExporter
             if (!string.IsNullOrEmpty(overridePath))
             {
                 var resolvedOverride = ResolveRawResourcePath(overridePath, tex, forceExport);
-                return resolvedOverride ?? overridePath;
+                if (resolvedOverride != null) return resolvedOverride;
+                // A marker / machine-local path that could not be resolved must never reach
+                // the BDF (the game cannot load it) — ignore the override and fall back to
+                // the texture itself.
+                if (!SC2TexturePathSafety.IsUnexportable(overridePath)) return overridePath;
             }
             if (tex == null) return null;
             // A cached no-copy (bare game path) result must not satisfy a slot
@@ -1002,6 +1011,17 @@ public static class SC2TerrainExporter
         var bspNodeCount = 0;
         foreach (var l in model.Layers) bspNodeCount += l.Nodes.Count;
         SC2Log.Log($"[SC2Exporter] RebuildAllBsp done in {swBsp.ElapsedMilliseconds}ms, nodes={bspNodeCount:N0}");
+
+        // Last line of defence: no editor marker or machine-local Windows path may end up in
+        // terrain.bdf, whatever put it there — the game refuses to start such a map.
+        foreach (var material in model.Materials)
+            for (var slot = 0; slot < material.TexturePaths.Length; slot++)
+            {
+                var texturePath = material.TexturePaths[slot];
+                if (!SC2TexturePathSafety.IsUnexportable(texturePath)) continue;
+                warnings.Add($"Material '{material.Name}' texture slot {slot} referenced '{texturePath}', which is not a game path — the slot was left empty.");
+                material.TexturePaths[slot] = null;
+            }
 
         EditorUtility.DisplayProgressBar("Export", "Writing...", 0.9f);
         var platform  = data.RawData != null ? data.RawData.Platform : BdfPlatform.Pc;
