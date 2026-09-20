@@ -875,7 +875,12 @@ public sealed class SC2DecalsShell : IDisposable
     {
         // Only a Repaint draws; Layout/mouse events used to project every placement for nothing.
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
+        // Clipped to the 3D viewport: a marker whose decal is off screen (or behind a side panel) is
+        // still projected to a screen position, which used to land it on top of the UI panels.
+        // BeginClip shifts the origin to the viewport's corner.
         var margin = 24f;
+        var origin = viewport.position;
+        GUI.BeginClip(viewport);
         for (var i = 0; i < Doc.Placements.Count; i++)
         {
             var stored = Doc.Placements[i];
@@ -884,7 +889,8 @@ public sealed class SC2DecalsShell : IDisposable
             if (!p.Enabled) continue;
             var c = new Vector3(p.Position[0], p.Position[1], p.Position[2]);
             var s = SC2TopViewMirror.WorldToGui(camera, c); if (s.z <= 0) continue;
-            if (s.x < -margin || s.x > Screen.width + margin || s.y < -margin || s.y > Screen.height + margin) continue;
+            if (s.x < viewport.xMin - margin || s.x > viewport.xMax + margin || s.y < viewport.yMin - margin || s.y > viewport.yMax + margin) continue;
+            s.x -= origin.x; s.y -= origin.y;
             var selected = i == _selectedPlacement;
             // A plain 10x10 box, same size as every unselected one and only
             // differing by color, is hard to notice as selected. A real
@@ -901,6 +907,7 @@ public sealed class SC2DecalsShell : IDisposable
             var gui = new Rect(s.x - half, s.y - half, size, size);
             var old = GUI.color; GUI.color = selected ? Color.yellow : Color.cyan; GUI.Box(gui, ""); GUI.color = old;
         }
+        GUI.EndClip();
     }
 
     private bool TryPickPlacement(Camera camera, Vector2 mouse, out int index)
