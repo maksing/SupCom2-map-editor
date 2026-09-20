@@ -2,9 +2,9 @@
 // Generates the navmesh and islandmap for costs.bdf from a binary passability map (0/1).
 //
 // Navmesh (uint8 1024x1024):
-//   255 = impassable (user-painted)
-//   5   = border (2 cells wide, drawn around impassable regions)
-//   1   = passable
+//   255   = impassable (user-painted)
+//   2-254 = cost ring around impassable cells (SC2CostsNavmeshRules)
+//   1     = passable
 //
 // Islandmap (uint32 1024x1024):
 //   0      = impassable (matches navmesh==255)
@@ -31,7 +31,7 @@ public static class SC2CostsAutoGen
 
     /// <summary>
     /// Generates a navmesh from a binary passability map (impassable = true).
-    /// Returns: 255=impassable, 5=border (2px), 1=passable.
+    /// Returns: 255=impassable, 1=passable (the ring is added by BuildNavmesh).
     /// </summary>
     public static byte[] GenerateNavmesh(BdfIO.Formats.Hfield.HfieldModel hfield, int threshold)
     {
@@ -121,7 +121,7 @@ public static class SC2CostsAutoGen
     /// <summary>Shared EnvironmentHeader -&gt; WaterElevation extraction, factored
     /// out of GenerateFromHeight so ComputeRawWaterMask below can use the exact
     /// same source without duplicating the header-parsing logic.</summary>
-    private static float ExtractWaterElevation(SC2TerrainData data)
+    public static float ExtractWaterElevation(SC2TerrainData data)
     {
         if (data.EnvironmentHeader == null || data.EnvironmentHeader.Length < 508) return 0f;
         var info = new InfoModel();
@@ -269,43 +269,14 @@ public static class SC2CostsAutoGen
     }
 
     /// <summary>
-    /// Expands a binary passability map (impassable[]) into a navmesh with
-    /// border cells (value 5).
-    /// impassable: true = cell is impassable.
+    /// Expands a binary passability map (impassable[]) into a navmesh: 255 =
+    /// wall, and the vanilla cost ring around every wall (see
+    /// SC2CostsNavmeshRules). Treats every wall alike; block derivation and
+    /// export use SC2CostsNavmeshRules directly to split hard and soft
+    /// (water) walls.
     /// </summary>
-    public static byte[] BuildNavmesh(bool[] impassable, int w, int h)
-    {
-        var nav = new byte[w * h];
-
-        // Step 1: impassable = 255
-        for (var i = 0; i < impassable.Length; i++)
-            nav[i] = impassable[i] ? (byte)255 : (byte)1;
-
-        // Step 2: border — 2 cells around 255 -> 5
-        // (applied twice: first the neighbors of 255, then the neighbors of 5)
-        for (var pass = 0; pass < 2; pass++)
-        {
-            var prev = (byte[])nav.Clone();
-            for (var y = 0; y < h; y++)
-            for (var x = 0; x < w; x++)
-            {
-                if (prev[y*w+x] != 1) continue; // already marked
-                bool nearWall = false;
-                for (var dy = -1; dy <= 1 && !nearWall; dy++)
-                for (var dx = -1; dx <= 1 && !nearWall; dx++)
-                {
-                    if (dx == 0 && dy == 0) continue;
-                    var ny = y + dy; var nx = x + dx;
-                    if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue;
-                    var v = prev[ny*w+nx];
-                    if (v == 255 || (pass == 1 && v == 5)) nearWall = true;
-                }
-                if (nearWall) nav[y*w+x] = 5;
-            }
-        }
-
-        return nav;
-    }
+    public static byte[] BuildNavmesh(bool[] impassable, int w, int h) =>
+        SC2CostsNavmeshRules.Build(impassable, null, null, null, w, h);
 
     /// <summary>
     /// Extracts a binary passability map from a navmesh (255 -> true, else -> false).
@@ -329,9 +300,9 @@ public static class SC2CostsAutoGen
 
     /// <summary>Grows every impassable region by <paramref name="margin"/>
     /// cells (8-neighbor/Chebyshev growth, `margin` single-cell passes) —
-    /// distinct from BuildNavmesh's own fixed 2px border (navmesh value 5),
-    /// which is purely a format/render marker recomputed automatically and
-    /// never changes which cells are actually impassable. This produces
+    /// distinct from BuildNavmesh's own cost ring (values 2-254),
+    /// which is recomputed automatically and never changes which cells are
+    /// actually impassable. This produces
     /// real new impassable (255) cells, a genuine pathing safety margin
     /// around obstacles. O(w*h*margin) — fine for the margins (a handful of
     /// cells) this is meant for; a single-iteration distance-field approach

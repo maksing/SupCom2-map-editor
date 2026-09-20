@@ -608,12 +608,16 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
             CostsBlocks.Add(new SC2CostsBlockData { Name = names[i], Navmesh = nav });
         }
         foreach (var block in CostsBlocks)
+        {
             if (block.Navmesh == null || block.Navmesh.Length != cells)
             {
                 var nav = new byte[cells];
                 for (var c = 0; c < nav.Length; c++) nav[c] = 1;
                 block.Navmesh = nav;
             }
+            if (block.OutlineOpenMask == null || block.OutlineOpenMask.Length != cells)
+                block.OutlineOpenMask = new byte[cells];
+        }
 
         if (TerrainTypes == null || TerrainTypes.Length != cells)
         {

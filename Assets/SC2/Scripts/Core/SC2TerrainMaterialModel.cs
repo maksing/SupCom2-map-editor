@@ -23,6 +23,12 @@ public class SC2CostsBlockData
 {
     public string Name = "";
     public byte[] Navmesh = Array.Empty<byte>();
+
+    /// <summary>Blocks 1+ only: cells of this block's automatic outline (walls that exist
+    /// only because of the automatic growth around block 0's walls) the user marked as
+    /// unneeded, i.e. passable. 1 = marked. Live-editing bookkeeping, never exported;
+    /// see SC2CostsNavmeshRules.</summary>
+    public byte[] OutlineOpenMask = Array.Empty<byte>();
 }
 
 [Serializable] public class SC2Material

@@ -1064,7 +1064,7 @@ public static class SC2TerrainExporter
         // (Land_Small/Medium/Large, Water_Small/Large).
         EditorUtility.DisplayProgressBar("Export", "Building costs...", 0.97f);
         data.EnsureCostsAndTerrainTypes();
-        var costsModel = BuildCostsModelFromPaintedData(data, session);
+        var costsModel = BuildCostsModelFromPaintedData(data, hfieldModel, session);
         var (costsData, costsOt) = CostsBdf.Serialize(costsModel, platform);
         var costsBytes = new BdfContainer { Platform = platform, Data = costsData, OffsetTable = costsOt, NumFiles = 1 }.Write(CostsBdf.Padding);
         SC2Log.Log($"[SC2Exporter] costs.bdf built from painted data: {costsModel.Blocks.Count} block(s).");
@@ -2531,7 +2531,8 @@ public static class SC2TerrainExporter
     /// <summary>
     /// Builds a costs.bdf CostsModel from SC2TerrainData.CostsBlocks — the
     /// navmesh arrays SC2CostsShell paints into live (see the GameView UI's
-    /// Costs tab). Recomputes the border ring (value 5) and islandmap/
+    /// Costs tab). Recomputes the cost ring (SC2CostsNavmeshRules, hard vs
+    /// water walls told apart from the exported heightmap) and islandmap/
     /// islandList from the painted 1/255 binary data, same as
     /// CostsPainterWindow.RecomputeAllIslands and SC2CostsTerrainTypesEditor
     /// do for the existing-map workflow, so this doesn't drift into a third,
@@ -2542,11 +2543,13 @@ public static class SC2TerrainExporter
     /// SyncDocumentFromLive has actually populated one for this block's Id —
     /// falls back to data.CostsBlocks[i].Navmesh exactly as before otherwise
     /// (no session, no blob store, or that specific block never synced).</param>
-    private static CostsModel BuildCostsModelFromPaintedData(SC2TerrainData data, SC2MapSession session = null)
+    private static CostsModel BuildCostsModelFromPaintedData(SC2TerrainData data, HfieldModel hfield, SC2MapSession session = null)
     {
         var gridSize = data.CostsGridSize;
         var model = new CostsModel();
-        for (var i = 0; i < data.CostsBlocks.Count; i++)
+        var blockCount = data.CostsBlocks.Count;
+        var navmeshes = new byte[blockCount][];
+        for (var i = 0; i < blockCount; i++)
         {
             var block = data.CostsBlocks[i];
             var documentBytes = TryResolveBlob(session?.BlobStore, session?.Document?.Costs.Find(block.Name)?.FinalGrid ?? default);
@@ -2561,8 +2564,20 @@ public static class SC2TerrainExporter
             if (navmeshSource == null || navmeshSource.Length != gridSize * gridSize)
                 for (var c = 0; c < navmesh.Length; c++) navmesh[c] = 1;
 
-            var impassable = SC2CostsAutoGen.NavmeshToImpassable(navmesh);
-            SC2CostsAutoGen.ApplyImpassableToNavmesh(impassable, navmesh, gridSize, gridSize);
+            navmeshes[i] = navmesh;
+        }
+
+        var water = blockCount == 5 ? BuildWaterMask(data, hfield, gridSize) : null;
+        var walls = new bool[blockCount][];
+        for (var i = 0; i < blockCount; i++) walls[i] = SC2CostsAutoGen.NavmeshToImpassable(navmeshes[i]);
+
+        var shoreZone = blockCount == 5 && water != null
+            ? SC2CostsNavmeshRules.ShoreZone(walls[0], walls[1], walls[4], water, data.CostsShoreHintOverrideMask, data.CostsBlocks[4].OutlineOpenMask)
+            : null;
+        for (var i = 0; i < blockCount; i++)
+        {
+            var block = data.CostsBlocks[i];
+            var navmesh = SC2CostsNavmeshRules.BuildBlock(i, blockCount, walls[i], blockCount == 5 ? walls[4] : null, water, gridSize, gridSize, shoreZone);
             // 8-bit index map (0=impassable, 1..254=island), per CostsBdf.cs's
             // verified format comment on CostsBlock.Islandmap — this used to
             // be a uint32-per-cell RGBA color array (4x the real byte size),
@@ -2578,6 +2593,22 @@ public static class SC2TerrainExporter
             });
         }
         return model;
+    }
+
+    /// <summary>Water cells of the Costs grid from the exported heightmap: vertex
+    /// height below WaterElevation (the vanilla convention). Null when the
+    /// heightmap does not cover the grid.</summary>
+    private static bool[] BuildWaterMask(SC2TerrainData data, HfieldModel hfield, int gridSize)
+    {
+        var mapX = hfield != null ? (int)hfield.MapX : 0;
+        var mapY = hfield != null ? (int)hfield.MapY : 0;
+        if (hfield?.Heightmap == null || mapX < gridSize || mapY < gridSize) return null;
+        var elevation = SC2CostsAutoGen.ExtractWaterElevation(data);
+        var water = new bool[gridSize * gridSize];
+        for (var z = 0; z < gridSize; z++)
+        for (var x = 0; x < gridSize; x++)
+            water[z * gridSize + x] = hfield.Heightmap[z * mapX + x] / 128f < elevation;
+        return water;
     }
 
     /// <summary>

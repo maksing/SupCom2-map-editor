@@ -54,6 +54,14 @@ public sealed class SC2CostsShell
     /// so they're visible as "will survive the next auto-resync."</summary>
     private static readonly Color ShoreHintOverrideColor = new Color(1f, 0.55f, 0f, 0.55f);
 
+    /// <summary>Overlay tint of an automatic outline cell the user marked as unneeded
+    /// (passable) with the Outline brush.</summary>
+    private static readonly Color OutlineOpenedColor = new Color(0.1f, 0.9f, 0.5f, 0.55f);
+
+    /// <summary>Costs paint mode of the Outline brush (blocks 1+): opens automatic outline
+    /// cells. 0 = impassable, 1 = passable, 2 = Shore (block 4 only).</summary>
+    private const int OutlineMode = 3;
+
     public sealed class TerrainTypePreset
     {
         public ushort Id;
@@ -92,7 +100,7 @@ public sealed class SC2CostsShell
     private readonly SC2BrushRadiusGesture _brushRadiusGesture = new SC2BrushRadiusGesture();
     private bool _allBlocks;
     private int _activeBlock;
-    private int _costsMode; // 0 = impassable, 1 = passable
+    private int _costsMode; // 0 = impassable, 1 = passable, 2 = shore, OutlineMode = outline
     // Copies one Costs block into another, and adds an outline (safety
     // margin) around the impassable area — see
     // DrawCopyBlockControls/DrawDilateControls.
@@ -132,6 +140,7 @@ public sealed class SC2CostsShell
         public byte[][] CostsNavmesh;
         public ushort[] TerrainTypes;
         public byte[] CostsShoreHintOverrideMask;
+        public byte[][] CostsOutlineOpen;
         // Paint tool config below — none of this is exported terrain data,
         // but it's editable state in this panel, so it gets the same
         // "everything editable here is undo-able" treatment SC2GeometryMode's
@@ -268,8 +277,7 @@ public sealed class SC2CostsShell
                 // this stale value would silently re-trigger RecordUndo() the
                 // next time DrawCostsControls reconciles its 2-way control
                 // against it.
-                if (_activeBlock != ShoreHintBlockIndex)
-                    _costsMode = Mathf.Min(_costsMode, 1);
+                EnforceCostsModeForActiveBlock();
             }
             else
             {
@@ -297,6 +305,7 @@ public sealed class SC2CostsShell
             {
                 RecordUndo();
                 _manualCostsMode = newManual;
+                EnforceCostsModeForActiveBlock();
             }
             EditorGUILayout.Space(4);
         }
@@ -306,12 +315,12 @@ public sealed class SC2CostsShell
         // — see RecomputeDerivedCostsBlocks — so it isn't paintable at all;
         // _painting itself stays a global (not per-block) toggle, but this
         // tab simply never shows the controls that would arm it.
+        EnforceCostsModeForActiveBlock();
         var autoManaged = ActiveTarget == PaintTarget.Costs && IsAutoManagedCostsBlock(_activeBlock);
         if (autoManaged)
         {
-            _painting = false;
             SC2TerrainShell.DrawUnifiedNote(
-                "Automatically derived from block 0 — not directly paintable. It resyncs whenever block 0 " +
+                "Automatically derived from block 0 — its walls are not directly paintable. It resyncs whenever block 0 " +
                 "(or the shore-hint block) changes: a paint stroke, Auto-generate, Dilate, or Copy. Use the " +
                 "button below to resync it by hand (e.g. right after loading an older save).");
             if (GUILayout.Button("Resync derived blocks now", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
@@ -320,22 +329,14 @@ public sealed class SC2CostsShell
                 RecomputeDerivedCostsBlocks();
                 SyncDocumentFromLive();
             }
+            EditorGUILayout.Space(4);
+            DrawPaintToggleAndRadius(w);
+            EditorGUILayout.Space(4);
+            DrawOutlineControls(w);
         }
         else
         {
-            // _painting is a tool-armed toggle, not paintable data — deliberately
-            // not part of Snapshot/undo, same reasoning as SC2PairsMode's
-            // selected-pair index staying untracked.
-            var paintingLabel = _painting ? "■ Painting ACTIVE (click terrain)" : "▶ Enable Painting";
-            var painting = GUILayout.Toggle(_painting, paintingLabel, "Button", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w));
-            if (painting != _painting)
-                _painting = painting;
-
-            _brushRadius = SC2TerrainShell.DrawCompactSlider("Radius (F resize)", _brushRadius, 1f, 128f,
-                onValueChangeStart: RecordUndo);
-
-            if (Data.Symmetry != SymmetryMode.None)
-                EditorGUILayout.LabelField($"Symmetry: {Data.Symmetry} (Terrain tab settings)", EditorStyles.centeredGreyMiniLabel);
+            DrawPaintToggleAndRadius(w);
 
             EditorGUILayout.Space(4);
             if (ActiveTarget == PaintTarget.Costs)
@@ -419,6 +420,54 @@ public sealed class SC2CostsShell
             ApplyPlayableWaterToggle(newPlayableWater);
     }
 
+    private void DrawPaintToggleAndRadius(float w)
+    {
+        // _painting is a tool-armed toggle, not paintable data — deliberately
+        // not part of Snapshot/undo, same reasoning as SC2PairsMode's
+        // selected-pair index staying untracked.
+        var paintingLabel = _painting ? "■ Painting ACTIVE (click terrain)" : "▶ Enable Painting";
+        var painting = GUILayout.Toggle(_painting, paintingLabel, "Button", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w));
+        if (painting != _painting)
+            _painting = painting;
+
+        _brushRadius = SC2TerrainShell.DrawCompactSlider("Radius (F resize)", _brushRadius, 1f, 128f,
+            onValueChangeStart: RecordUndo);
+
+        if (Data.Symmetry != SymmetryMode.None)
+            EditorGUILayout.LabelField($"Symmetry: {Data.Symmetry} (Terrain tab settings)", EditorStyles.centeredGreyMiniLabel);
+    }
+
+    /// <summary>Blocks 1+ are derived from block 0, but their automatic outline (the walls
+    /// added around block 0's walls) can be marked as unneeded here.</summary>
+    /// <summary>The brush mode a block's tab can actually use: an auto-managed block (1+)
+    /// only has the Outline brush, block 0 and Manual Mode blocks only Impassable/Passable,
+    /// the shore-hint block also Shore and Outline. Re-applied on every tab change, Manual
+    /// Mode toggle, panel draw and undo, so the brush cannot be left in a mode its block
+    /// does not offer (and thereby stop painting).</summary>
+    private void EnforceCostsModeForActiveBlock()
+    {
+        if (ActiveTarget != PaintTarget.Costs || Data == null) return;
+        if (IsAutoManagedCostsBlock(_activeBlock))
+            _costsMode = OutlineMode;
+        else if (_activeBlock != ShoreHintBlockIndex)
+            _costsMode = Mathf.Min(_costsMode, 1);
+        else if (_costsMode == OutlineMode && !OutlineAvailable(_activeBlock))
+            _costsMode = 1;
+    }
+
+    private bool OutlineAvailable(int block) =>
+        !_manualCostsMode && Data != null && block >= 1 && block < Data.CostsBlocks.Count;
+
+    private void DrawOutlineControls(float w)
+    {
+        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(16f), SC2UiScale.Pxf(16f), GUILayout.Width(SC2UiScale.Pxf(16f)));
+        EditorGUI.DrawRect(swatch, OutlineOpenedColor);
+        GUILayout.Label("Marked as unneeded outline (passable)", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
+        EditorGUILayout.EndHorizontal();
+        SC2TerrainShell.DrawUnifiedNote("Outline brush: the lighter walls on this block are the outline added automatically around block 0's walls. Click paints them passable (they turn green); the cost ring is recomputed around what remains. Only outline cells are affected. Hold Ctrl to restore the outline.");
+    }
+
     private void DrawCostsControls(float w)
     {
         // On the shore-hint-capable block's
@@ -429,9 +478,18 @@ public sealed class SC2CostsShell
         // unpins instead of "painting the opposite"). Every other block's
         // tab keeps the plain 2-way toggle.
         var isShoreHintBlock = _activeBlock == ShoreHintBlockIndex;
-        var newCostsMode = isShoreHintBlock
-            ? SC2TerrainShell.DrawUnifiedSegmentGrid(Mathf.Clamp(_costsMode, 0, 2), new[] { "Impassable", "Passable", "Shore" }, 3)
-            : SC2TerrainShell.DrawUnifiedSegmentGrid(Mathf.Clamp(_costsMode, 0, 1), new[] { "Impassable", "Passable" }, 2);
+        var outlineOnBlock = isShoreHintBlock && OutlineAvailable(_activeBlock);
+        int newCostsMode;
+        if (outlineOnBlock)
+        {
+            // segment 3 is the Outline brush (mode value OutlineMode)
+            var shown = SC2TerrainShell.DrawUnifiedSegmentGrid(Mathf.Clamp(_costsMode, 0, 3), new[] { "Impassable", "Passable", "Shore", "Outline" }, 4);
+            newCostsMode = shown;
+        }
+        else
+            newCostsMode = isShoreHintBlock
+                ? SC2TerrainShell.DrawUnifiedSegmentGrid(Mathf.Clamp(_costsMode, 0, 2), new[] { "Impassable", "Passable", "Shore" }, 3)
+                : SC2TerrainShell.DrawUnifiedSegmentGrid(Mathf.Clamp(_costsMode, 0, 1), new[] { "Impassable", "Passable" }, 2);
         if (newCostsMode != _costsMode)
         {
             RecordUndo();
@@ -445,6 +503,8 @@ public sealed class SC2CostsShell
             EditorGUI.DrawRect(swatch, ShoreHintOverrideColor);
             GUILayout.Label("Shore color — every pinned cell renders this color, regardless of passable/impassable", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
             EditorGUILayout.EndHorizontal();
+            if (_costsMode == OutlineMode)
+                DrawOutlineControls(w);
             if (_costsMode == 2)
                 SC2TerrainShell.DrawUnifiedNote("Shore mode: click paints any currently-impassable cell passable and pins it (survives every auto-resync). Already-passable cells are left untouched. Hold Ctrl to unpin instead (the cell reverts to the automatic value on the next resync).");
         }
@@ -725,6 +785,27 @@ public sealed class SC2CostsShell
         SyncDocumentFromLive();
     }
 
+    /// <summary>Growth-only wall cells of b4 that Shore pins opened in the last
+    /// recompute; painted with the shore tint in the overlay.</summary>
+    private bool[] _shoreOpenedCells;
+
+    /// <summary>Automatic outline cells of each block from the last recompute (before the
+    /// user's marks); the Outline brush only accepts these.</summary>
+    private bool[][] _outlineCells;
+
+    /// <summary>Drops marks on cells that are no longer outline (block 0 changed there), so
+    /// a stale mark cannot silently reappear later.</summary>
+    private void ClearStaleOutlineMarks(bool[][] outline)
+    {
+        for (var b = 1; b < Data.CostsBlocks.Count && b < outline.Length; b++)
+        {
+            var mask = Data.CostsBlocks[b].OutlineOpenMask;
+            if (mask == null) continue;
+            for (var i = 0; i < mask.Length && i < outline[b].Length; i++)
+                if (mask[i] != 0 && !outline[b][i]) mask[i] = 0;
+        }
+    }
+
     /// <summary>Every Costs block besides
     /// block 0 is now a pure computed view of block 0 — called after ANY
     /// change to block 0's own Navmesh (paint stroke, Auto-generate, Dilate,
@@ -732,18 +813,18 @@ public sealed class SC2CostsShell
     /// vanilla profiles (3-block land-only, 5-block playable-water); a no-op
     /// for any other block count.
     ///
-    /// 3-block: block 1 = block 0 dilated by 2 cells; block 2 = block 1
-    /// dilated by 2 cells.
+    /// Growth and ring values follow SC2CostsNavmeshRules (vanilla-measured):
+    /// 3-block: block 1 = block 0 + 1 cross step; block 2 = block 1 + 3.
     ///
     /// 5-block (always PlayableWater==true, matching EnsureCostsAndTerrainTypes'
     /// own block-set choice): block 0 additionally gets a mandatory 3-cell
     /// impassable shoreline band baked in first — every raw-geometric water
     /// cell within 3 cells of raw land is forced impassable, everything else
     /// in the water is fully passable (see GenerateFromHeight — block 0 no
-    /// longer uses a depth tolerance at all). Block 1 = block 0, but EVERY
-    /// raw water cell is impassable (no exceptions). Block 2 = block 0
-    /// dilated by 2 cells (based on block 0, not block 1). Block 4
-    /// (ShoreHintBlockIndex) = block 0, except any cell pinned in
+    /// longer uses a depth tolerance at all). Land walls of blocks 1/4 grow
+    /// +1 and of blocks 2/3 +4 (cross steps); block 1 also blocks EVERY raw
+    /// water cell; blocks 2/3 grow the water band by 2. Block 4
+    /// (ShoreHintBlockIndex) = block 0's set, except any cell pinned in
     /// SC2TerrainData.CostsShoreHintOverrideMask keeps whatever the user
     /// hand-painted there verbatim — "shore hint" lives directly on that
     /// block's own Costs tab instead of a separate paint target. A pin that
@@ -751,9 +832,12 @@ public sealed class SC2CostsShell
     /// was pinned) is cleared automatically right here:
     /// once block 0 stops disagreeing with a hand-painted cell, that cell
     /// should just track block 0 again instead of staying frozen (and
-    /// tinted as shore) forever. Block 3 =
-    /// block 4 dilated by 2 cells — swapped from "block 3 is the shore-hint
-    /// block, block 4 dilates it".</summary>
+    /// tinted as shore) forever. Block 3 grows from block 4.
+    ///
+    /// Each block 1+ also has an automatic outline (walls that exist only because of
+    /// the growth); cells the user marked with the Outline brush
+    /// (SC2CostsBlockData.OutlineOpenMask) are opened, and the cost ring follows
+    /// what remains.</summary>
     private void RecomputeDerivedCostsBlocks()
     {
         // Manual Mode: no block is auto-managed (see IsAutoManagedCostsBlock),
@@ -762,7 +846,6 @@ public sealed class SC2CostsShell
         // derived block.
         if (_manualCostsMode) return;
 
-        const int CascadeBorderMargin = 2;
         var shorelineBandMargin = Mathf.Max(0, _genThresholds.ShorelineBandMargin);
 
         var blockCount = Data.CostsBlocks.Count;
@@ -773,43 +856,33 @@ public sealed class SC2CostsShell
         System.Func<float, float, float> sample = _terrainShell.SampleLiveHeightGrid;
         var imp0 = SC2CostsAutoGen.NavmeshToImpassable(Data.CostsBlocks[0].Navmesh);
 
-        if (blockCount == 5 && Data.PlayableWater)
-        {
-            var isWaterRaw = SC2CostsAutoGen.ComputeRawWaterMask(Data, sample);
-            var isLandRaw = new bool[isWaterRaw.Length];
-            for (var i = 0; i < isWaterRaw.Length; i++) isLandRaw[i] = !isWaterRaw[i];
-            var landDilated = SC2CostsAutoGen.DilateImpassable(isLandRaw, gridSize, gridSize, shorelineBandMargin);
-            for (var i = 0; i < imp0.Length; i++)
-                if (landDilated[i] && isWaterRaw[i]) imp0[i] = true;
-            Data.CostsBlocks[0].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp0, gridSize, gridSize);
-        }
-
+        _shoreOpenedCells = null;
+        var outlineMasks = Data.CostsBlocks.Select(b => b.OutlineOpenMask).ToArray();
         if (blockCount == 3)
         {
-            var imp1 = SC2CostsAutoGen.DilateImpassable(imp0, gridSize, gridSize, CascadeBorderMargin);
-            Data.CostsBlocks[1].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp1, gridSize, gridSize);
-
-            var imp2 = SC2CostsAutoGen.DilateImpassable(imp1, gridSize, gridSize, CascadeBorderMargin);
-            Data.CostsBlocks[2].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp2, gridSize, gridSize);
+            var profile = SC2CostsNavmeshRules.DeriveLandOnlyProfile(imp0, outlineMasks, gridSize, gridSize);
+            for (var b = 0; b < 3; b++)
+                Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 3, profile.Walls[b], null, null, gridSize, gridSize);
+            _outlineCells = profile.Outline;
+            ClearStaleOutlineMarks(profile.Outline);
         }
         else
         {
             var isWaterRaw = SC2CostsAutoGen.ComputeRawWaterMask(Data, sample);
-
-            var imp1 = (bool[])imp0.Clone();
-            for (var i = 0; i < imp1.Length; i++) if (isWaterRaw[i]) imp1[i] = true;
-            Data.CostsBlocks[1].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp1, gridSize, gridSize);
-
-            var imp2 = SC2CostsAutoGen.DilateImpassable(imp0, gridSize, gridSize, CascadeBorderMargin);
-            Data.CostsBlocks[2].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp2, gridSize, gridSize);
+            if (Data.PlayableWater)
+            {
+                var isLandRaw = new bool[isWaterRaw.Length];
+                for (var i = 0; i < isWaterRaw.Length; i++) isLandRaw[i] = !isWaterRaw[i];
+                var landDilated = SC2CostsAutoGen.DilateImpassable(isLandRaw, gridSize, gridSize, shorelineBandMargin);
+                for (var i = 0; i < imp0.Length; i++)
+                    if (landDilated[i] && isWaterRaw[i]) imp0[i] = true;
+            }
 
             var overrides = Data.CostsShoreHintOverrideMask;
             var pinned = SC2CostsAutoGen.NavmeshToImpassable(Data.CostsBlocks[4].Navmesh);
-            var imp4 = (bool[])imp0.Clone();
             if (overrides != null)
-                for (var i = 0; i < imp4.Length && i < overrides.Length; i++)
+                for (var i = 0; i < imp0.Length && i < overrides.Length; i++)
                 {
-                    if (overrides[i] == 0) continue;
                     // Once block 0's own value catches up
                     // to match whatever this cell was pinned to (typically
                     // "passable", the only value Shore mode ever pins), the
@@ -817,13 +890,17 @@ public sealed class SC2CostsShell
                     // block 0 normally again instead of staying frozen (and
                     // tinted as shore) forever even after block 0 no longer
                     // disagrees with it.
-                    if (pinned[i] == imp0[i]) { overrides[i] = 0; continue; }
-                    imp4[i] = pinned[i];
+                    if (overrides[i] != 0 && pinned[i] == imp0[i]) overrides[i] = 0;
                 }
-            Data.CostsBlocks[4].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp4, gridSize, gridSize);
 
-            var imp3 = SC2CostsAutoGen.DilateImpassable(imp4, gridSize, gridSize, CascadeBorderMargin);
-            Data.CostsBlocks[3].Navmesh = SC2CostsAutoGen.BuildNavmesh(imp3, gridSize, gridSize);
+            var profile = SC2CostsNavmeshRules.DeriveWaterProfile(imp0, isWaterRaw, overrides, pinned, outlineMasks, gridSize, gridSize);
+            var walls = profile.Walls;
+            _shoreOpenedCells = profile.OpenedByPins;
+            _outlineCells = profile.Outline;
+            ClearStaleOutlineMarks(profile.Outline);
+            var shoreZone = SC2CostsNavmeshRules.ShoreZone(walls[0], walls[1], walls[4], isWaterRaw, overrides, outlineMasks[4]);
+            for (var b = 0; b < 5; b++)
+                Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 5, walls[b], walls[4], isWaterRaw, gridSize, gridSize, shoreZone);
         }
 
         _overlayDirty = true;
@@ -945,8 +1022,7 @@ public sealed class SC2CostsShell
         // _painting itself isn't per-block, so a stroke already armed on a
         // paintable block before switching tabs must not silently keep
         // writing into a now-active auto-managed one.
-        if (ActiveTarget == PaintTarget.Costs && IsAutoManagedCostsBlock(_activeBlock))
-            return;
+        EnforceCostsModeForActiveBlock();
 
         // A new stroke gets a fresh
         // rebuild of the live height grid (covers e.g. the imported terrain
@@ -995,7 +1071,9 @@ public sealed class SC2CostsShell
         if (ActiveTarget == PaintTarget.Costs)
         {
             var previewMode = erasingPreview ? 1 - _costsMode : _costsMode;
-            brushColor = previewMode == 0 ? new Color(1f, 0.1f, 0.1f, 0.9f) : new Color(0.1f, 1f, 0.1f, 0.9f);
+            brushColor = _costsMode == OutlineMode
+                ? (erasingPreview ? new Color(1f, 0.4f, 0.1f, 0.9f) : new Color(0.1f, 0.9f, 0.5f, 0.9f))
+                : previewMode == 0 ? new Color(1f, 0.1f, 0.1f, 0.9f) : new Color(0.1f, 1f, 0.1f, 0.9f);
         }
         else
         {
@@ -1118,7 +1196,20 @@ public sealed class SC2CostsShell
             {
                 if (cell.x < 0 || cell.x >= gridSize || cell.y < 0 || cell.y >= gridSize) continue;
                 var idx = cell.y * gridSize + cell.x;
-                if (ActiveTarget == PaintTarget.Costs && _activeBlock == ShoreHintBlockIndex && _costsMode == 2)
+                if (ActiveTarget == PaintTarget.Costs && _costsMode == OutlineMode && OutlineAvailable(_activeBlock))
+                {
+                    // The Outline brush only ever marks an automatic outline cell as
+                    // unneeded (passable); Ctrl restores it. Any other cell is left
+                    // untouched — the real navmesh follows on the next resync.
+                    var mask = Data.CostsBlocks[_activeBlock].OutlineOpenMask;
+                    var outline = _outlineCells != null && _activeBlock < _outlineCells.Length ? _outlineCells[_activeBlock] : null;
+                    if (mask != null && idx < mask.Length)
+                    {
+                        if (erasing) mask[idx] = 0;
+                        else if (outline != null && idx < outline.Length && outline[idx]) mask[idx] = 1;
+                    }
+                }
+                else if (ActiveTarget == PaintTarget.Costs && _activeBlock == ShoreHintBlockIndex && _costsMode == 2)
                 {
                     // "Shore" is a literal
                     // third paint mode, not just a passive color legend —
@@ -1313,11 +1404,22 @@ public sealed class SC2CostsShell
             // tint; every other cell keeps the normal "only impassable gets
             // tinted" rule.
             var overrides = _activeBlock == ShoreHintBlockIndex ? Data.CostsShoreHintOverrideMask : null;
+            var opened = _activeBlock == ShoreHintBlockIndex ? _shoreOpenedCells : null;
+            var outline = OutlineAvailable(_activeBlock) && _outlineCells != null && _activeBlock < _outlineCells.Length ? _outlineCells[_activeBlock] : null;
+            var outlineMask = outline != null ? block.OutlineOpenMask : null;
+            var outlineTint = Color.Lerp(tint, Color.white, 0.45f);
+            outlineTint.a = 0.5f;
             for (var i = 0; i < _overlayColors.Length; i++)
             {
-                if (overrides != null && i < overrides.Length && overrides[i] != 0)
+                if ((overrides != null && i < overrides.Length && overrides[i] != 0)
+                    || (opened != null && i < opened.Length && opened[i]))
                 {
                     _overlayColors[i] = ShoreHintOverrideColor;
+                    continue;
+                }
+                if (outline != null && i < outline.Length && outline[i])
+                {
+                    _overlayColors[i] = outlineMask != null && i < outlineMask.Length && outlineMask[i] != 0 ? OutlineOpenedColor : outlineTint;
                     continue;
                 }
                 var isImpassable = navmesh != null && i < navmesh.Length && navmesh[i] == 255;
@@ -1402,6 +1504,7 @@ public sealed class SC2CostsShell
         CostsNavmesh = Data.CostsBlocks.Select(b => (byte[])b.Navmesh.Clone()).ToArray(),
         TerrainTypes = (ushort[])Data.TerrainTypes.Clone(),
         CostsShoreHintOverrideMask = (byte[])Data.CostsShoreHintOverrideMask.Clone(),
+        CostsOutlineOpen = Data.CostsBlocks.Select(b => (byte[])(b.OutlineOpenMask ?? System.Array.Empty<byte>()).Clone()).ToArray(),
         CostsMode = _costsMode,
         AllBlocks = _allBlocks,
         ManualCostsMode = _manualCostsMode,
@@ -1591,6 +1694,9 @@ public sealed class SC2CostsShell
             Data.CostsBlocks[i].Navmesh = s.CostsNavmesh[i];
         Data.TerrainTypes = s.TerrainTypes;
         Data.CostsShoreHintOverrideMask = s.CostsShoreHintOverrideMask;
+        if (s.CostsOutlineOpen != null)
+            for (var i = 0; i < Data.CostsBlocks.Count && i < s.CostsOutlineOpen.Length; i++)
+                Data.CostsBlocks[i].OutlineOpenMask = s.CostsOutlineOpen[i];
         ActiveTarget = s.Target;
         _costsMode = s.CostsMode;
         _allBlocks = s.AllBlocks;
@@ -1600,6 +1706,7 @@ public sealed class SC2CostsShell
         _brushRadius = s.BrushRadius;
         for (var i = 0; i < _presets.Count && i < s.PresetLabels.Count; i++)
             _presets[i].Label = s.PresetLabels[i];
+        EnforceCostsModeForActiveBlock();
         _overlayDirty = true;
     }
 

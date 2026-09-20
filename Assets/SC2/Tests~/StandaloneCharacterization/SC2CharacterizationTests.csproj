@@ -95,6 +95,8 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaField.cs" Link="Source\SC2LuaField.cs" />
     <!-- Pure symmetry/lobby-spawn math (Vector3 + System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LobbySpawnMath.cs" Link="Source\SC2LobbySpawnMath.cs" />
+    <!-- Vanilla-measured navmesh rules (cross growth, wall ring, water gradient), System only. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2CostsNavmeshRules.cs" Link="Source\SC2CostsNavmeshRules.cs" />
     <!-- The per-texel RNM mask rasteriser (TerrainModel/HfieldModel + UnityEngine value types only). -->
     <Compile Include="$(SC2Root)\Scripts\TerrainEditor\SC2RnmMaskBaker.cs" Link="Source\SC2RnmMaskBaker.cs" />
     <!-- SC2MapDocument_Implementation_Plan.md Этап 1 infrastructure. Every
