@@ -605,6 +605,12 @@ public static class SC2RuntimeTerrainPersistence
         // (JsonUtility supports byte[] natively, same as EnvironmentHeader).
         public byte[] CostsShoreHintOverrideMask;
         public float Collision2HeightOffset;
+        // Collision2 tab: custom mesh used for export, and the preview mesh + its view flags.
+        public bool UseCustomCollision2;
+        public byte[] CustomCollision2Bytes;
+        public byte[] Collision2PreviewBytes;
+        public bool Collision2HidePreview;
+        public bool Collision2Wireframe;
         public byte[] EnvironmentHeader; // JsonUtility supports byte[] natively (base64), no BlockCopy workaround needed
         public string EnvironmentMap, SkyMap, TexturePath3, ColorCorrectionCube, FogOfWarCorrectionCube;
         public string[] EnvironmentTextureSourceTags;
@@ -764,6 +770,11 @@ public static class SC2RuntimeTerrainPersistence
         dto.CostsShoreHintOverrideMask = data.CostsShoreHintOverrideMask ?? Array.Empty<byte>();
 
         dto.Collision2HeightOffset = data.Collision2HeightOffset;
+        dto.UseCustomCollision2 = data.UseCustomCollision2;
+        dto.CustomCollision2Bytes = data.CustomCollision2Bytes ?? Array.Empty<byte>();
+        dto.Collision2PreviewBytes = data.Collision2PreviewBytes ?? Array.Empty<byte>();
+        dto.Collision2HidePreview = data.Collision2HidePreview;
+        dto.Collision2Wireframe = data.Collision2Wireframe;
         dto.EnvironmentHeader = data.EnvironmentHeader != null ? (byte[])data.EnvironmentHeader.Clone() : new byte[508];
         dto.EnvironmentMap = data.EnvironmentMap;
         dto.SkyMap = data.SkyMap;
@@ -931,6 +942,11 @@ public static class SC2RuntimeTerrainPersistence
         data.CostsShoreHintOverrideMask = dto.CostsShoreHintOverrideMask ?? Array.Empty<byte>();
 
         data.Collision2HeightOffset = dto.Collision2HeightOffset;
+        data.UseCustomCollision2 = dto.UseCustomCollision2 && dto.CustomCollision2Bytes is { Length: > 0 };
+        data.CustomCollision2Bytes = dto.CustomCollision2Bytes is { Length: > 0 } ? dto.CustomCollision2Bytes : null;
+        data.Collision2PreviewBytes = dto.Collision2PreviewBytes is { Length: > 0 } ? dto.Collision2PreviewBytes : null;
+        data.Collision2HidePreview = dto.Collision2HidePreview;
+        data.Collision2Wireframe = dto.Collision2Wireframe;
         data.EnvironmentHeader = dto.EnvironmentHeader != null && dto.EnvironmentHeader.Length == 508 ? dto.EnvironmentHeader : new byte[508];
         data.EnvironmentMap = dto.EnvironmentMap ?? "";
         data.SkyMap = dto.SkyMap ?? "";

@@ -256,6 +256,17 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// auto-generation entirely.</summary>
     public byte[] CustomCollision2Bytes;
 
+    /// <summary>The Collision2 tab's current preview mesh (last Generate or import), as the same
+    /// BdfContainer bytes CustomCollision2Bytes uses, so the preview survives an editor restart
+    /// instead of showing "Not generated yet". Cleared whenever the preview goes stale (Height
+    /// Offset / Polygon Budget changed). Never exported by itself — see UseCustomCollision2.</summary>
+    public byte[] Collision2PreviewBytes;
+
+    /// <summary>Preview view settings of the Collision2 tab. Stored negated / as plain flags so a
+    /// save from before they existed loads with the preview shown and solid.</summary>
+    public bool Collision2HidePreview;
+    public bool Collision2Wireframe;
+
     /// <summary>World-space size (both X and Z) of the from-scratch water
     /// plane SC2WaterPlane generates — deliberately independent of
     /// CostsGridSize (which sizes the Costs/Hfield grid, a different,

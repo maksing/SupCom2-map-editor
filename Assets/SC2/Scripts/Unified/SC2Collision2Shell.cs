@@ -153,6 +153,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
             if (showPreview != _showPreview)
             {
                 _showPreview = showPreview;
+                Data.Collision2HidePreview = !showPreview;
                 UpdatePreviewVisibility();
             }
 
@@ -160,6 +161,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
             if (wireframe != _wireframeMode)
             {
                 _wireframeMode = wireframe;
+                Data.Collision2Wireframe = wireframe;
                 // Re-slice the same _lastModel data into the other topology
                 // (Triangles <-> Lines) immediately, not just next Generate.
                 RebuildPreviewMesh();
@@ -208,6 +210,55 @@ public sealed class SC2Collision2Shell : System.IDisposable
         _offsetBeforeDrag = null;
         _budgetBeforeDrag = null;
         _loadedForData = Data;
+        _showPreview = !Data.Collision2HidePreview;
+        _wireframeMode = Data.Collision2Wireframe;
+        RestorePreviewFromData();
+    }
+
+    /// <summary>Drops the preview (it no longer matches the terrain settings) and the copy kept in
+    /// the saved data, so a restart does not bring back a stale mesh.</summary>
+    private void InvalidatePreview()
+    {
+        _lastModel = null;
+        if (Data != null) Data.Collision2PreviewBytes = null;
+        UpdatePreviewVisibility();
+    }
+
+    /// <summary>The preview mesh survives an editor restart: it is stored with the terrain data, and
+    /// restored here without generating anything (a map that uses a custom mesh for export falls
+    /// back to those bytes, e.g. a save from before the preview was stored).</summary>
+    private void RestorePreviewFromData()
+    {
+        var bytes = Data.Collision2PreviewBytes is { Length: > 0 } ? Data.Collision2PreviewBytes
+            : Data.UseCustomCollision2 && Data.CustomCollision2Bytes is { Length: > 0 } ? Data.CustomCollision2Bytes : null;
+        if (bytes == null || _lastModel != null) return;
+        try
+        {
+            _lastModel = Collision2Bdf.Parse(BdfContainer.Read(bytes, Collision2Bdf.Padding));
+            _lastHfield = null;
+            _lastError = null;
+            RebuildPreviewMesh();
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            _lastModel = null;
+        }
+        UpdatePreviewVisibility();
+    }
+
+    private byte[] SerializeModel(Collision2Model model)
+    {
+        var (data, offsetTable) = Collision2Bdf.Serialize(model, BdfPlatform.Pc);
+        return new BdfContainer { Platform = BdfPlatform.Pc, Data = data, OffsetTable = offsetTable, NumFiles = 1 }.Write(Collision2Bdf.Padding);
+    }
+
+    /// <summary>Keeps the stored copy of the preview in step with _lastModel.</summary>
+    private void PersistPreview()
+    {
+        if (Data == null) return;
+        try { Data.Collision2PreviewBytes = _lastModel != null ? SerializeModel(_lastModel) : null; }
+        catch (System.Exception ex) { SC2Log.LogException(ex); Data.Collision2PreviewBytes = null; }
     }
 
     /// <summary>Height Offset is the only mutable Collision2 field, so unlike
@@ -225,8 +276,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
         if (!Mathf.Approximately(newOffset, before))
         {
             Data.Collision2HeightOffset = newOffset;
-            _lastModel = null; // stale until regenerated with the new offset
-            UpdatePreviewVisibility();
+            InvalidatePreview(); // stale until regenerated with the new offset
 
             // Only a KeyDown/Return text-field commit
             // (rawType, since DrawCompactSlider already called e.Use() on it
@@ -309,8 +359,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
         if (newBudget != before)
         {
             Data.Collision2PolygonBudget = newBudget;
-            _lastModel = null; // stale until regenerated with the new budget
-            UpdatePreviewVisibility();
+            InvalidatePreview(); // stale until regenerated with the new budget
 
             // See DrawHeightOffsetSlider's identical fix for why this
             // checks rawType == KeyDown rather than "!= MouseDrag".
@@ -381,10 +430,9 @@ public sealed class SC2Collision2Shell : System.IDisposable
         if (_session?.Document == null) return;
         Data.Collision2HeightOffset = _session.Document.Collision2.Generation.VerticalOffset;
         Data.Collision2PolygonBudget = _session.Document.Collision2.Generation.MaxPolygons;
-        _lastModel = null; // stale until regenerated with the restored offset/budget
+        InvalidatePreview(); // stale until regenerated with the restored offset/budget
         _offsetBeforeDrag = null;
         _budgetBeforeDrag = null;
-        UpdatePreviewVisibility();
         RepaintHost?.Invoke();
     }
 
@@ -401,8 +449,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
         if (_lastModel == null) { Data.CustomCollision2Bytes = null; return; }
         try
         {
-            var (data, offsetTable) = Collision2Bdf.Serialize(_lastModel, BdfPlatform.Pc);
-            Data.CustomCollision2Bytes = new BdfContainer { Platform = BdfPlatform.Pc, Data = data, OffsetTable = offsetTable, NumFiles = 1 }.Write(Collision2Bdf.Padding);
+            Data.CustomCollision2Bytes = SerializeModel(_lastModel);
         }
         catch (System.Exception ex)
         {
@@ -441,6 +488,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
             var (model, hfield) = SC2TerrainExporter.BuildCollision2Preview(Data, importedTerrains, _session);
             _lastModel = model;
             _lastHfield = hfield;
+            PersistPreview();
             RebuildPreviewMesh();
         }
         catch (System.Exception ex)
@@ -547,6 +595,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
 
             _lastModel = model;
             _lastHfield = null; // no longer derived from a live hfield projection
+            PersistPreview();
             if (Data.UseCustomCollision2) SyncCustomCollision2Bytes(); // keep export in sync with a re-import while the checkbox is already on
             RebuildPreviewMesh();
             UpdatePreviewVisibility();
@@ -597,6 +646,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
 
         _lastModel = model;
         _lastHfield = null; // no longer derived from a live hfield projection
+        PersistPreview();
         if (Data.UseCustomCollision2) SyncCustomCollision2Bytes(); // keep export in sync with a re-import while the checkbox is already on
         RebuildPreviewMesh();
         UpdatePreviewVisibility();
