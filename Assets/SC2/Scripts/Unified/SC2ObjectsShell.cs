@@ -261,8 +261,9 @@ public sealed class SC2ObjectsShell
             _dataVersion == _lastMarkerRendererDataVersion && selectionSig == _lastMarkerRendererSelectionSig)
             return;
 
-        SC2ObjectMarkerRenderer.Sync(Data, _selProps, _selUnits, _selMarkers, _hiddenPropIds, _hiddenUnitIds, _hiddenMarkerIds,
-            showProps, showUnits, showMarkers);
+        using (SC2FramePerf.Measure("objects.markerSync"))
+            SC2ObjectMarkerRenderer.Sync(Data, _selProps, _selUnits, _selMarkers, _hiddenPropIds, _hiddenUnitIds, _hiddenMarkerIds,
+                showProps, showUnits, showMarkers);
         _lastMarkerRendererDataVersion = _dataVersion;
         _lastMarkerRendererSelectionSig = selectionSig;
         if (dueForSafetyNet) _markerRendererSafetyNetTicks = 0;
@@ -1033,8 +1034,51 @@ public sealed class SC2ObjectsShell
     // This lets you drag ANY member (not just the "original") and have the
     // rest follow correctly, including for true-rotation modes (Radial6/8).
 
-    private SC2ObjSymmetryGroup FindSymmetryGroup(int objectId) =>
-        Data.ObjSymmetryGroups.FirstOrDefault(g => g.Members.Any(m => m.ObjectId == objectId));
+    // Id -> object lookups for a per-frame operation over many objects (drag / rotate / scale of a
+    // big selection): a FirstOrDefault scan per object made those O(selected x all objects) every
+    // frame. Begin/EndBulkLookup build the indexes once for the duration of the operation; outside
+    // one, the Lookup* helpers fall back to a plain scan.
+    private Dictionary<int, SC2ObjProp> _bulkProps;
+    private Dictionary<int, SC2ObjMarker> _bulkMarkers;
+    private Dictionary<int, SC2ObjUnitNode> _bulkUnits;
+    private Dictionary<int, SC2ObjSymmetryGroup> _bulkSymmetryGroups;
+
+    private void BeginBulkLookup()
+    {
+        _bulkProps = new Dictionary<int, SC2ObjProp>(Data.ObjProps.Count);
+        foreach (var p in Data.ObjProps) _bulkProps.TryAdd(p.Id, p);
+        _bulkMarkers = new Dictionary<int, SC2ObjMarker>(Data.ObjMarkers.Count);
+        foreach (var m in Data.ObjMarkers) _bulkMarkers.TryAdd(m.Id, m);
+        _bulkUnits = new Dictionary<int, SC2ObjUnitNode>(Data.ObjUnits.Count);
+        foreach (var u in Data.ObjUnits) _bulkUnits.TryAdd(u.Id, u);
+        _bulkSymmetryGroups = new Dictionary<int, SC2ObjSymmetryGroup>();
+        foreach (var g in Data.ObjSymmetryGroups)
+            foreach (var m in g.Members) _bulkSymmetryGroups.TryAdd(m.ObjectId, g);
+    }
+
+    private void EndBulkLookup()
+    {
+        _bulkProps = null; _bulkMarkers = null; _bulkUnits = null; _bulkSymmetryGroups = null;
+    }
+
+    private SC2ObjProp LookupProp(int id) => _bulkProps != null
+        ? (_bulkProps.TryGetValue(id, out var p) ? p : null)
+        : Data.ObjProps.FirstOrDefault(x => x.Id == id);
+
+    private SC2ObjMarker LookupMarker(int id) => _bulkMarkers != null
+        ? (_bulkMarkers.TryGetValue(id, out var m) ? m : null)
+        : Data.ObjMarkers.FirstOrDefault(x => x.Id == id);
+
+    private SC2ObjUnitNode LookupUnit(int id) => _bulkUnits != null
+        ? (_bulkUnits.TryGetValue(id, out var u) ? u : null)
+        : Data.ObjUnits.FirstOrDefault(x => x.Id == id);
+
+    private SC2ObjSymmetryGroup FindSymmetryGroup(int objectId)
+    {
+        if (_bulkSymmetryGroups != null)
+            return _bulkSymmetryGroups.TryGetValue(objectId, out var group) ? group : null;
+        return Data.ObjSymmetryGroups.FirstOrDefault(g => g.Members.Any(m => m.ObjectId == objectId));
+    }
 
     private Vector3 InferCanonicalFromSlot(Vector3 slotPos, int slotIndex)
     {
@@ -1102,11 +1146,11 @@ public sealed class SC2ObjectsShell
 
     private void SetObjectPositionRaw(int objectId, Vector3 pos)
     {
-        var marker = Data.ObjMarkers.FirstOrDefault(m => m.Id == objectId);
+        var marker = LookupMarker(objectId);
         if (marker != null) { marker.Position = SnapXZ(pos); return; }
-        var prop = Data.ObjProps.FirstOrDefault(p => p.Id == objectId);
+        var prop = LookupProp(objectId);
         if (prop != null) { prop.Position = pos; return; } // Props stay freeform, never snapped
-        var unit = Data.ObjUnits.FirstOrDefault(u => u.Id == objectId);
+        var unit = LookupUnit(objectId);
         if (unit != null) unit.Position = SnapXZ(pos);
     }
 
@@ -1186,7 +1230,7 @@ public sealed class SC2ObjectsShell
         foreach (var member in group.Members)
         {
             if (member.ObjectId == edited.Id || (skipIds != null && skipIds.Contains(member.ObjectId))) continue;
-            var sibling = Data.ObjProps.FirstOrDefault(x => x.Id == member.ObjectId);
+            var sibling = LookupProp(member.ObjectId);
             if (sibling == null) continue;
             var baseRotation = sibling.Rotation;
             if (siblingBefore != null && siblingBefore.TryGetValue(sibling.Id, out var before)) baseRotation = before.Rotation;
@@ -2745,7 +2789,8 @@ public sealed class SC2ObjectsShell
         });
 
         if (_selProps.Count >= 2)
-            DrawPropsMixedEditPanel(w, visible.Where(x => _selProps.Contains(x.Id)).ToList());
+            using (SC2FramePerf.Measure("objects.mixedEdit"))
+                DrawPropsMixedEditPanel(w, SelectedVisibleProps(visible));
 
         DrawVirtualizedPropRows(visible, visibleIds, w, 300f);
 
@@ -3076,17 +3121,54 @@ public sealed class SC2ObjectsShell
     // an edit against, so auto-apply would be ambiguous).
     private string _bulkScaleInput = "", _bulkBlueprintInput = "";
 
+    // The selected props among `visible`, cached: the panel is drawn several times per frame and
+    // filtering + copying thousands of props each time showed up in frame time. Rebuilt only when
+    // the selection or the visible list changes (the selection hash is one cheap pass over the ids).
+    private List<SC2ObjProp> _selectedVisibleCache;
+    private List<SC2ObjProp> _selectedVisibleSource;
+    private int _selectedVisibleSelectionHash;
+    private int _selectedVisibleSelectionCount;
+
+    private int _selectedVisibleDataVersion = -1;
+    private bool _selectedScaleMixed, _selectedBlueprintMixed;
+
+    private List<SC2ObjProp> SelectedVisibleProps(List<SC2ObjProp> visible)
+    {
+        var hash = 17;
+        foreach (var id in _selProps) hash = hash * 31 + id;
+        // A rotate/scale gesture edits the props without a version bump, so it recomputes every call.
+        if (_selectedVisibleCache == null || !ReferenceEquals(_selectedVisibleSource, visible)
+            || hash != _selectedVisibleSelectionHash || _selProps.Count != _selectedVisibleSelectionCount
+            || _selectedVisibleDataVersion != _dataVersion || _propsGestureKind != PropsGestureKind.None)
+        {
+            _selectedVisibleCache = visible.Where(x => _selProps.Contains(x.Id)).ToList();
+            _selectedVisibleSource = visible;
+            _selectedVisibleSelectionHash = hash;
+            _selectedVisibleSelectionCount = _selProps.Count;
+            _selectedVisibleDataVersion = _dataVersion;
+            var first = _selectedVisibleCache.Count > 0 ? _selectedVisibleCache[0] : null;
+            _selectedScaleMixed = false; _selectedBlueprintMixed = false;
+            foreach (var p in _selectedVisibleCache)
+            {
+                if (first != null && p.Scale != first.Scale) _selectedScaleMixed = true;
+                if (first != null && p.BlueprintPath != first.BlueprintPath) _selectedBlueprintMixed = true;
+            }
+        }
+        return _selectedVisibleCache;
+    }
+
     private void DrawPropsMixedEditPanel(float w, List<SC2ObjProp> selected)
     {
         SC2EnvFieldGui.SectionLabel($"Bulk edit ({selected.Count} selected)");
 
-        var scaleMixed = selected.Select(p => p.Scale).Distinct().Count() > 1;
+        var scaleMixed = _selectedScaleMixed;
         GUILayout.Label(scaleMixed ? "Scale: (mixed)" : $"Scale: {selected[0].Scale:0.##}");
         GUILayout.BeginHorizontal();
         _bulkScaleInput = SC2EnvFieldGui.TextField("", _bulkScaleInput, "bulk_scale");
         if (SC2EnvFieldGui.Button($"Apply to {selected.Count}", GUILayout.Width(SC2UiScale.Pxf(90f))) && float.TryParse(_bulkScaleInput, out var scaleVal))
         {
             PushUndo();
+            _selectedVisibleCache = null;
             foreach (var p in selected) p.Scale = scaleVal;
             var bulkIds = new HashSet<int>(selected.Select(x => x.Id));
             foreach (var p in selected) PropagateSymmetryRotationScale(p, p.Rotation, null, bulkIds);
@@ -3094,13 +3176,14 @@ public sealed class SC2ObjectsShell
         }
         GUILayout.EndHorizontal();
 
-        var bpMixed = selected.Select(p => p.BlueprintPath).Distinct().Count() > 1;
+        var bpMixed = _selectedBlueprintMixed;
         GUILayout.Label(bpMixed ? "Blueprint: (mixed)" : $"Blueprint: {ShortBlueprint(selected[0].BlueprintPath)}");
         GUILayout.BeginHorizontal();
         _bulkBlueprintInput = SC2EnvFieldGui.TextField("", _bulkBlueprintInput, "bulk_bp");
         if (SC2EnvFieldGui.Button($"Apply to {selected.Count}", GUILayout.Width(SC2UiScale.Pxf(90f))) && !string.IsNullOrEmpty(_bulkBlueprintInput))
         {
             PushUndo();
+            _selectedVisibleCache = null;
             foreach (var p in selected) p.BlueprintPath = _bulkBlueprintInput;
             MarkObjectsDirty();
         }
@@ -5838,6 +5921,7 @@ public sealed class SC2ObjectsShell
             var dueForSafetyNet = _previewSyncSafetyNetTicks >= PreviewSyncSafetyNetInterval;
             if (dueForSafetyNet || _dragActive || _propsGestureKind != PropsGestureKind.None || _dataVersion != _lastSyncedDataVersion)
             {
+                using var syncScope = SC2FramePerf.Measure("objects.vp.sceneSync");
                 SC2GameAssetScenePreview.SyncTransforms(Data, _hiddenUnitIds, _hiddenPropIds);
                 SyncMissingAssetPreviews();
                 _lastSyncedDataVersion = _dataVersion;
@@ -5938,23 +6022,28 @@ public sealed class SC2ObjectsShell
             _gestureStartMouse = mousePosition;
             _gestureStartDistance = Mathf.Max(1f, Vector2.Distance(gestureAnchorScreen, mousePosition));
             _gestureItems.Clear();
-            foreach (var id in _selProps)
+            BeginBulkLookup();
+            try
             {
-                var p = Data.ObjProps.FirstOrDefault(x => x.Id == id);
-                if (p != null) _gestureItems.Add((p, p.Rotation, p.Scale));
-            }
-            _gestureSiblingOriginals.Clear();
-            foreach (var (gp, _, _) in _gestureItems)
-            {
-                var symGroup = FindSymmetryGroup(gp.Id);
-                if (symGroup == null) continue;
-                foreach (var member in symGroup.Members)
+                foreach (var id in _selProps)
                 {
-                    if (_selProps.Contains(member.ObjectId)) continue;
-                    var sibling = Data.ObjProps.FirstOrDefault(x => x.Id == member.ObjectId);
-                    if (sibling != null) _gestureSiblingOriginals[sibling.Id] = (sibling.Rotation, sibling.Scale);
+                    var p = LookupProp(id);
+                    if (p != null) _gestureItems.Add((p, p.Rotation, p.Scale));
+                }
+                _gestureSiblingOriginals.Clear();
+                foreach (var (gp, _, _) in _gestureItems)
+                {
+                    var symGroup = FindSymmetryGroup(gp.Id);
+                    if (symGroup == null) continue;
+                    foreach (var member in symGroup.Members)
+                    {
+                        if (_selProps.Contains(member.ObjectId)) continue;
+                        var sibling = LookupProp(member.ObjectId);
+                        if (sibling != null) _gestureSiblingOriginals[sibling.Id] = (sibling.Rotation, sibling.Scale);
+                    }
                 }
             }
+            finally { EndBulkLookup(); }
             PushUndo();
             Event.current.Use();
             RepaintHost?.Invoke();
@@ -6062,9 +6151,17 @@ public sealed class SC2ObjectsShell
             }
         }
         }
-        if (showProps)
-            foreach (var prop in VisibleForViewport(Data.ObjProps, camera, viewportRect, p => p.Position))
+        // Nothing below reads a pick on a Layout event, and a big map has thousands of objects: skip
+        // the per-object pass there (it used to run on every GUI event, twice or more per frame).
+        var eventType = Event.current != null ? Event.current.type : EventType.Repaint;
+        var objectPass = eventType != EventType.Layout;
+        var viewportPropsScope = SC2FramePerf.Measure("objects.vp.props");
+        var footprintTicks = 0L; var footprintCount = 0;
+        if (showProps && objectPass)
+            foreach (var prop in Data.ObjProps)
             {
+                var propPixel = SC2TopViewMirror.WorldToGui(camera, prop.Position);
+                if (propPixel.z <= 0f || !viewportRect.Contains(new Vector2(propPixel.x, propPixel.y))) continue;
                 if (string.IsNullOrEmpty(prop.BlueprintPath)) DrawInvalidRing(camera, viewportRect, prop.Position);
                 // Clicking/box-selecting
                 // on Markers (or any non-Props sub-tab) still picked up and
@@ -6080,18 +6177,29 @@ public sealed class SC2ObjectsShell
                 // TryGetSelectionCentroid's own group-handle carve-out,
                 // unchanged), and the footprint overlay below stays on its
                 // own showProps gate, unaffected by this.
-                DrawViewportDot(camera, viewportRect, mousePosition, canPick && showPropsIcon, prop.Position, prop.Id, ViewportObjectKind.Prop,
+                DrawViewportDotAt(new Vector2(propPixel.x, propPixel.y), canPick && showPropsIcon, mousePosition, prop.Id, ViewportObjectKind.Prop,
                     _selProps.Contains(prop.Id) ? new Color(1f, .9f, .12f, .95f) : new Color(.25f, .86f, 1f, .75f), ref pick);
                 // Footprint should show for ALREADY-
                 // PLACED buildings too, not just the live placement preview
                 // (which DrawPlacementPreview already covers). Gated on the
                 // same showProps flag as this prop's own pick-dot, so
                 // hiding Props also hides their footprints.
+                // Only a Repaint draws footprints, and one that would be a few pixels across (zoomed far
+                // out) is not worth a quad, four lines and a height sample per corner.
+                if (eventType != EventType.Repaint) continue;
                 var propAsset = _assetBrowser.FindPropAsset(prop.BlueprintPath);
-                if (propAsset != null && propAsset.FootprintSizeX > 0f && propAsset.FootprintSizeZ > 0f)
+                if (propAsset != null && propAsset.FootprintSizeX > 0f && propAsset.FootprintSizeZ > 0f
+                    && FootprintLargeEnoughOnScreen(camera, propPixel.z, Mathf.Max(propAsset.FootprintSizeX, propAsset.FootprintSizeZ) * FootprintWorldUnitsPerCell))
+                {
+                    var footprintStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     DrawFootprintOverlay(camera, viewportRect, prop.Position, propAsset.FootprintSizeX, propAsset.FootprintSizeZ, prop.Rotation.eulerAngles.y, PlacedFootprintColor);
+                    footprintTicks += System.Diagnostics.Stopwatch.GetTimestamp() - footprintStart;
+                    footprintCount++;
+                }
             }
-        if (showUnits)
+        viewportPropsScope.Dispose();
+        if (footprintCount > 0) SC2FramePerf.AddTicks("objects.vp.footprints", footprintTicks, footprintCount);
+        if (showUnits && objectPass)
             foreach (var unit in VisibleForViewport(Data.ObjUnits.Where(u => !u.IsGroup && !_hiddenUnitIds.Contains(u.Id)), camera, viewportRect, u => u.Position))
             {
                 DrawViewportDot(camera, viewportRect, mousePosition, canPick, unit.Position, unit.Id, ViewportObjectKind.Unit,
@@ -6103,7 +6211,7 @@ public sealed class SC2ObjectsShell
                 if (unitAsset != null && unitAsset.FootprintSizeX > 0f && unitAsset.FootprintSizeZ > 0f)
                     DrawFootprintOverlay(camera, viewportRect, unit.Position, unitAsset.FootprintSizeX, unitAsset.FootprintSizeZ, unit.OrientationEuler.y, PlacedFootprintColor);
             }
-        if (showMarkers)
+        if (showMarkers && objectPass)
             foreach (var marker in VisibleForViewport(Data.ObjMarkers, camera, viewportRect, m => m.Position))
             {
                 if (_hiddenMarkerIds.Contains(marker.Id)) continue;
@@ -6114,7 +6222,7 @@ public sealed class SC2ObjectsShell
                 if (_selMarkers.Contains(marker.Id)) color = new Color(1f, .9f, .12f, .98f);
                 DrawViewportDot(camera, viewportRect, mousePosition, canPick, marker.Position, marker.Id, ViewportObjectKind.Marker, color, ref pick);
             }
-        else if (_selMarkers.Count > 0)
+        else if (_selMarkers.Count > 0 && objectPass)
             // Selected markers stay visible/pickable even with the Markers
             // overlay off — a common Paths/Chains workflow is to hide marker
             // clutter and keep only the Graphs edge-line overlay on, but a
@@ -6459,9 +6567,14 @@ public sealed class SC2ObjectsShell
             if (Session?.Document == null)
                 PushUndo();
             _dragItems.Clear();
-            foreach (var id in _selProps) { var p = Data.ObjProps.FirstOrDefault(x => x.Id == id); if (p != null) _dragItems.Add((ViewportObjectKind.Prop, id, p.Position)); }
-            foreach (var id in _selMarkers) { var m = Data.ObjMarkers.FirstOrDefault(x => x.Id == id); if (m != null) _dragItems.Add((ViewportObjectKind.Marker, id, m.Position)); }
-            foreach (var id in _selUnits) { var u = Data.ObjUnits.FirstOrDefault(x => x.Id == id); if (u != null) _dragItems.Add((ViewportObjectKind.Unit, id, u.Position)); }
+            BeginBulkLookup();
+            try
+            {
+                foreach (var id in _selProps) { var p = LookupProp(id); if (p != null) _dragItems.Add((ViewportObjectKind.Prop, id, p.Position)); }
+                foreach (var id in _selMarkers) { var m = LookupMarker(id); if (m != null) _dragItems.Add((ViewportObjectKind.Marker, id, m.Position)); }
+                foreach (var id in _selUnits) { var u = LookupUnit(id); if (u != null) _dragItems.Add((ViewportObjectKind.Unit, id, u.Position)); }
+            }
+            finally { EndBulkLookup(); }
             _dragActive = _dragItems.Count > 0;
             _lastActionSummary = _dragActive ? $"Dragging {_dragItems.Count} object(s)..." : "Move tool: selection became empty, nothing to drag.";
             e.Use();
@@ -6473,31 +6586,36 @@ public sealed class SC2ObjectsShell
             if (TryGetDragPoint(camera, viewportRect, mousePosition, out var currentWorld))
             {
                 var delta = currentWorld - _dragStartWorld;
-                foreach (var (kind, id, originalPos) in _dragItems)
+                BeginBulkLookup();
+                try
                 {
-                    var newPos = originalPos + delta;
-                    if (kind == ViewportObjectKind.Prop)
+                    foreach (var (kind, id, originalPos) in _dragItems)
                     {
-                        var p = Data.ObjProps.FirstOrDefault(x => x.Id == id);
-                        if (p == null) continue;
-                        if (p.AnchorToTerrain) newPos.y = SampleHeight(newPos.x, newPos.z) + p.HeightOffset;
-                        SetPropPosition(p, newPos);
-                    }
-                    else if (kind == ViewportObjectKind.Marker)
-                    {
-                        var m = Data.ObjMarkers.FirstOrDefault(x => x.Id == id);
-                        if (m == null) continue;
-                        if (m.AnchorToTerrain) newPos.y = SampleHeight(newPos.x, newPos.z) + m.HeightOffset;
-                        SetMarkerPosition(m, newPos);
-                    }
-                    else if (kind == ViewportObjectKind.Unit)
-                    {
-                        var u = Data.ObjUnits.FirstOrDefault(x => x.Id == id);
-                        if (u == null) continue;
-                        if (u.AnchorToTerrain) newPos.y = SampleUnitHeight(newPos.x, newPos.z, u.Type) + u.HeightOffset;
-                        SetUnitPosition(u, newPos);
+                        var newPos = originalPos + delta;
+                        if (kind == ViewportObjectKind.Prop)
+                        {
+                            var p = LookupProp(id);
+                            if (p == null) continue;
+                            if (p.AnchorToTerrain) newPos.y = SampleHeight(newPos.x, newPos.z) + p.HeightOffset;
+                            SetPropPosition(p, newPos);
+                        }
+                        else if (kind == ViewportObjectKind.Marker)
+                        {
+                            var m = LookupMarker(id);
+                            if (m == null) continue;
+                            if (m.AnchorToTerrain) newPos.y = SampleHeight(newPos.x, newPos.z) + m.HeightOffset;
+                            SetMarkerPosition(m, newPos);
+                        }
+                        else if (kind == ViewportObjectKind.Unit)
+                        {
+                            var u = LookupUnit(id);
+                            if (u == null) continue;
+                            if (u.AnchorToTerrain) newPos.y = SampleUnitHeight(newPos.x, newPos.z, u.Type) + u.HeightOffset;
+                            SetUnitPosition(u, newPos);
+                        }
                     }
                 }
+                finally { EndBulkLookup(); }
                 RepaintHost?.Invoke();
             }
             e.Use();
@@ -6535,22 +6653,27 @@ public sealed class SC2ObjectsShell
         var doc = Session.Document.Objects;
         var commands = new List<ISC2DocumentCommand>();
 
+        // The document lists are indexed once: a FirstOrDefault per object was O(objects^2).
+        var docMarkers = new Dictionary<int, SC2ObjMarker>();
+        foreach (var x in doc.Markers) docMarkers.TryAdd(x.Id, x);
+        var docProps = new Dictionary<int, SC2ObjProp>();
+        foreach (var x in doc.Props) docProps.TryAdd(x.Id, x);
+        var docUnits = new Dictionary<int, SC2ObjUnitNode>();
+        foreach (var x in doc.Units) docUnits.TryAdd(x.Id, x);
+
         foreach (var m in Data.ObjMarkers)
         {
-            var docM = doc.Markers.FirstOrDefault(x => x.Id == m.Id);
-            if (docM != null && docM.Position != m.Position)
+            if (docMarkers.TryGetValue(m.Id, out var docM) && docM.Position != m.Position)
                 commands.Add(new SC2SetMarkerPositionCommand(m.Id, m.Position));
         }
         foreach (var p in Data.ObjProps)
         {
-            var docP = doc.Props.FirstOrDefault(x => x.Id == p.Id);
-            if (docP != null && docP.Position != p.Position)
+            if (docProps.TryGetValue(p.Id, out var docP) && docP.Position != p.Position)
                 commands.Add(new SC2SetPropPositionCommand(p.Id, p.Position));
         }
         foreach (var u in Data.ObjUnits)
         {
-            var docU = doc.Units.FirstOrDefault(x => x.Id == u.Id);
-            if (docU != null && docU.Position != u.Position)
+            if (docUnits.TryGetValue(u.Id, out var docU) && docU.Position != u.Position)
                 commands.Add(new SC2SetUnitPositionCommand(u.Id, u.Position));
         }
 
@@ -6644,10 +6767,28 @@ public sealed class SC2ObjectsShell
     private static void DrawInvalidRing(Camera camera, Rect viewportRect, Vector3 world) =>
         SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, world, 2.2f, new Color(1f, .15f, .1f, .85f), Color.clear);
 
+    /// <summary>Whether a footprint of this world size, at this camera-space depth, is at least a few
+    /// pixels across — smaller ones (zoomed far out) are not drawn.</summary>
+    private static bool FootprintLargeEnoughOnScreen(Camera camera, float depth, float worldSize)
+    {
+        const float minPixels = 4f;
+        float pixelsPerUnit;
+        if (camera.orthographic) pixelsPerUnit = camera.pixelHeight / (2f * Mathf.Max(0.0001f, camera.orthographicSize));
+        else pixelsPerUnit = camera.pixelHeight / (2f * Mathf.Max(0.0001f, depth) * Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad));
+        return worldSize * pixelsPerUnit >= minPixels;
+    }
+
     private void DrawViewportDot(Camera camera, Rect viewportRect, Vector2 mousePosition, bool canPick, Vector3 world, int id,
         ViewportObjectKind kind, Color color, ref ViewportPick pick)
     {
         if (!TryWorldToGui(camera, viewportRect, world, out var gui)) return;
+        DrawViewportDotAt(gui, canPick, mousePosition, id, kind, color, ref pick);
+    }
+
+    // Same as DrawViewportDot for a position that is already projected to GUI space.
+    private void DrawViewportDotAt(Vector2 gui, bool canPick, Vector2 mousePosition, int id,
+        ViewportObjectKind kind, Color color, ref ViewportPick pick)
+    {
         // Object markers are screen-space editor glyphs anchored through a
         // world-to-viewport projection. Do not reuse the terrain brush: its
         // world-radius ring changes shape and apparent position as the camera
@@ -6704,9 +6845,14 @@ public sealed class SC2ObjectsShell
     {
         var sum = Vector3.zero;
         var count = 0;
-        foreach (var id in _selProps) { var p = Data.ObjProps.FirstOrDefault(x => x.Id == id); if (p != null) { sum += p.Position; count++; } }
-        foreach (var id in _selMarkers) { var m = Data.ObjMarkers.FirstOrDefault(x => x.Id == id); if (m != null) { sum += m.Position; count++; } }
-        foreach (var id in _selUnits) { var u = Data.ObjUnits.FirstOrDefault(x => x.Id == id); if (u != null) { sum += u.Position; count++; } }
+        // One pass over the objects, not a lookup per selected id: this runs on every GUI event, and a
+        // lookup per id made a big selection cost (selected x all objects) each time.
+        if (_selProps.Count > 0)
+            foreach (var p in Data.ObjProps) if (_selProps.Contains(p.Id)) { sum += p.Position; count++; }
+        if (_selMarkers.Count > 0)
+            foreach (var m in Data.ObjMarkers) if (_selMarkers.Contains(m.Id)) { sum += m.Position; count++; }
+        if (_selUnits.Count > 0)
+            foreach (var u in Data.ObjUnits) if (_selUnits.Contains(u.Id)) { sum += u.Position; count++; }
         if (count < 2) { centroid = default; return false; }
         centroid = sum / count;
         return true;
@@ -6720,7 +6866,7 @@ public sealed class SC2ObjectsShell
     {
         var sum = Vector3.zero;
         var count = 0;
-        foreach (var id in _selProps) { var p = Data.ObjProps.FirstOrDefault(x => x.Id == id); if (p != null) { sum += p.Position; count++; } }
+        foreach (var p in Data.ObjProps) if (_selProps.Contains(p.Id)) { sum += p.Position; count++; }
         if (count == 0) { pivot = default; return false; }
         pivot = sum / count;
         return true;
@@ -6735,6 +6881,13 @@ public sealed class SC2ObjectsShell
     /// already commits by just... not reverting); cancel (Esc) restores
     /// every prop's original value.</summary>
     private void TickPropsGesture(Vector2 mousePosition)
+    {
+        BeginBulkLookup();
+        try { TickPropsGestureCore(mousePosition); }
+        finally { EndBulkLookup(); }
+    }
+
+    private void TickPropsGestureCore(Vector2 mousePosition)
     {
         var e = Event.current;
         if (e != null && ((e.type == EventType.MouseDown && e.button == 0) ||
@@ -6759,7 +6912,7 @@ public sealed class SC2ObjectsShell
             }
             foreach (var (siblingId, original) in _gestureSiblingOriginals)
             {
-                var sibling = Data.ObjProps.FirstOrDefault(x => x.Id == siblingId);
+                var sibling = LookupProp(siblingId);
                 if (sibling == null) continue;
                 sibling.Rotation = original.Rotation;
                 sibling.Scale = original.Scale;

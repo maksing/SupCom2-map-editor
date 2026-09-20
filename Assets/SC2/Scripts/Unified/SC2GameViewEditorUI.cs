@@ -3331,7 +3331,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         EnsureObjectsShell();
         try
         {
-            _objectsShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
+            using (SC2FramePerf.Measure("objects.panel"))
+                _objectsShell.DrawEmbeddedGUI(PanelContentWidth, _subTab);
         }
         catch (System.Exception ex)
         {
@@ -3627,10 +3628,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // the GameView UI for every subsequent frame.
         try
         {
-            _objectsShell.OnGameViewGUI(camera, _viewportRect, mousePos, allowInput, _tool,
-                OverlayProps, OverlayUnits, OverlayMarkers,
-                OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
-                OverlayChains, OverlayAreas, objectsTabActive, AnyMenuOpen());
+            using (SC2FramePerf.Measure("objects.viewport"))
+                _objectsShell.OnGameViewGUI(camera, _viewportRect, mousePos, allowInput, _tool,
+                    OverlayProps, OverlayUnits, OverlayMarkers,
+                    OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
+                    OverlayChains, OverlayAreas, objectsTabActive, AnyMenuOpen());
         }
         catch (System.Exception ex)
         {
