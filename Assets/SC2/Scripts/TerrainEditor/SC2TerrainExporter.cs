@@ -463,6 +463,15 @@ public static class SC2TerrainExporter
             return texReg[tex];
         }
 
+        // A pair's Ramp / Environment slot (material texture slots 8 / 11): the clean game path is written as is,
+        // unless "copy into map on export" is on for a vanilla archive texture, which needs the archive tag.
+        string PairSlotTexture(string path, string sourceTag, bool forceExport)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            var raw = forceExport && SC2VanillaArchiveClassifier.TagMatchesGamePath(sourceTag, path) ? sourceTag : path;
+            return RegTex(null, raw, forceExport);
+        }
+
         var model = new TerrainModel { Version = 6 };
 
         SC2Log.Log("[SC2Exporter] Building simplified export layers...");
@@ -636,6 +645,8 @@ public static class SC2TerrainExporter
             mat.TexturePaths[6]  = RegTex(m1?.Mask, m1?.MaskOverridePath, m1?.MaskForceExport ?? false) ?? "/textures/Engine/black_d.dds";
             mat.TexturePaths[7]  = RegTex(m2?.Mask, m2?.MaskOverridePath, m2?.MaskForceExport ?? false) ?? "/textures/Engine/black_d.dds";
             mat.TexturePaths[10] = ExportRnmMaskByName(pair.RnmMaskName, data, mapName, lightingDir, rnmCache);
+            mat.TexturePaths[8]  = PairSlotTexture(pair.RampPath, pair.RampSourceTag, pair.RampForceExport);
+            mat.TexturePaths[11] = PairSlotTexture(pair.EnvironmentPath, pair.EnvironmentSourceTag, pair.EnvironmentForceExport);
 
             // Uses the flags from the pair's own settings (set in Pairs -> Shader Setup).
             // ALPHA_TEST's real stored value is its numeric threshold (56-map
@@ -843,6 +854,8 @@ public static class SC2TerrainExporter
                     // disambiguates the cache key/output filename; the pair
                     // search itself still uses the real, unprefixed name.
                     mat.TexturePaths[10] = ExportRnmMaskByName(pair.RnmMaskName, bg, mapName, lightingDir, rnmCache, "bg_");
+                    mat.TexturePaths[8]  = PairSlotTexture(pair.RampPath, pair.RampSourceTag, pair.RampForceExport);
+                    mat.TexturePaths[11] = PairSlotTexture(pair.EnvironmentPath, pair.EnvironmentSourceTag, pair.EnvironmentForceExport);
                     // Same fields the core's own per-pair loop writes
                     // (ALPHA_TEST's real numeric threshold, State,
                     // TextureScroll, ShaderFile/ShaderPrefix) — previously

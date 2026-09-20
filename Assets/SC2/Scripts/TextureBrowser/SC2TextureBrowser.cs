@@ -168,7 +168,10 @@ public static class SC2TextureBrowser
         // either filter) — Category is the one dimension that actually
         // finds decals specifically, per SC2TextureCatalogEntry.Normalize's
         // own decal-detection rule.
-        Query.Category = (pickerKey ?? "").IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0 ? "Decals" : "";
+        Query.Category = (pickerKey ?? "").IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0 ? "Decals"
+            // Same for a Ramp slot (a pair's Ramp texture): start in the Ramp category.
+            : (pickerKey ?? "").IndexOf(":ramp", StringComparison.OrdinalIgnoreCase) >= 0 ? SC2TextureCatalogEntry.RampCategory
+            : "";
         Query.FavoritesOnly = false;
         _gridScroll = Vector2.zero;
         _message = "";
@@ -335,6 +338,9 @@ public static class SC2TextureBrowser
         // like Decals, placed under Mask since they are all mask-usage.
         DrawFilterButton(ref y, rect, "Engine", string.Equals(Query.Category, SC2TextureCatalogEntry.EngineCategory, StringComparison.OrdinalIgnoreCase),
             () => Query.Category = string.Equals(Query.Category, SC2TextureCatalogEntry.EngineCategory, StringComparison.OrdinalIgnoreCase) ? "" : SC2TextureCatalogEntry.EngineCategory);
+        // The ramp gradient textures (terrain, water, particle) — a Category toggle like Engine, right under it.
+        DrawFilterButton(ref y, rect, "Ramp", string.Equals(Query.Category, SC2TextureCatalogEntry.RampCategory, StringComparison.OrdinalIgnoreCase),
+            () => Query.Category = string.Equals(Query.Category, SC2TextureCatalogEntry.RampCategory, StringComparison.OrdinalIgnoreCase) ? "" : SC2TextureCatalogEntry.RampCategory);
         // Everything with no button of its own (Rnm, Heightmap, and textures
         // whose usage couldn't be inferred) — see SC2TextureUsageFilter.
         DrawUsageButton(ref y, rect, "Other", SC2TextureUsage.Unknown);

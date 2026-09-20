@@ -123,10 +123,47 @@ namespace SC2.MapEditor.Textures
                 Category = "Decals";
             if (IsEngineTexturePath(pathForNaming))
                 Category = EngineCategory;
+            if (RampGroup(pathForNaming) >= 0)
+                Category = RampCategory;
             SearchKey = BuildSearchKey(Name, ResourcePath, GamePath, Category, Source, Usage);
         }
 
         public const string EngineCategory = "Engine";
+        public const string RampCategory = "Ramp";
+
+        /// <summary>Which of the four kinds of ramp texture a path is, in the order the browser lists them, or -1 when
+        /// it is not a ramp at all: 0 = the terrain-material gradient LUTs (textures/Terrain/Ramps/ and
+        /// textures/lights/Default_Light_Ramp), 1 = the water gradients textures/Engine/waterramp*, 2 = particle ramps
+        /// (textures/particles/ramp/ and any ramp file directly in textures/particles/), 3 = the water material's
+        /// wave_animation_* textures (textures/Terrain/Water/). Everything with a group is filed under
+        /// <see cref="RampCategory"/>.</summary>
+        public static int RampGroup(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return -1;
+            var normalized = NormalizePath(path).ToLowerInvariant();
+            var leaf = Leaf(normalized);
+            var dot = leaf.IndexOf('.');
+            var stem = dot >= 0 ? leaf.Substring(0, dot) : leaf;
+
+            if (normalized.Contains("textures/terrain/ramps/")) return 0;
+            if (normalized.Contains("textures/lights/") && stem == "default_light_ramp") return 0;
+
+            const string engine = "textures/engine/";
+            var engineAt = normalized.IndexOf(engine, StringComparison.Ordinal);
+            if (engineAt >= 0 && normalized.IndexOf('/', engineAt + engine.Length) < 0 && stem.StartsWith("waterramp", StringComparison.Ordinal))
+                return 1;
+
+            const string particles = "textures/particles/";
+            var particlesAt = normalized.IndexOf(particles, StringComparison.Ordinal);
+            if (particlesAt >= 0)
+            {
+                var rest = normalized.Substring(particlesAt + particles.Length);
+                if (rest.StartsWith("ramp/", StringComparison.Ordinal) || stem.Contains("ramp")) return 2;
+            }
+
+            if (normalized.Contains("textures/terrain/water/") && stem.StartsWith("wave_animation", StringComparison.Ordinal)) return 3;
+            return -1;
+        }
 
         // The only textures cataloged from textures/Engine/ — the folder holds
         // many engine-internal files a mapmaker never picks, but these six are

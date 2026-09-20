@@ -537,6 +537,14 @@ public static class SC2RuntimeTerrainPersistence
         public float TilingScale;
         public float SimplifyRatio;
 
+        // Export-only material settings and the Ramp/Environment slots. ExtrasStored tells a save that has them
+        // from an older one where JsonUtility left these at zero/empty (so AlphaTestThreshold is not read as 0).
+        public bool ExtrasStored;
+        public string State, ShaderFile, ShaderPrefix;
+        public float TextureScrollX, TextureScrollY, AlphaTestThreshold;
+        public string RampPath, RampSourceTag, EnvironmentPath, EnvironmentSourceTag;
+        public bool RampForceExport, EnvironmentForceExport;
+
         // These
         // 6 fields used to hold this PAIR's own full copy of the mask/baked-
         // lighting bytes — but multiple pairs routinely SHARE one
@@ -767,6 +775,19 @@ public static class SC2RuntimeTerrainPersistence
                 ShaderFlags = flagDtos,
                 TilingScale = p.TilingScale,
                 SimplifyRatio = p.SimplifyRatio,
+                ExtrasStored = true,
+                State = p.State ?? "",
+                ShaderFile = p.ShaderFile ?? "",
+                ShaderPrefix = p.ShaderPrefix ?? "",
+                TextureScrollX = p.TextureScroll.x,
+                TextureScrollY = p.TextureScroll.y,
+                AlphaTestThreshold = p.AlphaTestThreshold,
+                RampPath = p.RampPath ?? "",
+                RampSourceTag = p.RampSourceTag ?? "",
+                RampForceExport = p.RampForceExport,
+                EnvironmentPath = p.EnvironmentPath ?? "",
+                EnvironmentSourceTag = p.EnvironmentSourceTag ?? "",
+                EnvironmentForceExport = p.EnvironmentForceExport,
                 // Deliberately left at their C# defaults (null/0) — the
                 // real bytes now live once in dto.RnmMaskSets above,
                 // resolved by RnmMaskName on load. See PairDto's own doc
@@ -924,7 +945,18 @@ public static class SC2RuntimeTerrainPersistence
                 RnmBakedRgb0 = maskSet?.BakedRgb0 ?? p.RnmBakedRgb0 ?? Array.Empty<byte>(),
                 RnmBakedRgb1 = maskSet?.BakedRgb1 ?? p.RnmBakedRgb1 ?? Array.Empty<byte>(),
                 RnmBakedRgb2 = maskSet?.BakedRgb2 ?? p.RnmBakedRgb2 ?? Array.Empty<byte>(),
-                RnmBakedShadowAlpha = maskSet?.BakedShadowAlpha ?? p.RnmBakedShadowAlpha ?? Array.Empty<byte>()
+                RnmBakedShadowAlpha = maskSet?.BakedShadowAlpha ?? p.RnmBakedShadowAlpha ?? Array.Empty<byte>(),
+                State = p.ExtrasStored ? p.State ?? "" : "",
+                ShaderFile = p.ExtrasStored ? p.ShaderFile ?? "" : "",
+                ShaderPrefix = p.ExtrasStored ? p.ShaderPrefix ?? "" : "",
+                TextureScroll = p.ExtrasStored ? new Vector2(p.TextureScrollX, p.TextureScrollY) : Vector2.zero,
+                AlphaTestThreshold = p.ExtrasStored ? p.AlphaTestThreshold : 16f,
+                RampPath = p.ExtrasStored ? p.RampPath ?? "" : "",
+                RampSourceTag = p.ExtrasStored ? p.RampSourceTag ?? "" : "",
+                RampForceExport = p.ExtrasStored && p.RampForceExport,
+                EnvironmentPath = p.ExtrasStored ? p.EnvironmentPath ?? "" : "",
+                EnvironmentSourceTag = p.ExtrasStored ? p.EnvironmentSourceTag ?? "" : "",
+                EnvironmentForceExport = p.ExtrasStored && p.EnvironmentForceExport,
             });
         }
 

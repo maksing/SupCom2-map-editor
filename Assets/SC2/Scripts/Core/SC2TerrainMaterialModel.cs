@@ -102,6 +102,13 @@ public class SC2CostsBlockData
     // using the default terrain shader — see SC2MaterialPresets.cs).
     public string ShaderFile="";
     public string ShaderPrefix="";
+    // The pair's Ramp (terrain.bdf material texture slot 8) and Environment (slot 11) textures. The path is the
+    // real in-game path written to the bdf; the source tag ("archive:<entry>") remembers which game archive
+    // entry a browser pick came from, so "copy into map on export" can find the file again.
+    public string RampPath="", RampSourceTag="";
+    public bool RampForceExport;
+    public string EnvironmentPath="", EnvironmentSourceTag="";
+    public bool EnvironmentForceExport;
     [NonSerialized] public Texture2D RnmMaskTexture;
     public byte[] RnmMaskBytes=Array.Empty<byte>();
     public int MaskWidth=2048, MaskHeight=2048;

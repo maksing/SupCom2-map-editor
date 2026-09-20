@@ -213,6 +213,17 @@ public sealed class SC2TerrainUndoStack
                     MaskHeight = p.MaskHeight,
                     TilingScale = p.TilingScale,
                     SimplifyRatio = p.SimplifyRatio,
+                    State = p.State,
+                    TextureScroll = p.TextureScroll,
+                    AlphaTestThreshold = p.AlphaTestThreshold,
+                    ShaderFile = p.ShaderFile,
+                    ShaderPrefix = p.ShaderPrefix,
+                    RampPath = p.RampPath,
+                    RampSourceTag = p.RampSourceTag,
+                    RampForceExport = p.RampForceExport,
+                    EnvironmentPath = p.EnvironmentPath,
+                    EnvironmentSourceTag = p.EnvironmentSourceTag,
+                    EnvironmentForceExport = p.EnvironmentForceExport,
                     // This clone list predated
                     // RNM lighting bake and was never extended
                     // for it — any Undo/Redo (Apply replaces data.Pairs

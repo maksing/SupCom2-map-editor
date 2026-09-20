@@ -618,6 +618,10 @@ public class SC2PairsMode
         EditorGUILayout.LabelField("Shader Flags", EditorStyles.boldLabel);
         if (pair.ShaderFlags == null || pair.ShaderFlags.Count == 0)
             pair.ShaderFlags = DefaultFlags();
+        // A pair saved with an older, shorter flag list (9 of the 13) would otherwise never show the rest
+        // (GLOW, ENVIRONMENT_MAPPING, INFINITE_DISTANCE, ALPHA_TEST); a preset could not set them either.
+        if (AddMissingFlags(pair.ShaderFlags))
+            EditorUtility.SetDirty(Data);
 
         EditorGUI.indentLevel++;
         foreach (var flag in pair.ShaderFlags)
@@ -691,10 +695,27 @@ public class SC2PairsMode
             pair.ShaderPrefix = preset.ShaderPrefix;
             if (preset.Flags.TryGetValue("ALPHA_TEST", out var alphaTestOn) && alphaTestOn)
                 pair.AlphaTestThreshold = preset.AlphaTestThreshold;
+            // A preset's Ramp / Environment textures only fill a slot that is still empty; a texture the
+            // user already picked is never replaced.
+            if (!string.IsNullOrEmpty(preset.RampPath) && string.IsNullOrEmpty(pair.RampPath))
+            {
+                pair.RampPath = preset.RampPath;
+                pair.RampSourceTag = "";
+                pair.RampForceExport = false;
+            }
+            if (!string.IsNullOrEmpty(preset.EnvironmentPath) && string.IsNullOrEmpty(pair.EnvironmentPath))
+            {
+                pair.EnvironmentPath = preset.EnvironmentPath;
+                pair.EnvironmentSourceTag = "";
+                pair.EnvironmentForceExport = false;
+            }
         }
         EditorGUILayout.EndHorizontal();
         if (!string.IsNullOrEmpty(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description))
             EditorGUILayout.HelpBox(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description, MessageType.None);
+
+        EditorGUILayout.Space(6);
+        DrawPairRampAndEnvironment(pair, i);
 
         EditorGUILayout.Space(6);
         // ── State + Texture Scroll ───────────────────────────────────────
@@ -733,6 +754,90 @@ public class SC2PairsMode
         }
     }
 
+    private struct PairTextureCache { public string Path; public Texture Texture; }
+    private readonly Dictionary<string, PairTextureCache> _pairTextureCache = new();
+
+    /// <summary>The pair's Ramp (terrain.bdf material slot 8) and Environment (slot 11) textures; export-only, like
+    /// the State and Texture Scroll below (the live preview does not draw them).</summary>
+    private void DrawPairRampAndEnvironment(SC2MaterialPair pair, int i)
+    {
+        EditorGUILayout.LabelField("Ramp / Environment Textures", EditorStyles.boldLabel);
+        if (DrawPairTextureSlot("Ramp", i, pair.RampPath, pair.RampSourceTag, pair.RampForceExport,
+                out var rampPath, out var rampTag, out var rampForce))
+        {
+            _win.RecordUndoCheckpointFor(Data, "Change Pair Ramp Texture");
+            pair.RampPath = rampPath; pair.RampSourceTag = rampTag; pair.RampForceExport = rampForce;
+            EditorUtility.SetDirty(Data);
+            _win.MarkDirtyAndRepaint();
+        }
+        if (DrawPairTextureSlot("Environment", i, pair.EnvironmentPath, pair.EnvironmentSourceTag, pair.EnvironmentForceExport,
+                out var envPath, out var envTag, out var envForce))
+        {
+            _win.RecordUndoCheckpointFor(Data, "Change Pair Environment Texture");
+            pair.EnvironmentPath = envPath; pair.EnvironmentSourceTag = envTag; pair.EnvironmentForceExport = envForce;
+            EditorUtility.SetDirty(Data);
+            _win.MarkDirtyAndRepaint();
+        }
+
+        var environmentMapping = false;
+        if (pair.ShaderFlags != null)
+            foreach (var flag in pair.ShaderFlags)
+                if (flag.Key == "ENVIRONMENT_MAPPING") environmentMapping = flag.Value;
+        if (environmentMapping && string.IsNullOrEmpty(pair.EnvironmentPath))
+            SC2TerrainShell.DrawUnifiedNote("ENVIRONMENT_MAPPING is on but no Environment texture is set.");
+        else if (!environmentMapping && !string.IsNullOrEmpty(pair.EnvironmentPath))
+            SC2TerrainShell.DrawUnifiedNote("The Environment texture has no effect while ENVIRONMENT_MAPPING is off.");
+    }
+
+    /// <summary>One texture-path slot of a pair: thumbnail picker (opens the texture browser), editable game
+    /// path, and the "copy into map on export" opt-in for a vanilla archive texture. Returns true when anything
+    /// changed; the caller records the undo checkpoint and stores the new values.</summary>
+    private bool DrawPairTextureSlot(string label, int pairIndex, string path, string sourceTag, bool forceExport,
+        out string newPath, out string newTag, out bool newForce)
+    {
+        // The key doubles as the browser-session id and picks the browser's starting filter (":Ramp" opens in the
+        // Ramp category, a key containing "env" filters to Environment textures); keep both words intact.
+        var key = "PairTex" + Data.GetInstanceID() + "-" + pairIndex + ":" + label;
+        path ??= "";
+        if (!_pairTextureCache.TryGetValue(key, out var cached) || cached.Path != path)
+        {
+            cached = new PairTextureCache
+            {
+                Path = path,
+                Texture = path.Length > 0 ? SC2TerrainMaterialFactory.LoadTexturePublicAny(path) : null,
+            };
+            _pairTextureCache[key] = cached;
+        }
+
+        var pathDraft = path;
+        var picked = SC2TerrainShell.DrawTexturePickerWithPath(label, cached.Texture, key, ref pathDraft, out var viaBrowser);
+        newPath = path; newTag = sourceTag ?? ""; newForce = forceExport;
+        var changed = false;
+        if (viaBrowser)
+        {
+            // Store the clean game path (never the internal "archive:" tag) and keep the tag next to it, so the
+            // export can still copy the file when asked.
+            var tag = picked != null ? SC2TerrainMaterialFactory.TryGetResourcePath(picked) : null;
+            newPath = picked != null ? SC2TerrainMaterialFactory.ResolveGamePath(picked) : "";
+            newTag = tag != null && tag.StartsWith("archive:", StringComparison.Ordinal) ? tag : "";
+            newForce = false;
+            changed = newPath != path || newTag != (sourceTag ?? "");
+            _pairTextureCache[key] = new PairTextureCache { Path = newPath, Texture = picked };
+        }
+        else if (pathDraft != path)
+        {
+            newPath = pathDraft; newTag = ""; newForce = false;
+            changed = true;
+        }
+
+        if (SC2VanillaArchiveClassifier.TagMatchesGamePath(newTag, newPath) && SC2VanillaArchiveClassifier.IsVanillaSlotPath(newTag))
+        {
+            var force = GUILayout.Toggle(newForce, "Copy into map on export");
+            if (force != newForce) { newForce = force; changed = true; }
+        }
+        return changed;
+    }
+
     /// <summary>Same lazy-creation reasoning as
     /// SC2MaterialsMode.EnsureMaterialDocument — nothing keeps
     /// SC2MapDocument.Terrain.MaterialPairs synced with live
@@ -762,6 +867,23 @@ public class SC2PairsMode
         var result = EditorGUILayout.Popup($"pair-{pairIndex}-{label}-material", cur + 1, names, SC2UiScale.PopupStyle()) - 1;
         EditorGUILayout.EndHorizontal();
         return result;
+    }
+
+    /// <summary>Appends every flag of the full set that <paramref name="flags"/> lacks, switched off (a flag absent from
+    /// the list was never exported, so off keeps the pair exactly as it was). Returns true when anything was added.</summary>
+    private static bool AddMissingFlags(List<SC2ShaderFlag> flags)
+    {
+        var added = false;
+        foreach (var (key, _) in kShaderFlags)
+        {
+            var present = false;
+            foreach (var f in flags)
+                if (f.Key == key) { present = true; break; }
+            if (present) continue;
+            flags.Add(new SC2ShaderFlag { Key = key, Value = false });
+            added = true;
+        }
+        return added;
     }
 
     private static List<SC2ShaderFlag> DefaultFlags()

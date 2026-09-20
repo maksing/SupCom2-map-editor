@@ -39,5 +39,17 @@ namespace SC2.MapEditor.Document
         public List<SC2ShaderFlag> ShaderFlags = new();
         public SC2HfieldContribution HfieldContribution = SC2HfieldContribution.InheritLayer;
         public string RnmSetId = "";
+
+        // Export-only material settings of the pair (terrain.bdf material State / TextureScroll / shader file and
+        // prefix / ALPHA_TEST threshold) and its Ramp and Environment textures (material slots 8 and 11).
+        public string State = "";
+        public Vector2 TextureScroll = Vector2.zero;
+        public float AlphaTestThreshold = 16f;
+        public string ShaderFile = "";
+        public string ShaderPrefix = "";
+        public string RampPath = "", RampSourceTag = "";
+        public bool RampForceExport;
+        public string EnvironmentPath = "", EnvironmentSourceTag = "";
+        public bool EnvironmentForceExport;
     }
 }

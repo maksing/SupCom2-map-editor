@@ -236,6 +236,17 @@ namespace SC2.MapEditor.Document
                 SimplifyRatio = p.SimplifyRatio,
                 ShaderFlags = new List<SC2ShaderFlag>(p.ShaderFlags ?? new List<SC2ShaderFlag>()),
                 RnmSetId = rnmSetId,
+                State = p.State ?? "",
+                TextureScroll = p.TextureScroll,
+                AlphaTestThreshold = p.AlphaTestThreshold,
+                ShaderFile = p.ShaderFile ?? "",
+                ShaderPrefix = p.ShaderPrefix ?? "",
+                RampPath = p.RampPath ?? "",
+                RampSourceTag = p.RampSourceTag ?? "",
+                RampForceExport = p.RampForceExport,
+                EnvironmentPath = p.EnvironmentPath ?? "",
+                EnvironmentSourceTag = p.EnvironmentSourceTag ?? "",
+                EnvironmentForceExport = p.EnvironmentForceExport,
             };
         }
 

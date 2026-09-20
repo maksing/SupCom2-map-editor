@@ -219,7 +219,7 @@ public sealed class SC2TextureCatalog
         foreach (var entryInfo in reader.Entries)
         {
             var path = entryInfo.NormalizedPath;
-            var inScope = SC2TextureCatalogEntry.IsEngineTexturePath(path);
+            var inScope = SC2TextureCatalogEntry.IsEngineTexturePath(path) || SC2TextureCatalogEntry.RampGroup(path) >= 0;
             foreach (var prefix in AllowedTextureFolderPrefixes)
                 if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { inScope = true; break; }
             if (!inScope) continue;
@@ -345,11 +345,22 @@ public sealed class SC2TextureCatalog
         foreach (var entry in _entries) _byId[entry.Id] = entry;
     }
 
+    private static string EntryPath(SC2TextureCatalogEntry entry) =>
+        !string.IsNullOrEmpty(entry.ResourcePath) ? entry.ResourcePath : entry.ArchiveEntryPath;
+
     private static int CompareEntries(SC2TextureCatalogEntry a, SC2TextureCatalogEntry b)
     {
         var source = a.Source.CompareTo(b.Source);
         if (source != 0) return source;
         var category = string.Compare(a.Category, b.Category, StringComparison.OrdinalIgnoreCase);
-        return category != 0 ? category : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        if (category != 0) return category;
+        // Ramps are listed by kind first (terrain ramps, water ramps, particle ramps, water animation), not
+        // just alphabetically.
+        if (string.Equals(a.Category, SC2TextureCatalogEntry.RampCategory, StringComparison.OrdinalIgnoreCase))
+        {
+            var group = SC2TextureCatalogEntry.RampGroup(EntryPath(a)).CompareTo(SC2TextureCatalogEntry.RampGroup(EntryPath(b)));
+            if (group != 0) return group;
+        }
+        return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
     }
 }

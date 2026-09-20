@@ -37,10 +37,14 @@ public sealed class SC2MaterialPreset
     /// <summary>Only meaningful when Flags["ALPHA_TEST"] is true.</summary>
     public float AlphaTestThreshold = 16f;
     public Vector2 TextureScroll = Vector2.zero;
+    /// <summary>Ramp / Environment textures the preset fills into a pair's still-empty slots ("" = leave alone).</summary>
+    public string RampPath = "";
+    public string EnvironmentPath = "";
 
     private static SC2MaterialPreset Build(string name, string description, string state,
         string[] trueFlags, string shaderFile = "", string shaderPrefix = "",
-        float alphaTestThreshold = 16f, float scrollX = 0f, float scrollY = 0f)
+        float alphaTestThreshold = 16f, float scrollX = 0f, float scrollY = 0f,
+        string rampPath = "", string environmentPath = "")
     {
         var preset = new SC2MaterialPreset
         {
@@ -51,6 +55,8 @@ public sealed class SC2MaterialPreset
             State = state,
             AlphaTestThreshold = alphaTestThreshold,
             TextureScroll = new Vector2(scrollX, scrollY),
+            RampPath = rampPath,
+            EnvironmentPath = environmentPath,
         };
         // All 12 real flags default false; only the preset's own list is set true.
         foreach (var key in new[]
@@ -80,7 +86,10 @@ public sealed class SC2MaterialPreset
         Build("Environment mapping", "Environment mapping from corvana chasm", "",
             new[] { "AMBIENT_LIGHTING", "DIFFUSE_LIGHTING", "SPECULAR_LIGHTING", "GLOW",
                      "ENVIRONMENT_MAPPING", "RNM_LIGHTING", "BLENDING", "FOG", "DYNAMIC_SHADOWS",
-                     "REFLECT", "CHROMATIC_DISPERSION" }),
+                     "REFLECT", "CHROMATIC_DISPERSION" },
+            // What the vanilla materials with this flag set use most (Metal ramp + the default environment cube).
+            rampPath: "/textures/Terrain/Ramps/Metal_001_Ramps.dds",
+            environmentPath: "/textures/environment/DefaultEnvCube.dds"),
 
         Build("Clouds", "clouds from corvana chasm", "TerrainAlphaBlendState",
             new[] { "INFINITE_DISTANCE", "FOG", "DYNAMIC_SHADOWS", "REFLECT", "CHROMATIC_DISPERSION" }),

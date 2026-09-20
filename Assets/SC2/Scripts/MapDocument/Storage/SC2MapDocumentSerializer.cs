@@ -1155,6 +1155,18 @@ namespace SC2.MapEditor.Document
             o.Set("shaderFlags", flags);
             o.Set("hfieldContribution", SC2JsonValue.Of(p.HfieldContribution.ToString()));
             o.Set("rnmSetId", SC2JsonValue.Of(p.RnmSetId));
+            o.Set("state", SC2JsonValue.Of(p.State ?? ""));
+            o.Set("textureScrollX", SC2JsonValue.Of(p.TextureScroll.x));
+            o.Set("textureScrollY", SC2JsonValue.Of(p.TextureScroll.y));
+            o.Set("alphaTestThreshold", SC2JsonValue.Of(p.AlphaTestThreshold));
+            o.Set("shaderFile", SC2JsonValue.Of(p.ShaderFile ?? ""));
+            o.Set("shaderPrefix", SC2JsonValue.Of(p.ShaderPrefix ?? ""));
+            o.Set("rampPath", SC2JsonValue.Of(p.RampPath ?? ""));
+            o.Set("rampSourceTag", SC2JsonValue.Of(p.RampSourceTag ?? ""));
+            o.Set("rampForceExport", SC2JsonValue.Of(p.RampForceExport));
+            o.Set("environmentPath", SC2JsonValue.Of(p.EnvironmentPath ?? ""));
+            o.Set("environmentSourceTag", SC2JsonValue.Of(p.EnvironmentSourceTag ?? ""));
+            o.Set("environmentForceExport", SC2JsonValue.Of(p.EnvironmentForceExport));
             return o;
         }
 
@@ -1171,6 +1183,17 @@ namespace SC2.MapEditor.Document
                 SimplifyRatio = (float)o.Get("simplifyRatio").AsDouble(0),
                 HfieldContribution = ParseEnum(o.Get("hfieldContribution"), SC2HfieldContribution.InheritLayer),
                 RnmSetId = o.Get("rnmSetId").AsString(""),
+                State = o.Get("state").AsString("") ?? "",
+                TextureScroll = new Vector2((float)o.Get("textureScrollX").AsDouble(0), (float)o.Get("textureScrollY").AsDouble(0)),
+                AlphaTestThreshold = (float)o.Get("alphaTestThreshold").AsDouble(16),
+                ShaderFile = o.Get("shaderFile").AsString("") ?? "",
+                ShaderPrefix = o.Get("shaderPrefix").AsString("") ?? "",
+                RampPath = o.Get("rampPath").AsString("") ?? "",
+                RampSourceTag = o.Get("rampSourceTag").AsString("") ?? "",
+                RampForceExport = o.Get("rampForceExport").AsBool(false),
+                EnvironmentPath = o.Get("environmentPath").AsString("") ?? "",
+                EnvironmentSourceTag = o.Get("environmentSourceTag").AsString("") ?? "",
+                EnvironmentForceExport = o.Get("environmentForceExport").AsBool(false),
             };
             foreach (var fo in o.Get("shaderFlags").Items())
                 p.ShaderFlags.Add(new SC2ShaderFlag { Key = fo.Get("key").AsString(""), Value = fo.Get("value").AsBool(true) });

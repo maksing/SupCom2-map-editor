@@ -184,6 +184,17 @@ namespace SC2.MapEditor.Document
                     RnmBakedRgb1 = bakedRgb1,
                     RnmBakedRgb2 = bakedRgb2,
                     RnmBakedShadowAlpha = bakedShadowAlpha,
+                    State = p.State ?? "",
+                    TextureScroll = p.TextureScroll,
+                    AlphaTestThreshold = p.AlphaTestThreshold,
+                    ShaderFile = p.ShaderFile ?? "",
+                    ShaderPrefix = p.ShaderPrefix ?? "",
+                    RampPath = p.RampPath ?? "",
+                    RampSourceTag = p.RampSourceTag ?? "",
+                    RampForceExport = p.RampForceExport,
+                    EnvironmentPath = p.EnvironmentPath ?? "",
+                    EnvironmentSourceTag = p.EnvironmentSourceTag ?? "",
+                    EnvironmentForceExport = p.EnvironmentForceExport,
                 });
             }
 
