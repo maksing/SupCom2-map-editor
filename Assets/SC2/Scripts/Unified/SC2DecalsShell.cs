@@ -21,7 +21,16 @@ public sealed class SC2DecalsShell : IDisposable
     private Texture2D _diffuseAtlas;
     private Texture2D _normalAtlas;
     private GameObject _previewRoot;
-    private Mesh _previewMesh;
+    // One mesh object per placement (children of _previewRoot): an edit rebuilds the meshes of
+    // the placements it changed instead of merging every placement's vertices into one mesh
+    // and re-uploading it, which took most of a second on a map with many decals.
+    private sealed class PlacementMesh
+    {
+        public GameObject Object;
+        public Mesh Mesh;
+        public MeshRenderer Renderer;
+    }
+    private readonly Dictionary<string, PlacementMesh> _placementMeshes = new();
     private Material _previewMaterial;
     private long _renderedRevision = -1;
     private int _renderedTerrainVersion = -1;
@@ -31,6 +40,12 @@ public sealed class SC2DecalsShell : IDisposable
     // single terrain edit, most of which are nowhere near most decals).
     private readonly Dictionary<string, (List<DecalVertex> Vertices, List<int> Indices)> _placementFragmentCache = new();
     private readonly HashSet<string> _dirtyPlacementIds = new();
+    // What each cached fragment was built from (a clone of the placement, taken when the
+    // fragment was built), and the atlas/entry signature all of them share. An authored
+    // edit is diffed against this so that only the placements it actually changed are
+    // rebuilt — a full rebuild of every placement costs seconds on a map with many decals.
+    private readonly Dictionary<string, SC2DecalPlacement> _fragmentSources = new();
+    private string _builtEntriesSignature;
     private int _selectedEntry = -1;
     private int _selectedPlacement = -1;
     private bool _placementsExpanded = true;
@@ -304,28 +319,58 @@ public sealed class SC2DecalsShell : IDisposable
         DrawPlacementList(w);
     }
 
+    private const float PlacementRowHeight = 36f;
+    private const float PlacementListMaxHeight = 360f;
+    private Vector2 _placementListScroll;
+    private List<int> _placementListOrder;
+    private long _placementListOrderRevision = -1;
+    private int _placementListOrderCount = -1;
+
+    // Sorting every placement on every GUI event was pure overhead; the order only changes
+    // with an authored edit, which always bumps the document revision.
+    private List<int> PlacementListOrder()
+    {
+        if (_placementListOrder == null || _placementListOrderRevision != _session.Document.Revision || _placementListOrderCount != Doc.Placements.Count)
+        {
+            var entryNames = new Dictionary<string, string>();
+            foreach (var e in Doc.Entries) if (e?.Id != null) entryNames[e.Id] = e.Name ?? "";
+            _placementListOrder = Enumerable.Range(0, Doc.Placements.Count)
+                .OrderBy(i => entryNames.TryGetValue(Doc.Placements[i].AtlasEntryId ?? "", out var n) ? n : "", StringComparer.OrdinalIgnoreCase)
+                .ThenBy(i => Doc.Placements[i].Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _placementListOrderRevision = _session.Document.Revision;
+            _placementListOrderCount = Doc.Placements.Count;
+        }
+        return _placementListOrder;
+    }
+
     // Was a bare "● Name" / "○ Name" button per row —
     // hard to scan on a map with many decals, no visual confirmation of
     // which atlas shape a row actually refers to. Same thumbnail lookup
     // Catalog already uses (AtlasUv), plus position/size so a row is
     // identifiable without having to select it first.
+    //
+    // Grouped by decal type (the catalog entry each placement uses), not raw placement order —
+    // a list of INDICES is sorted, since _selectedPlacement/symmetry-group logic elsewhere all
+    // index into the document's own placement order, which must stay untouched. Only the rows
+    // inside the visible part of a fixed-height scroll view are drawn: laying out and drawing a
+    // row for every placement on every GUI event made the whole editor lag on maps with many
+    // decals.
     private void DrawPlacementList(float w)
     {
-        // Grouped by decal type (the catalog entry each placement uses),
-        // not raw placement order — a map with many decals scattered across
-        // several types used to interleave them in whatever order they were
-        // placed, making it hard to find every instance of one type. Sorts
-        // a list of INDICES rather than Doc.Placements itself, since
-        // _selectedPlacement/symmetry-group logic elsewhere all index into
-        // the document's own placement order, which must stay untouched.
-        var order = Enumerable.Range(0, Doc.Placements.Count)
-            .OrderBy(i => Doc.Entries.FirstOrDefault(e => e.Id == Doc.Placements[i].AtlasEntryId)?.Name ?? "", StringComparer.OrdinalIgnoreCase)
-            .ThenBy(i => Doc.Placements[i].Name, StringComparer.OrdinalIgnoreCase);
-        foreach (var i in order)
+        var order = PlacementListOrder();
+        if (order.Count == 0) return;
+        var viewHeight = Mathf.Min(order.Count * PlacementRowHeight, PlacementListMaxHeight);
+        _placementListScroll = GUILayout.BeginScrollView(_placementListScroll, GUILayout.Width(w - 8), GUILayout.Height(viewHeight + 4f));
+        var content = GUILayoutUtility.GetRect(w - 30f, order.Count * PlacementRowHeight);
+        var first = Mathf.Clamp(Mathf.FloorToInt(_placementListScroll.y / PlacementRowHeight), 0, order.Count - 1);
+        var last = Mathf.Min(order.Count - 1, Mathf.CeilToInt((_placementListScroll.y + viewHeight) / PlacementRowHeight));
+        for (var row = first; row <= last; row++)
         {
+            var i = order[row];
             var p = Doc.Placements[i];
-            GUILayout.BeginHorizontal(GUI.skin.box, GUILayout.Width(w - 8));
-            var thumb = GUILayoutUtility.GetRect(32, 32, GUILayout.Width(32), GUILayout.Height(32));
+            var rowRect = new Rect(content.x, content.y + row * PlacementRowHeight, content.width, PlacementRowHeight - 2f);
+            var thumb = new Rect(rowRect.x, rowRect.y, 32f, 32f);
             var entry = Doc.Entries.FirstOrDefault(e => e.Id == p.AtlasEntryId);
             if (entry != null && _diffuseAtlas != null) GUI.DrawTextureWithTexCoords(thumb, _diffuseAtlas, AtlasUv(entry), true);
             else GUI.Box(thumb, "");
@@ -333,9 +378,9 @@ public sealed class SC2DecalsShell : IDisposable
             var label = $"{(i == _selectedPlacement ? "● " : "○ ")}{p.Name}\n({pos[0]:0.#}, {pos[2]:0.#})  {p.Width:0.#}x{p.Length:0.#}" + (p.Enabled ? "" : "  [disabled]");
             // Selecting a placement arms Edit mode — see the Mode field's
             // own doc comment.
-            if (GUILayout.Button(label, GUILayout.Height(32), GUILayout.ExpandWidth(true))) { _selectedPlacement = i; _mode = InteractionMode.Edit; }
-            GUILayout.EndHorizontal();
+            if (GUI.Button(new Rect(rowRect.x + 36f, rowRect.y, rowRect.width - 36f, 32f), label)) { _selectedPlacement = i; _mode = InteractionMode.Edit; }
         }
+        GUILayout.EndScrollView();
     }
 
     public void OnGameViewGUI(Camera camera, Rect viewport, Vector2 mouse, bool allowInput)
@@ -343,7 +388,7 @@ public sealed class SC2DecalsShell : IDisposable
         if (Doc == null || camera == null) return;
         EnsurePreview();
         if (_atlasWindowOpen) return;
-        DrawPlacementOutlines(camera);
+        DrawPlacementOutlines(camera, viewport);
         if (Event.current == null) return;
         var evt = Event.current;
         if (_transformMode != DecalTransformMode.None)
@@ -826,8 +871,11 @@ public sealed class SC2DecalsShell : IDisposable
         }
     }
 
-    private void DrawPlacementOutlines(Camera camera)
+    private void DrawPlacementOutlines(Camera camera, Rect viewport)
     {
+        // Only a Repaint draws; Layout/mouse events used to project every placement for nothing.
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+        var margin = 24f;
         for (var i = 0; i < Doc.Placements.Count; i++)
         {
             var stored = Doc.Placements[i];
@@ -836,6 +884,7 @@ public sealed class SC2DecalsShell : IDisposable
             if (!p.Enabled) continue;
             var c = new Vector3(p.Position[0], p.Position[1], p.Position[2]);
             var s = SC2TopViewMirror.WorldToGui(camera, c); if (s.z <= 0) continue;
+            if (s.x < -margin || s.x > Screen.width + margin || s.y < -margin || s.y > Screen.height + margin) continue;
             var selected = i == _selectedPlacement;
             // A plain 10x10 box, same size as every unselected one and only
             // differing by color, is hard to notice as selected. A real
@@ -1050,8 +1099,9 @@ public sealed class SC2DecalsShell : IDisposable
         if (previewDocument.AtlasWidth <= 0 || previewDocument.AtlasHeight <= 0)
         {
             _placementFragmentCache.Clear();
-            if (_previewMesh != null) { UnityEngine.Object.Destroy(_previewMesh); _previewMesh = null; }
-            if (_previewRoot != null) _previewRoot.GetComponent<MeshFilter>().sharedMesh = null;
+            _fragmentSources.Clear();
+            _builtEntriesSignature = null;
+            ClearPlacementMeshes();
             Doc.VertexCount = 0; Doc.IndexCount = 0;
             if (_transformPreview == null) Doc.SpatialState = SC2DecalsSpatialState.Current;
             _renderedRevision = _session.Document.Revision; _renderedTransformVersion = _transformVersion; _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
@@ -1082,11 +1132,24 @@ public sealed class SC2DecalsShell : IDisposable
         // since it can change literally anything (added/removed/reordered
         // placements, atlas entries, etc.) with no cheap way to know just
         // what changed.
-        var fullRebuild = revisionChanged || _placementFragmentCache.Count == 0;
+        // An authored edit (Commit/Undo/Redo) is diffed against what each fragment was built from,
+        // so only the placements it changed (added, edited, moved) are rebuilt and deleted ones
+        // dropped. Everything is rebuilt when there is no baseline yet, when the atlas/entries
+        // changed, or when an edit coincides with a terrain change (its dirty set is unknown).
+        var entriesSignature = SC2DecalPreviewDiff.EntriesSignature(previewDocument);
+        var haveBaseline = _fragmentSources.Count > 0 && entriesSignature == _builtEntriesSignature;
+        var fullRebuild = !haveBaseline || (revisionChanged && terrainChanged);
         HashSet<string> toRebuild = null;
+        var removedIds = new List<string>();
         if (!fullRebuild)
         {
             toRebuild = new HashSet<string>();
+            if (revisionChanged)
+            {
+                var diff = SC2DecalPreviewDiff.Compute(previewDocument, _fragmentSources);
+                toRebuild.UnionWith(diff.Rebuild);
+                removedIds = diff.Removed;
+            }
             if (transformChanged)
             {
                 if (_transformPreview != null && _selectedPlacement >= 0 && _selectedPlacement < previewDocument.Placements.Count
@@ -1098,13 +1161,10 @@ public sealed class SC2DecalsShell : IDisposable
                         foreach (var p in previewDocument.Placements)
                             if (p?.Id != null && p.SymmetryGroupId == dragged.SymmetryGroupId) toRebuild.Add(p.Id);
                 }
-                else
+                else if (!revisionChanged)
                 {
-                    // transformVersion changed with no active drag to scope
-                    // to — shouldn't normally happen (Commit/CancelTransform
-                    // both also bump the real document Revision, which
-                    // already forces fullRebuild above) — fall back to the
-                    // always-correct full rebuild rather than guess.
+                    // transformVersion changed with no active drag to scope to and no
+                    // authored edit to diff — fall back to the always-correct full rebuild.
                     fullRebuild = true;
                 }
             }
@@ -1112,11 +1172,12 @@ public sealed class SC2DecalsShell : IDisposable
                 foreach (var p in previewDocument.Placements)
                     if (p?.Id != null && _dirtyPlacementIds.Contains(p.Id)) toRebuild.Add(p.Id);
 
-            if (!fullRebuild && toRebuild.Count == 0)
+            if (!fullRebuild && toRebuild.Count == 0 && removedIds.Count == 0)
             {
-                // Nothing actually affected any decal (terrain changed
-                // nowhere near one) — nothing to rebuild; just record the
-                // new versions so this becomes a no-op again next call.
+                // Nothing actually affected any decal (terrain changed nowhere near one, or
+                // an edit that left every placement as it was) — just record the new
+                // versions so this becomes a no-op again next call.
+                _renderedRevision = _session.Document.Revision;
                 _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
                 _renderedTransformVersion = _transformVersion;
                 _dirtyPlacementIds.Clear();
@@ -1158,6 +1219,7 @@ public sealed class SC2DecalsShell : IDisposable
         {
             if (placement?.Id == null) continue;
             if (!fullRebuild && !toRebuild.Contains(placement.Id)) continue; // keep cached fragment as-is
+            _fragmentSources[placement.Id] = placement.Clone();
             if (!placement.Enabled || !entries.TryGetValue(placement.AtlasEntryId ?? "", out var entry))
             {
                 _placementFragmentCache.Remove(placement.Id);
@@ -1167,6 +1229,11 @@ public sealed class SC2DecalsShell : IDisposable
                 placement, entry, surfaceTriangles, previewDocument.AtlasWidth, previewDocument.AtlasHeight);
             rebuiltCount++;
         }
+        foreach (var id in removedIds)
+        {
+            _placementFragmentCache.Remove(id);
+            _fragmentSources.Remove(id);
+        }
         if (fullRebuild)
         {
             // Drop cache entries for placements no longer in this preview's
@@ -1175,35 +1242,93 @@ public sealed class SC2DecalsShell : IDisposable
             var liveIds = new HashSet<string>(previewDocument.Placements.Where(p => p?.Id != null).Select(p => p.Id));
             foreach (var staleId in _placementFragmentCache.Keys.Where(id => !liveIds.Contains(id)).ToList())
                 _placementFragmentCache.Remove(staleId);
+            foreach (var staleId in _fragmentSources.Keys.Where(id => !liveIds.Contains(id)).ToList())
+                _fragmentSources.Remove(staleId);
+            _builtEntriesSignature = entriesSignature;
         }
         var swBuildMs = swBuild.ElapsedMilliseconds;
         SC2Log.Log($"[SC2DecalsShell] EnsurePreview rebuild: placements={previewDocument.Placements.Count}, rebuilt={rebuiltCount}, surfaceTriangles={surfaceTriangles.Count}, Collect={swCollectMs}ms, GeometryBuilder.Build={swBuildMs}ms");
 
-        // Merge every placement's cached (freshly rebuilt or reused)
-        // fragment into one combined model — SC2DecalsBdfImporter.BuildMesh
-        // still wants one flat Mesh for the whole document.
-        var model = new DecalsModel { DiffuseAtlasPath = previewDocument.DiffuseAtlasPath ?? "", NormalAtlasPath = previewDocument.NormalAtlasPath ?? "" };
-        foreach (var placement in previewDocument.Placements)
-        {
-            if (placement?.Id == null || !_placementFragmentCache.TryGetValue(placement.Id, out var fragment)) continue;
-            var baseIndex = model.Vertices.Count;
-            model.Vertices.AddRange(fragment.Vertices);
-            foreach (var idx in fragment.Indices) model.Indices.Add(baseIndex + idx);
-        }
-
+        // Update the mesh of every placement whose fragment was just rebuilt (or dropped); the
+        // others keep the mesh they already have.
+        var swMesh = System.Diagnostics.Stopwatch.StartNew();
         if (_previewRoot == null)
         {
             _previewRoot = new GameObject("SC2_Decals_AuthoredPreview") { hideFlags = HideFlags.DontSave };
             _previewRoot.AddComponent<SC2DecalAuthoredPreviewMarker>();
-            _previewRoot.AddComponent<MeshFilter>(); _previewRoot.AddComponent<MeshRenderer>();
         }
-        if (_previewMesh != null) UnityEngine.Object.Destroy(_previewMesh);
-        _previewMesh = SC2DecalsBdfImporter.BuildMesh(model); _previewRoot.GetComponent<MeshFilter>().sharedMesh = _previewMesh;
-        EnsureMaterial(); _previewRoot.GetComponent<MeshRenderer>().sharedMaterial = _previewMaterial;
-        Doc.VertexCount = model.Vertices.Count; Doc.IndexCount = model.Indices.Count;
+        EnsureMaterial();
+        var touchedIds = new List<string>();
+        if (fullRebuild)
+        {
+            foreach (var placement in previewDocument.Placements)
+                if (placement?.Id != null) touchedIds.Add(placement.Id);
+            var liveMeshIds = new HashSet<string>(touchedIds);
+            foreach (var staleId in _placementMeshes.Keys.Where(id => !liveMeshIds.Contains(id)).ToList())
+                RemovePlacementMesh(staleId);
+        }
+        else
+        {
+            touchedIds.AddRange(toRebuild);
+            touchedIds.AddRange(removedIds);
+        }
+        foreach (var id in touchedIds)
+        {
+            if (_placementFragmentCache.TryGetValue(id, out var fragment) && fragment.Vertices.Count > 0)
+                SetPlacementMesh(id, fragment.Vertices, fragment.Indices);
+            else
+                RemovePlacementMesh(id);
+        }
+        // Decals blend without depth writes, so overlapping ones are ordered by the renderer's
+        // sorting order — keep it the placement order the single merged mesh used to have.
+        var order = 0;
+        var vertexCount = 0; var indexCount = 0;
+        foreach (var placement in previewDocument.Placements)
+        {
+            if (placement?.Id == null) { order++; continue; }
+            if (_placementMeshes.TryGetValue(placement.Id, out var pm) && pm.Renderer != null)
+            {
+                var sorting = Mathf.Min(order, short.MaxValue);
+                if (pm.Renderer.sortingOrder != sorting) pm.Renderer.sortingOrder = sorting;
+            }
+            if (_placementFragmentCache.TryGetValue(placement.Id, out var frag)) { vertexCount += frag.Vertices.Count; indexCount += frag.Indices.Count; }
+            order++;
+        }
+        var swMeshMs = swMesh.ElapsedMilliseconds;
+        SC2Log.Log($"[SC2DecalsShell] EnsurePreview meshes: updated={touchedIds.Count}, Meshes={swMeshMs}ms");
+        Doc.VertexCount = vertexCount; Doc.IndexCount = indexCount;
         if (_transformPreview == null) Doc.SpatialState = SC2DecalsSpatialState.Current;
         _renderedRevision = _session.Document.Revision; _renderedTransformVersion = _transformVersion; _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
         _dirtyPlacementIds.Clear();
+    }
+
+    private void SetPlacementMesh(string id, List<DecalVertex> vertices, List<int> indices)
+    {
+        if (!_placementMeshes.TryGetValue(id, out var pm))
+        {
+            var go = new GameObject("Decal") { hideFlags = HideFlags.DontSave };
+            go.transform.SetParent(_previewRoot.transform, false);
+            go.AddComponent<MeshFilter>();
+            pm = new PlacementMesh { Object = go, Renderer = go.AddComponent<MeshRenderer>() };
+            _placementMeshes[id] = pm;
+        }
+        if (pm.Mesh != null) UnityEngine.Object.Destroy(pm.Mesh);
+        pm.Mesh = SC2DecalsBdfImporter.BuildMesh(vertices, indices);
+        pm.Object.GetComponent<MeshFilter>().sharedMesh = pm.Mesh;
+        pm.Renderer.sharedMaterial = _previewMaterial;
+    }
+
+    private void RemovePlacementMesh(string id)
+    {
+        if (!_placementMeshes.TryGetValue(id, out var pm)) return;
+        if (pm.Mesh != null) UnityEngine.Object.Destroy(pm.Mesh);
+        if (pm.Object != null) UnityEngine.Object.Destroy(pm.Object);
+        _placementMeshes.Remove(id);
+    }
+
+    private void ClearPlacementMeshes()
+    {
+        foreach (var id in _placementMeshes.Keys.ToList()) RemovePlacementMesh(id);
     }
 
     // Keyed on the blob's ContentHash (falling back to the plain path when
@@ -1557,7 +1682,7 @@ public sealed class SC2DecalsShell : IDisposable
     }
     public void Dispose()
     {
-        if (_previewRoot != null) UnityEngine.Object.Destroy(_previewRoot); if (_previewMesh != null) UnityEngine.Object.Destroy(_previewMesh); if (_previewMaterial != null) UnityEngine.Object.Destroy(_previewMaterial);
+        ClearPlacementMeshes(); if (_previewRoot != null) UnityEngine.Object.Destroy(_previewRoot); if (_previewMaterial != null) UnityEngine.Object.Destroy(_previewMaterial);
     }
 }
 

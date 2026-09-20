@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
@@ -96,9 +97,11 @@ public static class SC2DecalsBdfImporter
     ///   TangentXform1    -> UV2 (Vector3)            (BINORMAL — no built-in
     ///                                                  Mesh channel for it)
     /// </summary>
-    public static Mesh BuildMesh(DecalsModel model)
+    public static Mesh BuildMesh(DecalsModel model) => BuildMesh(model.Vertices, model.Indices);
+
+    public static Mesh BuildMesh(List<DecalVertex> vertices, List<int> indices)
     {
-        var count = model.Vertices.Count;
+        var count = vertices.Count;
         var positions = new Vector3[count];
         var normals = new Vector3[count];
         var tangents = new Vector4[count];
@@ -108,7 +111,7 @@ public static class SC2DecalsBdfImporter
 
         for (var i = 0; i < count; i++)
         {
-            var v = model.Vertices[i];
+            var v = vertices[i];
             positions[i] = new Vector3(v.PositionX, v.PositionY, v.PositionZ);
             texCoord0[i] = new Vector3(v.TexCoordX, v.TexCoordY, v.TexCoordZ);
             scaleOffset[i] = new Vector4(v.ScaleOffsetX, v.ScaleOffsetY, v.ScaleOffsetZ, v.ScaleOffsetW);
@@ -128,7 +131,7 @@ public static class SC2DecalsBdfImporter
         mesh.SetUVs(0, texCoord0);
         mesh.SetUVs(1, scaleOffset);
         mesh.SetUVs(2, binormals);
-        mesh.triangles = model.Indices.ToArray();
+        mesh.triangles = indices.ToArray();
         mesh.RecalculateBounds();
         return mesh;
     }
