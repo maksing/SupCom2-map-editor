@@ -722,6 +722,28 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _terrainShell?.InvalidateLiveHeightGrid();
     }
 
+    /// <summary>World bounds of an imported terrain object (all its renderers), or null without any.</summary>
+    private static Bounds? ImportedEntryBounds(SC2ImportedTerrainEntry entry)
+    {
+        if (entry?.Root == null) return null;
+        Bounds? result = null;
+        foreach (var renderer in entry.Root.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null) continue;
+            if (result.HasValue) { var b = result.Value; b.Encapsulate(renderer.bounds); result = b; }
+            else result = renderer.bounds;
+        }
+        return result;
+    }
+
+    /// <summary>Tells Objects and Decals that the ground under an imported terrain object changed
+    /// (moved / rotated / scaled / Undo), so anchored objects and aligned decals re-sample it.</summary>
+    private void NotifyImportedTerrainChanged(Bounds? before, Bounds? after)
+    {
+        if (_terrainShell == null || (!before.HasValue && !after.HasValue)) return;
+        _terrainShell.NotifyImportedTerrainMoved(before ?? after.Value, after ?? before.Value);
+    }
+
     private void ApplyImportedTerrainsSnapshot(ImportedTerrainsSnapshot snap)
     {
         SC2ImportedTerrainEntry FindEntry(GameObject root) =>
@@ -730,15 +752,21 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         var rebuilt = new List<SC2ImportedTerrainEntry>();
         var removed = new List<SC2ImportedTerrainEntry>();
+        var movedRegions = new List<(Bounds? Before, Bounds? After)>();
         foreach (var s in snap.Entries)
         {
             if (s.Root == null) continue;
             var entry = FindEntry(s.Root);
             if (entry == null) continue; // shouldn't happen — Root identity is always tracked in one of the two lists
 
-            entry.Root.transform.position = s.Position;
-            entry.Root.transform.eulerAngles = s.EulerAngles;
-            entry.Root.transform.localScale = s.Scale;
+            var boundsBefore = ImportedEntryBounds(entry);
+            var rootTransform = entry.Root.transform;
+            var transformChanged = rootTransform.position != s.Position || rootTransform.eulerAngles != s.EulerAngles
+                || rootTransform.localScale != s.Scale || entry.Root.activeSelf != s.Active;
+            rootTransform.position = s.Position;
+            rootTransform.eulerAngles = s.EulerAngles;
+            rootTransform.localScale = s.Scale;
+            if (transformChanged) movedRegions.Add((boundsBefore, ImportedEntryBounds(entry)));
             if (entry.OriginalMaterials != null)
                 for (var i = 0; i < entry.OriginalMaterials.Length && i < s.Materials.Count; i++)
                 {
@@ -763,6 +791,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // terrain objects exist/are active and their transforms - the live
         // height grid needs to reflect that on the next paint.
         _terrainShell?.InvalidateLiveHeightGrid();
+        foreach (var (before, after) in movedRegions) NotifyImportedTerrainChanged(before, after);
     }
 
     private void ImportedTerrainsUndo()
@@ -3403,6 +3432,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // Geometry-mode sculpting instead of only ever re-snapping once
             // at import time.
             _terrainShell.HeightBrushApplied += (center, radius) => _objectsShell?.ReprojectAnchoredObjectsInRadius(center, radius);
+            // Same for a moved imported terrain object (its old and new region).
+            _terrainShell.ImportedTerrainMoved += bounds => _objectsShell?.ReprojectAnchoredObjectsInBounds(bounds);
         }
     }
 
@@ -5818,6 +5849,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         EditorGUILayout.LabelField("Transform", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
         var t = entry.Root.transform;
         var prevPos = t.position; var prevEuler = t.eulerAngles; var prevScale = t.localScale;
+        var boundsBeforeEdit = ImportedEntryBounds(entry);
         t.position = DrawUndoableVector3Field(entry.Root, "Position", t.position, width);
         var euler = DrawUndoableVector3Field(entry.Root, "Rotation", t.eulerAngles, width);
         if (euler != t.eulerAngles) t.eulerAngles = euler;
@@ -5828,7 +5860,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // terrain edits/import add-remove, which already invalidate it
         // elsewhere).
         if (t.position != prevPos || t.eulerAngles != prevEuler || t.localScale != prevScale)
+        {
             _terrainShell?.InvalidateLiveHeightGrid();
+            NotifyImportedTerrainChanged(boundsBeforeEdit, ImportedEntryBounds(entry));
+        }
         EditorGUILayout.Space(6);
 
         // Per-material Collision2-only exclusion for decorative embedded

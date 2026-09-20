@@ -961,14 +961,27 @@ public sealed class SC2ObjectsShell
     /// once-after-import reprojection above.</summary>
     public void ReprojectAnchoredObjectsInRadius(Vector3 center, float radius)
     {
-        if (Data == null) return;
         var r2 = radius * radius;
-        var touched = false;
-        bool InRadius(Vector3 pos)
+        ReprojectAnchoredObjectsWhere(pos =>
         {
             var dx = pos.x - center.x; var dz = pos.z - center.z;
             return dx * dx + dz * dz <= r2;
-        }
+        });
+    }
+
+    /// <summary>Wired to SC2TerrainShell.ImportedTerrainMoved: the ground under the given world
+    /// X/Z rectangle changed because an imported terrain object was moved, so every anchored object
+    /// inside it re-samples the ground (a prop that sat on the moved object drops back to the terrain
+    /// below, and one now under it climbs onto it).</summary>
+    public void ReprojectAnchoredObjectsInBounds(Bounds bounds)
+    {
+        ReprojectAnchoredObjectsWhere(pos => pos.x >= bounds.min.x && pos.x <= bounds.max.x && pos.z >= bounds.min.z && pos.z <= bounds.max.z);
+    }
+
+    private void ReprojectAnchoredObjectsWhere(Func<Vector3, bool> InRadius)
+    {
+        if (Data == null) return;
+        var touched = false;
         foreach (var p in Data.ObjProps)
         {
             if (!p.AnchorToTerrain || !InRadius(p.Position)) continue;

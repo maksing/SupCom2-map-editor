@@ -25,6 +25,8 @@ public sealed partial class SC2GameViewEditorUI
         // the placements a stroke actually reached, instead of redoing
         // every placement's own Collect+GeometryBuilder work on every edit.
         _terrainShell.HeightBrushApplied += (center, radius) => _decalsShell?.MarkPreviewDirtyInRadius(center, radius);
+        // Moving an imported terrain object changes the ground under its old and new region.
+        _terrainShell.ImportedTerrainMoved += bounds => _decalsShell?.ReprojectDecalsInBounds(bounds);
     }
 
     private void DrawDecalsInspector()

@@ -1634,6 +1634,40 @@ public sealed class SC2DecalsShell : IDisposable
     /// regardless of this set, since either can touch placements this
     /// radius check has no way to know about (e.g. a whole symmetry group
     /// moving together).</summary>
+    /// <summary>Wired to SC2TerrainShell.ImportedTerrainMoved: an imported terrain object was moved, so
+    /// the decals in its old and new X/Z region must follow the ground. AlignToSurface decals re-sample
+    /// the merged (procedural + imported) height grid for their height and normal, and every placement
+    /// whose footprint reaches the region gets its preview fragment rebuilt (the surface it is projected
+    /// onto changed even for a decal that is not aligned).</summary>
+    public void ReprojectDecalsInBounds(Bounds bounds)
+    {
+        if (Doc?.Placements == null || _terrainShell == null) return;
+        _terrainShell.RefreshLiveHeightGridImmediate();
+        const float eps = 0.5f;
+        var repaint = false;
+        foreach (var p in Doc.Placements)
+        {
+            if (p?.Id == null || p.Position == null || p.Position.Length < 3) continue;
+            var x = p.Position[0]; var z = p.Position[2];
+            var halfDiag = 0.5f * Mathf.Sqrt(p.Width * p.Width + p.Length * p.Length);
+            if (x < bounds.min.x - halfDiag || x > bounds.max.x + halfDiag || z < bounds.min.z - halfDiag || z > bounds.max.z + halfDiag) continue;
+            _dirtyPlacementIds.Add(p.Id);
+            repaint = true;
+
+            var inside = x >= bounds.min.x && x <= bounds.max.x && z >= bounds.min.z && z <= bounds.max.z;
+            if (!p.AlignToSurface || !inside) continue;
+            p.Position[1] = _terrainShell.SampleLiveHeightGrid(x, z) + p.HeightOffset;
+            var hL = _terrainShell.SampleLiveHeightGrid(x - eps, z);
+            var hR = _terrainShell.SampleLiveHeightGrid(x + eps, z);
+            var hD = _terrainShell.SampleLiveHeightGrid(x, z - eps);
+            var hU = _terrainShell.SampleLiveHeightGrid(x, z + eps);
+            var normal = new Vector3(hL - hR, 2f * eps, hD - hU).normalized;
+            if (p.SurfaceNormal == null || p.SurfaceNormal.Length < 3) p.SurfaceNormal = new float[3];
+            p.SurfaceNormal[0] = normal.x; p.SurfaceNormal[1] = normal.y; p.SurfaceNormal[2] = normal.z;
+        }
+        if (repaint) RepaintHost?.Invoke();
+    }
+
     public void MarkPreviewDirtyInRadius(Vector3 center, float radius)
     {
         if (Doc?.Placements == null) return;

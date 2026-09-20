@@ -765,6 +765,24 @@ public class SC2TerrainShell : ScriptableObject
     /// once right after an import.</summary>
     public System.Action<Vector3, float> HeightBrushApplied;
 
+    /// <summary>Fired once for the OLD and once for the NEW world region (X/Z rectangle) of an imported
+    /// terrain object whose transform was edited (or restored by Undo/Redo): the ground under that region
+    /// changed, so anchored Objects and aligned Decals there must re-sample it — the same job
+    /// HeightBrushApplied does for sculpting, which imported geometry never triggers.</summary>
+    public System.Action<Bounds> ImportedTerrainMoved;
+
+    /// <summary>Call after an imported terrain object's transform changed. Drops the cached height grid
+    /// and lets the colliders pick up the new transform (a raycast right after a move would otherwise
+    /// still hit the old position) before subscribers re-sample the ground.</summary>
+    public void NotifyImportedTerrainMoved(Bounds before, Bounds after)
+    {
+        InvalidateLiveHeightGrid();
+        Physics.SyncTransforms();
+        BumpTerrainGeometryVersion();
+        ImportedTerrainMoved?.Invoke(before);
+        ImportedTerrainMoved?.Invoke(after);
+    }
+
     // ── Undo / Redo ──────────────────────────────────────────────────────────
     // Custom stack instead of UnityEditor.Undo: see SC2TerrainUndoStack for why
     // (it's a no-op outside the Editor, and never covered brush sculpting even
