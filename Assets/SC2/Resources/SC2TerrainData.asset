@@ -66233,6 +66233,8 @@ MonoBehaviour:
     Rotation: {x: 0, y: 0, z: 0, w: 1}
     Scale: 1
     Flags: 0
+    RenderPriority: 1
+    RenderPriorityStored: 1
     AnchorToTerrain: 1
     HeightOffset: 0
   ObjMarkers:
