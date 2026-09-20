@@ -6343,7 +6343,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             return;
         if (SC2Hotkeys.Matches("Global.Undo", e)) { UndoTerrainEdit(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.Redo", e)) { RedoTerrainEdit(); e.Use(); return; }
-        if (SC2Hotkeys.Matches("Global.Save", e)) { SaveActiveTerrain(); e.Use(); }
+        if (SC2Hotkeys.Matches("Global.Save", e)) { SaveActiveTerrain(); e.Use(); return; }
+        if (SC2Hotkeys.Matches("Global.Export", e)) { ExportMapFromHotkey(); e.Use(); }
+    }
+
+    /// <summary>The Export hotkey: the Export tab's Export button, from any tab.</summary>
+    private void ExportMapFromHotkey()
+    {
+        EnsureExportShell();
+        var started = _exportShell.RunExport(result => SetStatus(string.IsNullOrEmpty(result) ? "Export finished." : result));
+        SetStatus(started ? "Exporting map..." : "Export not started: no map loaded, or the previous export is still rendering its minimap.");
     }
 
     private void HandleHotkeys()

@@ -65,14 +65,25 @@ public sealed class SC2ExportShell
         GUILayout.EndVertical();
     }
 
-    private void DrawSmartExportTab()
+    private SC2ExportPanel ExportPanel()
     {
         if (_exportPanel == null || _exportPanelForData != Data)
         {
             _exportPanel = new SC2ExportPanel(_terrainShell, Data);
             _exportPanelForData = Data;
         }
-        _exportPanel.DrawPanel();
+        return _exportPanel;
+    }
+
+    private void DrawSmartExportTab() => ExportPanel().DrawPanel();
+
+    /// <summary>The Export hotkey: the same export as the Export tab's Export button (same output folder
+    /// and options), from any tab. Returns false when there is nothing to export or an earlier export's
+    /// minimap render is still running.</summary>
+    public bool RunExport(System.Action<string> onFinished)
+    {
+        if (!IsReady) return false;
+        return ExportPanel().RunExport(onFinished);
     }
 
     private void DrawReportTab(float w)

@@ -49,6 +49,7 @@ public static class SC2HotkeyActions
         new SC2HotkeyAction("Global.Undo", "Undo", SC2HotkeyCategory.Global, Key(KeyCode.Z, ctrl: true)),
         new SC2HotkeyAction("Global.Redo", "Redo", SC2HotkeyCategory.Global, Key(KeyCode.Y, ctrl: true), Key(KeyCode.Z, ctrl: true, shift: true)),
         new SC2HotkeyAction("Global.Save", "Save", SC2HotkeyCategory.Global, Key(KeyCode.S, ctrl: true)),
+        new SC2HotkeyAction("Global.Export", "Export map", SC2HotkeyCategory.Global, Key(KeyCode.E, ctrl: true)),
         new SC2HotkeyAction("Global.MeasureTool", "Switch to Measure tool", SC2HotkeyCategory.Global, Key(KeyCode.M)),
         new SC2HotkeyAction("Global.FocusCamera", "Focus camera on selection/map", SC2HotkeyCategory.Global, Key(KeyCode.F)),
         new SC2HotkeyAction("Global.ResetView", "Reset camera view", SC2HotkeyCategory.Global, Key(KeyCode.Home)),

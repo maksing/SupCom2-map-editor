@@ -259,31 +259,7 @@ public sealed class SC2ExportPanel
         var guiEnabledBeforeExport = GUI.enabled;
         GUI.enabled = guiEnabledBeforeExport && !exportPending;
         if (GUILayout.Button(exportPending ? "Rendering minimap..." : "Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f))))
-        {
-            _win.SaveTerrainState(writeAssets: false);
-            System.IO.Directory.CreateDirectory(_exportDir);
-            _lastExportResult = "Rendering minimap...";
-            var data = Data;
-            var exportDir = _exportDir;
-            var debugSaveCostsImages = _debugSaveCostsImages;
-            var session = _win.Session;
-            var exportAsArchives = _exportAsArchives;
-            // Minimap must be rendered fresh (see SC2MapPreviewCapture's own
-            // doc comment for why this can't be a synchronous call right
-            // here) before the real, otherwise-unchanged ExportCorrect call
-            // below — everything captured into this closure is a plain
-            // local, unaffected by DrawPanelContent running again next frame.
-            SC2MapPreviewCapture.RequestMinimapCapture(data, tex =>
-            {
-                byte[] minimapDds = null;
-                if (tex != null)
-                {
-                    minimapDds = SC2DdsEncoder.BuildDxt1SingleMip(SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.ToRgbBytes(tex));
-                    UnityEngine.Object.DestroyImmediate(tex);
-                }
-                _lastExportResult = SC2TerrainExporter.ExportCorrect(data, exportDir, importedTerrains, debugSaveCostsImages, session, exportAsArchives, minimapDds);
-            });
-        }
+            RunExport();
         GUI.enabled = guiEnabledBeforeExport;
 
         // An additive path sitting beside Export above,
@@ -307,6 +283,41 @@ public sealed class SC2ExportPanel
             EditorGUILayout.Space(4);
             SC2TerrainShell.DrawUnifiedNote(_lastExportResult);
         }
+    }
+
+    /// <summary>The "Export" button's action, also run by the Global.Export hotkey: saves the terrain state,
+    /// renders the minimap and writes the map to the chosen output folder. Does nothing while a minimap
+    /// capture from an earlier export is still pending. <paramref name="onFinished"/> receives the result
+    /// text (the same one the panel shows), so a caller without the panel on screen can report it.</summary>
+    public bool RunExport(System.Action<string> onFinished = null)
+    {
+        if (SC2MapPreviewCapture.IsCapturePending) return false;
+        _win.SaveTerrainState(writeAssets: false);
+        System.IO.Directory.CreateDirectory(_exportDir);
+        _lastExportResult = "Rendering minimap...";
+        var data = Data;
+        var exportDir = _exportDir;
+        var debugSaveCostsImages = _debugSaveCostsImages;
+        var session = _win.Session;
+        var exportAsArchives = _exportAsArchives;
+        var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
+        // Minimap must be rendered fresh (see SC2MapPreviewCapture's own
+        // doc comment for why this can't be a synchronous call right
+        // here) before the real, otherwise-unchanged ExportCorrect call
+        // below — everything captured into this closure is a plain
+        // local, unaffected by DrawPanelContent running again next frame.
+        SC2MapPreviewCapture.RequestMinimapCapture(data, tex =>
+        {
+            byte[] minimapDds = null;
+            if (tex != null)
+            {
+                minimapDds = SC2DdsEncoder.BuildDxt1SingleMip(SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.ToRgbBytes(tex));
+                UnityEngine.Object.DestroyImmediate(tex);
+            }
+            _lastExportResult = SC2TerrainExporter.ExportCorrect(data, exportDir, importedTerrains, debugSaveCostsImages, session, exportAsArchives, minimapDds);
+            onFinished?.Invoke(_lastExportResult);
+        });
+        return true;
     }
 
     private static string PairTriStr(SC2TerrainData data, int pairIdx)
