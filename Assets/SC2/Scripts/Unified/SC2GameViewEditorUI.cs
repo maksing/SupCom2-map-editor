@@ -237,6 +237,36 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // is used to sample it. Session-only, not saved into SC2TerrainData.
     private Texture2D _referenceOverlayTex;
     private bool _showReferenceOverlay;
+
+    private const string ReferenceOpacityPrefKey = "SC2.GameView.ReferenceOpacity";
+    private float _referenceOpacity = -1f; // -1 = not loaded from PlayerPrefs yet
+
+    /// <summary>How much of the reference image covers the selected view mode on the map, 0..1 (1 = it fully
+    /// replaces the view). Remembered between editor sessions, not stored in the map.</summary>
+    private float ReferenceOpacity
+    {
+        get
+        {
+            if (_referenceOpacity < 0f) _referenceOpacity = Mathf.Clamp01(PlayerPrefs.GetFloat(ReferenceOpacityPrefKey, 1f));
+            return _referenceOpacity;
+        }
+        set
+        {
+            var clamped = Mathf.Clamp01(value);
+            if (_referenceOpacity >= 0f && Mathf.Approximately(clamped, _referenceOpacity)) return;
+            _referenceOpacity = clamped;
+            PlayerPrefs.SetFloat(ReferenceOpacityPrefKey, _referenceOpacity);
+            PlayerPrefs.Save();
+            ApplyReferenceOverlayState();
+        }
+    }
+
+    // Percent slider shared by the View menu and the right panel.
+    private void DrawReferenceOpacitySlider(string key)
+    {
+        var percent = SC2EnvFieldGui.Slider("Opacity (%)", ReferenceOpacity * 100f, 0f, 100f, key);
+        ReferenceOpacity = Mathf.Clamp(percent, 0f, 100f) / 100f;
+    }
     private bool _showFileMenu;
     private bool _showEditMenu;
     private bool _showViewMenu;
@@ -2221,12 +2251,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             GUILayout.Label("REFERENCE IMAGE", _dropdownSectionLabelStyle);
             if (GUILayout.Button(_referenceOverlayTex != null ? "Change Reference Image..." : "Load Reference Image...", GUILayout.Height(SC2UiScale.Pxf(26f))))
                 LoadReferenceImage();
-            var nextShowReference = GUILayout.Toggle(_showReferenceOverlay, "Show Reference (overrides view)", _dropdownToggleStyle);
+            var nextShowReference = GUILayout.Toggle(_showReferenceOverlay, "Show Reference on map", _dropdownToggleStyle);
             if (nextShowReference != _showReferenceOverlay)
             {
                 _showReferenceOverlay = nextShowReference;
                 ApplyReferenceOverlayState();
             }
+            DrawReferenceOpacitySlider("ReferenceOpacityMenu");
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -2799,8 +2830,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             GUILayout.Label("REFERENCE IMAGE", _dropdownSectionLabelStyle, GUILayout.MaxWidth(contentWidth));
             if (GUILayout.Button(_referenceOverlayTex != null ? "Change..." : "Load...", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.MaxWidth(contentWidth)))
                 LoadReferenceImage();
-            var nextFloating = GUILayout.Toggle(_showReferenceImageFloating, "Show", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
+            var nextFloating = GUILayout.Toggle(_showReferenceImageFloating, "Show in corner", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
             if (nextFloating != _showReferenceImageFloating) _showReferenceImageFloating = nextFloating;
+            var nextOnMap = GUILayout.Toggle(_showReferenceOverlay, "Show on map", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
+            if (nextOnMap != _showReferenceOverlay)
+            {
+                _showReferenceOverlay = nextOnMap;
+                ApplyReferenceOverlayState();
+            }
+            DrawReferenceOpacitySlider("ReferenceOpacityPanel");
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -4389,7 +4427,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var worldSize = data != null
             ? new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize))
             : new Vector2(1024f, 1024f);
-        runtime.SetReferenceOverlay(_referenceOverlayTex, _showReferenceOverlay, worldSize);
+        runtime.SetReferenceOverlay(_referenceOverlayTex, _showReferenceOverlay, worldSize, ReferenceOpacity);
     }
 
 #if !UNITY_EDITOR

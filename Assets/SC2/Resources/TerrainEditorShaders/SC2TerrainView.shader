@@ -69,6 +69,8 @@ Shader "Hidden/SC2/TerrainView"
         // means something else (a per-material/per-layer local UV).
         _ReferenceOverlayTex ("Reference Image Overlay", 2D) = "black" {}
         _ReferenceOverlayEnabled ("Reference Overlay Enabled", Int) = 0
+        // 1 = the reference fully replaces the preview; lower values blend it over the selected mode.
+        _ReferenceOverlayOpacity ("Reference Overlay Opacity", Range(0, 1)) = 1
     }
 
     SubShader
@@ -111,6 +113,14 @@ Shader "Hidden/SC2/TerrainView"
             int _MatCapPreset;
             sampler2D _ReferenceOverlayTex;
             int _ReferenceOverlayEnabled;
+            float _ReferenceOverlayOpacity;
+
+            // Blends the reference picture over a mode's finished colour (opacity < 1 only).
+            float4 ApplyReference(float4 sceneColor, float4 refCol)
+            {
+                if (_ReferenceOverlayEnabled == 0) return sceneColor;
+                return float4(lerp(sceneColor.rgb, refCol.rgb, _ReferenceOverlayOpacity), sceneColor.a);
+            }
 
             struct a2v
             {
@@ -467,13 +477,17 @@ Shader "Hidden/SC2/TerrainView"
 
             float4 frag(v2f i) : SV_Target
             {
-                // Reference image overlay (View menu) — returns immediately,
-                // before any other sampling/lighting below, so it always
-                // overrides every other preview mode as requested. See this
-                // property's own Properties-block comment for why uv1 is
-                // safe to use directly here.
+                // Reference image overlay (View menu). At full opacity it returns immediately, before any
+                // other sampling/lighting, so it overrides every other preview mode; below that it is
+                // blended over each mode's own result (ApplyReference). See this property's own
+                // Properties-block comment for why uv1 is safe to use directly here.
+                float4 refCol = float4(0, 0, 0, 1);
                 if (_ReferenceOverlayEnabled != 0)
-                    return tex2D(_ReferenceOverlayTex, saturate(i.uv1));
+                {
+                    refCol = tex2D(_ReferenceOverlayTex, saturate(i.uv1));
+                    if (_ReferenceOverlayOpacity >= 0.999)
+                        return refCol;
+                }
 
                 if (_PreviewMode == 3)
                 {
@@ -482,7 +496,7 @@ Shader "Hidden/SC2/TerrainView"
                     float3 c = s < .5
                         ? lerp(float3(.05, .85, .1), float3(.95, .85, 0), s * 2)
                         : lerp(float3(.95, .85, 0), float3(.9, .1, .05), (s - .5) * 2);
-                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(c, 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(c, 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
                 }
 
                 int pIdx = DecodePair(i.uv1);
@@ -493,11 +507,11 @@ Shader "Hidden/SC2/TerrainView"
                 if (_PreviewMode == 2)
                 {
                     half3 col = tex2D(_PairColorTex, SafeMapUV(i.uv1)).rgb;
-                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(col, i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(col, i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
                 }
 
                 if (unassigned)
-                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(UnassignedCheckerColor(i.uv0), i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(UnassignedCheckerColor(i.uv0), i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
 
                 half blend = tex2D(_BlendTex, SafeBlendUV(i.uv1)).a;
                 float ts = GetTiling(pIdx);
@@ -510,7 +524,7 @@ Shader "Hidden/SC2/TerrainView"
                 {
                     half3 c1 = tex2Dlod(_PairLUT, float4(LutUV(pIdx, .25), 0, 0)).rgb;
                     half3 c2 = tex2Dlod(_PairLUT, float4(LutUV(pIdx, .75), 0, 0)).rgb;
-                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(lerp(c1, c2, blend), i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(lerp(c1, c2, blend), i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
                 }
 
                 half3 d1;
@@ -530,7 +544,7 @@ Shader "Hidden/SC2/TerrainView"
                 if (_PreviewMode == 0)
                 {
                     half3 readableDiffuse = saturate(albedo * _TexturedBrightness);
-                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
                 }
 
                 // _HasRNM-style gate, matching the real game's own
@@ -551,7 +565,7 @@ Shader "Hidden/SC2/TerrainView"
                     float3 L2 = normalize(float3(0.5, 1.0, 0.3));
                     half ndl2 = abs(dot(nrm2, L2)) * 0.3 + 0.7;
                     half3 lit2 = albedo * ndl2;
-                    return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
                 }
 
                 // Real baked RNM lighting (SC2RnmBakeService) instead of a
@@ -608,7 +622,7 @@ Shader "Hidden/SC2/TerrainView"
                 const half RNM_CONTRAST = 2.2;
                 rnmColor = saturate((rnmColor - 0.5) * RNM_CONTRAST + 0.5);
                 half3 lit = albedo * rnmColor;
-                return ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1), i.uv0), i.uv0);
+                return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
             }
             ENDCG
         }

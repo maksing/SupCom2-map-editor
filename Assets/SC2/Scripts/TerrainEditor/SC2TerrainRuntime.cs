@@ -547,9 +547,10 @@ public class SC2TerrainRuntime : IDisposable
     /// normalize by — passed by the caller rather than assumed like Costs'
     /// own hardcoded 1024 default, so this stays correct on a differently-
     /// sized map.</summary>
-    public void SetReferenceOverlay(Texture overlayTex, bool enabled, Vector2 worldSize)
+    public void SetReferenceOverlay(Texture overlayTex, bool enabled, Vector2 worldSize, float opacity = 1f)
     {
         if (_sharedChunkMat == null) return;
+        _sharedChunkMat.SetFloat("_ReferenceOverlayOpacity", Mathf.Clamp01(opacity));
         if (overlayTex != null)
             _sharedChunkMat.SetTexture("_ReferenceOverlayTex", overlayTex);
         _sharedChunkMat.SetVector("_ReferenceOverlaySize", new Vector4(Mathf.Max(1f, worldSize.x), Mathf.Max(1f, worldSize.y), 0f, 0f));

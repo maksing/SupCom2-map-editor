@@ -163,6 +163,9 @@ Shader "SC2/Terrain"
         _ReferenceOverlayTex ("Reference Image Overlay", 2D) = "black" {}
         [Toggle] _ReferenceOverlayEnabled ("Reference Overlay Enabled", Float) = 0
         _ReferenceOverlaySize ("Reference Overlay World Size (X,Z)", Vector) = (1024, 1024, 0, 0)
+        // 1 = the reference fully replaces the render (see above); lower values blend it over the
+        // selected view mode, so that mode shows through.
+        _ReferenceOverlayOpacity ("Reference Overlay Opacity", Range(0, 1)) = 1
     }
 
     SubShader
@@ -224,6 +227,7 @@ Shader "SC2/Terrain"
             sampler2D _ReferenceOverlayTex;
             float   _ReferenceOverlayEnabled;
             float4  _ReferenceOverlaySize;
+            float   _ReferenceOverlayOpacity;
 
             // RNM базис: azimuth 0/120/240 deg, elevation 35.26 deg
             static const float3 RNM_BASIS_0 = float3( 0.8165,  0.0000,  0.5774);
@@ -414,19 +418,8 @@ Shader "SC2/Terrain"
                 return lerp(high, peak, (t - .75) / .25);
             }
 
-            fixed4 frag(Varyings i) : SV_Target
+            fixed4 fragScene(Varyings i)
             {
-                // Reference image overlay (View menu) — returns immediately,
-                // before any other sampling/lighting below, so it always
-                // overrides every other display mode as requested. See
-                // this property's own Properties-block comment for why
-                // world-space XZ is used here instead of i.uv2.
-                if (_ReferenceOverlayEnabled > 0.5)
-                {
-                    float2 refUv = saturate(i.worldPos.xz / max(_ReferenceOverlaySize.xy, 1.0));
-                    return tex2D(_ReferenceOverlayTex, refUv);
-                }
-
                 // Blend factor из alpha _RNMMask1
                 half blend = (_EnableBlending > 0.5) ? tex2D(_RNMMask1, i.uv2).a : 0.0h;
 
@@ -629,6 +622,25 @@ Shader "SC2/Terrain"
                 // re-plumbing the data.
 
                 return half4(color, outAlpha);
+            }
+
+            fixed4 frag(Varyings i) : SV_Target
+            {
+                // Reference image overlay (View menu). At full opacity it returns immediately,
+                // before any other sampling/lighting, so it overrides every other display mode;
+                // below that it is blended over the selected mode's own result. See this
+                // property's own Properties-block comment for why world-space XZ is used here
+                // instead of i.uv2.
+                if (_ReferenceOverlayEnabled > 0.5)
+                {
+                    float2 refUv = saturate(i.worldPos.xz / max(_ReferenceOverlaySize.xy, 1.0));
+                    fixed4 refCol = tex2D(_ReferenceOverlayTex, refUv);
+                    if (_ReferenceOverlayOpacity >= 0.999)
+                        return refCol;
+                    fixed4 scene = fragScene(i);
+                    return fixed4(lerp(scene.rgb, refCol.rgb, _ReferenceOverlayOpacity), scene.a);
+                }
+                return fragScene(i);
             }
             ENDCG
         }
