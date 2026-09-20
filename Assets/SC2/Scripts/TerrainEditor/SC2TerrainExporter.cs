@@ -1272,6 +1272,15 @@ public static class SC2TerrainExporter
             }
         }
 
+        // The baked point-cloud volumes only fit the box they were baked over: it goes into info.bdf, replacing
+        // whatever PointCloudOrigin/Size the Environment tab holds.
+        var hasPointCloud = data.PointCloudUpDds is { Length: > 0 } && data.PointCloudDownDds is { Length: > 0 };
+        if (hasPointCloud && data.PointCloudBoxSize.sqrMagnitude > 0f)
+        {
+            infoModel.PointCloudOriginX = data.PointCloudBoxOrigin.x; infoModel.PointCloudOriginY = data.PointCloudBoxOrigin.y; infoModel.PointCloudOriginZ = data.PointCloudBoxOrigin.z;
+            infoModel.PointCloudSizeX = data.PointCloudBoxSize.x; infoModel.PointCloudSizeY = data.PointCloudBoxSize.y; infoModel.PointCloudSizeZ = data.PointCloudBoxSize.z;
+        }
+
         var (infoData, infoOt) = InfoBdf.Serialize(infoModel, platform);
         var infoBytes = new BdfContainer { Platform = platform, Data = infoData, OffsetTable = infoOt, NumFiles = 1 }.Write(InfoBdf.Padding);
         SC2Log.Log("[SC2Exporter] info.bdf built.");
@@ -1370,6 +1379,18 @@ public static class SC2TerrainExporter
         // old "{safe}_0/1/2.win.dds" trio behind forever. rnmCache's keys
         // are the complete set of mask-name stems ExportRnmMaskByName
         // actually wrote/kept this run.
+        // Lighting Bake > Bake Point Cloud: the two unit-lighting volumes are written as baked.
+        if (hasPointCloud)
+        {
+            try
+            {
+                File.WriteAllBytes(Path.Combine(lightingDir, "pcloud_up.win.dds"), data.PointCloudUpDds);
+                File.WriteAllBytes(Path.Combine(lightingDir, "pcloud_down.win.dds"), data.PointCloudDownDds);
+                rnmCache["pcloud"] = "/maps/" + mapName + "/lighting/pcloud"; // keeps both files through the cleanup below
+            }
+            catch (Exception ex) { warnings.Add($"Point cloud: {ex.Message}"); }
+        }
+
         try
         {
             foreach (var existing in Directory.GetFiles(lightingDir))

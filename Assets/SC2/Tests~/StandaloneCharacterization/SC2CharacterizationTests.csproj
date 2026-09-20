@@ -103,6 +103,9 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2FlattenMath.cs" Link="Source\SC2FlattenMath.cs" />
     <!-- Sun direction -> where a cube's shadow falls (Environment > Sun preview). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SunShadowMath.cs" Link="Source\SC2SunShadowMath.cs" />
+    <!-- Point-cloud volume bake (pcloud_up / pcloud_down) and the DXT5 writer for it. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2PointCloudBaker.cs" Link="Source\SC2PointCloudBaker.cs" />
+    <Compile Include="$(SC2Root)\Scripts\SC2DdsEncoder.cs" Link="Source\SC2DdsEncoder.cs" />
     <!-- Cover-and-crop resize of an imported preview picture (Mathf only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ImageResample.cs" Link="Source\SC2ImageResample.cs" />
     <!-- The per-texel RNM mask rasteriser (TerrainModel/HfieldModel + UnityEngine value types only). -->

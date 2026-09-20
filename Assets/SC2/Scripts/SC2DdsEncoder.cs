@@ -36,7 +36,33 @@ public static class SC2DdsEncoder
         W4(r, 76, 32); W4(r, 80, 4);
         r[84] = (byte)'D'; r[85] = (byte)'X'; r[86] = (byte)'T'; r[87] = (byte)'5';
         W4(r, 108, 0x1000);
-        var off = 128;
+        EncodeDxt5Blocks(r, 128, w, h, rgb, alpha);
+        return r;
+    }
+
+    /// <summary>Single-level DXT5 volume texture (width x height x depth, no mips) with the header layout the
+    /// vanilla pcloud_up / pcloud_down files use (linear size = one slice, volume caps). Slices are stored one
+    /// after the other; <paramref name="rgb"/>[k] is w*h*3 bytes and <paramref name="alpha"/>[k] w*h bytes.</summary>
+    public static byte[] BuildDxt5Volume(int w, int h, int depth, byte[][] rgb, byte[][] alpha)
+    {
+        var sliceBytes = (w / 4) * (h / 4) * 16;
+        var r = new byte[128 + sliceBytes * depth];
+        r[0] = (byte)'D'; r[1] = (byte)'D'; r[2] = (byte)'S'; r[3] = (byte)' ';
+        // caps | height | width | pixel format | linear size | depth
+        W4(r, 4, 124); W4(r, 8, 0x00881007); W4(r, 12, (uint)h); W4(r, 16, (uint)w);
+        W4(r, 20, (uint)sliceBytes); W4(r, 24, (uint)depth); W4(r, 28, 0);
+        W4(r, 76, 32); W4(r, 80, 4);
+        r[84] = (byte)'D'; r[85] = (byte)'X'; r[86] = (byte)'T'; r[87] = (byte)'5';
+        W4(r, 108, 0x1000); W4(r, 112, 0x200000);
+        for (var k = 0; k < depth; k++)
+            EncodeDxt5Blocks(r, 128 + k * sliceBytes, w, h, rgb[k], alpha[k]);
+        return r;
+    }
+
+    private static void EncodeDxt5Blocks(byte[] r, int offset, int w, int h, byte[] rgb, byte[] alpha)
+    {
+        var bX = w / 4; var bY = h / 4;
+        var off = offset;
         var blockR = new int[16]; var blockG = new int[16]; var blockB = new int[16];
         for (var by = 0; by < bY; by++)
         for (var bx = 0; bx < bX; bx++)
@@ -73,7 +99,6 @@ public static class SC2DdsEncoder
             EncodeColorBlock(r, off, blockR, blockG, blockB);
             off += 8;
         }
-        return r;
     }
 
     private static void EncodeColorBlock(byte[] r, int off, int[] br, int[] bg, int[] bb)

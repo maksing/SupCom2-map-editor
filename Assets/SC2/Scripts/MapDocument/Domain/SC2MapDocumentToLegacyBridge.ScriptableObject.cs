@@ -77,6 +77,17 @@ namespace SC2.MapEditor.Document
 
             data.Collision2HeightOffset = ReconstructCollision2HeightOffset(document.Collision2);
             data.Collision2PolygonBudget = ReconstructCollision2PolygonBudget(document.Collision2);
+
+            data.PointCloudSkyColor = document.Terrain.PointCloudSkyColor;
+            data.PointCloudSkyIntensity = document.Terrain.PointCloudSkyIntensity;
+            data.PointCloudGroundReflection = document.Terrain.PointCloudGroundReflection;
+            data.PointCloudSkyInGround = document.Terrain.PointCloudSkyInGround;
+            data.PointCloudBlurTexels = document.Terrain.PointCloudBlurTexels;
+            data.PointCloudSunShadow = document.Terrain.PointCloudSunShadow;
+            data.PointCloudBoxOrigin = document.Terrain.PointCloudBoxOrigin;
+            data.PointCloudBoxSize = document.Terrain.PointCloudBoxSize;
+            data.PointCloudUpDds = NullIfEmpty(ReadBytes(blobStore, document.Terrain.PointCloudUp));
+            data.PointCloudDownDds = NullIfEmpty(ReadBytes(blobStore, document.Terrain.PointCloudDown));
             data.Collision2PreviewBytes = NullIfEmpty(ReadBytes(blobStore, document.Collision2.PreviewMeshBytes));
             data.CustomCollision2Bytes = NullIfEmpty(ReadBytes(blobStore, document.Collision2.CustomMeshBytes));
             data.UseCustomCollision2 = document.Collision2.UseCustomMesh && data.CustomCollision2Bytes != null;

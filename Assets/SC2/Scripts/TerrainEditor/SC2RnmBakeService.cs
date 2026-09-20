@@ -104,7 +104,7 @@ public static class SC2RnmBakeService
     /// background is disabled (hfield stays core-only, exactly as before
     /// this fix) or for a caller (BakeBackground) whose own geometry is
     /// already in that same local frame.</summary>
-    private static HfieldModel BuildShadowHfield(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains,
+    internal static HfieldModel BuildShadowHfield(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains,
         out Vector3 sharedOffset, out int mapX, out int mapY)
     {
         if (!coreData.BackgroundTerrainEnabled || coreData.BackgroundTerrainData == null)

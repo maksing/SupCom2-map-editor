@@ -1600,7 +1600,70 @@ public class SC2TerrainShell : ScriptableObject
             EditorGUILayout.LabelField(_bakeStatus, EditorStyles.miniLabel);
         DrawUnifiedNote("Manual trigger only — the shadow horizon-march is real per-texel work across up to 2048x2048 texels per mask, so it never runs silently on export. Also bakes the imported layers assigned to a mask below.");
 
+        DrawPointCloudBakeSection();
         DrawImportedRnmBakeSection();
+    }
+
+    // ── Lighting Bake > Point Cloud ─────────────────────────────────────────
+    // The two volumes (pcloud_up / pcloud_down) that light units from the map itself. Baked by its own button and
+    // kept on the terrain data; export writes the files. See SC2PointCloudBaker for what each channel holds.
+
+    private string _pointCloudStatus;
+
+    private void DrawPointCloudBakeSection()
+    {
+        EditorGUILayout.Space(10);
+        // Every control is held to the panel width, or the buttons run past the right edge.
+        var w = GetUnifiedContentWidth();
+        DrawUnifiedSectionLabel("Point Cloud (unit lighting)");
+        DrawUnifiedNote("Bakes the volumes that light units from the map: sun shadow from the terrain, sky light, and light bounced up from the ground (uses the baked RNM lighting - run Bake Lighting first). Terrain only; props are not included. The box below replaces PointCloudOrigin/Size in info.bdf at export.");
+
+        var boxSet = _data.PointCloudBoxSize.x >= 1f && _data.PointCloudBoxSize.y >= 1f && _data.PointCloudBoxSize.z >= 1f;
+        var origin = SC2EnvFieldGui.Vector3Field("Box Origin", _data.PointCloudBoxOrigin, "pcloud.origin");
+        var size = SC2EnvFieldGui.Vector3Field("Box Size", _data.PointCloudBoxSize, "pcloud.size");
+        if (origin != _data.PointCloudBoxOrigin || size != _data.PointCloudBoxSize)
+        {
+            _data.PointCloudBoxOrigin = origin;
+            _data.PointCloudBoxSize = new Vector3(Mathf.Max(0f, size.x), Mathf.Max(0f, size.y), Mathf.Max(0f, size.z));
+            EditorUtility.SetDirty(_data);
+        }
+        if (GUILayout.Button(boxSet ? "Fit Box To Map" : "Fit Box To Map (not set yet)", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(22f))))
+        {
+            SC2PointCloudBakeService.FitBox(_data, GetImportedTerrainsForExport?.Invoke(), out var fitOrigin, out var fitSize);
+            _data.PointCloudBoxOrigin = fitOrigin;
+            _data.PointCloudBoxSize = fitSize;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+
+        EditorGUILayout.Space(4);
+        var sky = SC2EnvFieldGui.ColorField("Sky Color", _data.PointCloudSkyColor, "pcloud.sky", hdr: false, showAlpha: false);
+        if (sky != _data.PointCloudSkyColor) { _data.PointCloudSkyColor = sky; EditorUtility.SetDirty(_data); }
+        _data.PointCloudSkyIntensity = DrawCompactSlider("Sky Intensity", _data.PointCloudSkyIntensity, 0f, 2f, "pcloud:skyIntensity");
+        _data.PointCloudGroundReflection = DrawCompactSlider("Ground Reflection", _data.PointCloudGroundReflection, 0f, 2f, "pcloud:reflection");
+        _data.PointCloudSkyInGround = DrawCompactSlider("Sky In Lower Light", _data.PointCloudSkyInGround, 0f, 1f, "pcloud:skyInGround");
+        _data.PointCloudBlurTexels = DrawCompactSlider("Ground Blur Per Slice", _data.PointCloudBlurTexels, 0f, 8f, "pcloud:blur");
+        var sunShadow = GUILayout.Toggle(_data.PointCloudSunShadow, "Sun shadow from the terrain", GUILayout.Width(w), GUILayout.MaxWidth(w));
+        if (sunShadow != _data.PointCloudSunShadow) { _data.PointCloudSunShadow = sunShadow; EditorUtility.SetDirty(_data); }
+
+        EditorGUILayout.Space(4);
+        if (GUILayout.Button("Bake Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(24f))))
+        {
+            _pointCloudStatus = SC2PointCloudBakeService.Bake(_data, GetImportedTerrainsForExport?.Invoke(), Session);
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        var baked = _data.PointCloudUpDds != null && _data.PointCloudDownDds != null;
+        if (baked && GUILayout.Button("Remove Baked Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(20f))))
+        {
+            _data.PointCloudUpDds = null;
+            _data.PointCloudDownDds = null;
+            _pointCloudStatus = "Removed - export writes no point cloud (the game then lights units with nothing from the map).";
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote(!string.IsNullOrEmpty(_pointCloudStatus) ? _pointCloudStatus : (baked ? "A point cloud is baked and will be exported." : "No point cloud baked yet."));
+        DrawUnifiedNote("Manual trigger only. PointCloudLightAmount (how strongly units use it in-game) is on the Environment tab. Not part of undo.");
     }
 
     // ── Lighting Bake > Imported Objects ────────────────────────────────────

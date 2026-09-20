@@ -880,6 +880,16 @@ namespace SC2.MapEditor.Document
             o.Set("blend", t.Blend == null ? SC2JsonValue.Null : WriteBlend(t.Blend));
             o.Set("rnm", WriteRnm(t.Rnm));
             o.Set("importedRnm", WriteRnm(t.ImportedRnm));
+            o.Set("pointCloudSkyColor", WriteColor(t.PointCloudSkyColor));
+            o.Set("pointCloudSkyIntensity", SC2JsonValue.Of(t.PointCloudSkyIntensity));
+            o.Set("pointCloudGroundReflection", SC2JsonValue.Of(t.PointCloudGroundReflection));
+            o.Set("pointCloudSkyInGround", SC2JsonValue.Of(t.PointCloudSkyInGround));
+            o.Set("pointCloudBlurTexels", SC2JsonValue.Of(t.PointCloudBlurTexels));
+            o.Set("pointCloudSunShadow", SC2JsonValue.Of(t.PointCloudSunShadow));
+            o.Set("pointCloudBoxOrigin", WriteVector3(t.PointCloudBoxOrigin));
+            o.Set("pointCloudBoxSize", WriteVector3(t.PointCloudBoxSize));
+            o.Set("pointCloudUp", WriteBlobRef(t.PointCloudUp));
+            o.Set("pointCloudDown", WriteBlobRef(t.PointCloudDown));
             var simplification = SC2JsonValue.NewObject();
             simplification.Set("enabled", SC2JsonValue.Of(t.Simplification.Enabled));
             o.Set("simplification", simplification);
@@ -938,6 +948,16 @@ namespace SC2.MapEditor.Document
                 PairAssignments = ReadTrianglePairMap(o.Get("pairAssignments")),
                 Rnm = ReadRnm(o.Get("rnm")),
                 ImportedRnm = ReadRnm(o.Get("importedRnm")),
+                PointCloudSkyColor = ReadColor(o.Get("pointCloudSkyColor"), new Color(0.75f, 0.88f, 1f, 1f)),
+                PointCloudSkyIntensity = (float)o.Get("pointCloudSkyIntensity").AsDouble(0.5),
+                PointCloudGroundReflection = (float)o.Get("pointCloudGroundReflection").AsDouble(0.5),
+                PointCloudSkyInGround = (float)o.Get("pointCloudSkyInGround").AsDouble(0.35),
+                PointCloudBlurTexels = (float)o.Get("pointCloudBlurTexels").AsDouble(1.0),
+                PointCloudSunShadow = o.Get("pointCloudSunShadow").AsBool(true),
+                PointCloudBoxOrigin = o.Get("pointCloudBoxOrigin").Kind == SC2JsonKind.Object ? ReadVector3(o.Get("pointCloudBoxOrigin")) : Vector3.zero,
+                PointCloudBoxSize = o.Get("pointCloudBoxSize").Kind == SC2JsonKind.Object ? ReadVector3(o.Get("pointCloudBoxSize")) : Vector3.zero,
+                PointCloudUp = ReadBlobRef(o.Get("pointCloudUp")),
+                PointCloudDown = ReadBlobRef(o.Get("pointCloudDown")),
                 IsInitialized = o.Get("isInitialized").AsBool(false),
                 DataVersion = o.Get("dataVersion").AsInt(0),
                 ImportOnlyMode = o.Get("importOnlyMode").AsBool(false),

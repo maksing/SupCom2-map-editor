@@ -324,6 +324,7 @@ public sealed class SC2InfoModelFieldDrawer
     public void DrawPointCloudTab(InfoModel m)
     {
         SC2EnvFieldGui.SectionLabel("✨  PointCloud (@332..352)");
+        SC2EnvFieldGui.WrapLabel("When a point cloud is baked (Terrain > Lighting Bake > Bake Point Cloud), its own box replaces Origin and Size at export.", SC2UiScale.Pxf(240f));
         var origin = new Vector3(m.PointCloudOriginX, m.PointCloudOriginY, m.PointCloudOriginZ);
         origin = SC2EnvFieldGui.Vector3Field("PointCloudOrigin", origin, "pointcloud.origin");
         m.PointCloudOriginX = origin.x; m.PointCloudOriginY = origin.y; m.PointCloudOriginZ = origin.z;

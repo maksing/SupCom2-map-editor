@@ -360,6 +360,16 @@ public static class SC2RuntimeTerrainPersistence
         // The preview pictures and the Collision2 tab's meshes/flags have no counterpart in the
         // legacy bridges above; without these blobs a normal load (which reads this package, not
         // the legacy JSON) would drop them.
+        doc.Terrain.PointCloudSkyColor = data.PointCloudSkyColor;
+        doc.Terrain.PointCloudSkyIntensity = data.PointCloudSkyIntensity;
+        doc.Terrain.PointCloudGroundReflection = data.PointCloudGroundReflection;
+        doc.Terrain.PointCloudSkyInGround = data.PointCloudSkyInGround;
+        doc.Terrain.PointCloudBlurTexels = data.PointCloudBlurTexels;
+        doc.Terrain.PointCloudSunShadow = data.PointCloudSunShadow;
+        doc.Terrain.PointCloudBoxOrigin = data.PointCloudBoxOrigin;
+        doc.Terrain.PointCloudBoxSize = data.PointCloudBoxSize;
+        doc.Terrain.PointCloudUp = PutBlobBytes(blobStore, data.PointCloudUpDds);
+        doc.Terrain.PointCloudDown = PutBlobBytes(blobStore, data.PointCloudDownDds);
         doc.Scenario.MapShotBgra = PutBlobBytes(blobStore, data.MapShotBgraPixels);
         doc.Scenario.CustomMinimapPng = PutBlobBytes(blobStore, data.CustomMinimapPng);
         doc.Collision2.PreviewMeshBytes = PutBlobBytes(blobStore, data.Collision2PreviewBytes);
@@ -666,6 +676,14 @@ public static class SC2RuntimeTerrainPersistence
         public float RnmBakeOverrideSunIntensity = 1f;
         public Color RnmBakeOverrideShadowColor = new Color(0.64f, 0.77f, 0.92f, 1f);
         public int RnmBakeShadowSoftRadius = 6;
+        // Lighting Bake > Point Cloud. PointCloudStored tells a save that has these from an older one where
+        // JsonUtility left the settings at zero.
+        public bool PointCloudStored;
+        public float PointCloudSkyR, PointCloudSkyG, PointCloudSkyB;
+        public float PointCloudSkyIntensity, PointCloudGroundReflection, PointCloudSkyInGround, PointCloudBlurTexels;
+        public bool PointCloudSunShadow;
+        public Vector3 PointCloudBoxOrigin, PointCloudBoxSize;
+        public byte[] PointCloudUpDds, PointCloudDownDds;
 
         // Objects (Objects Editor Plan) — these are plain [Serializable] POCO
         // lists (SC2ObjectsModel.cs) with only JsonUtility-friendly field
@@ -842,6 +860,17 @@ public static class SC2RuntimeTerrainPersistence
         dto.RnmBakeOverrideSunIntensity = data.RnmBakeOverrideSunIntensity;
         dto.RnmBakeOverrideShadowColor = data.RnmBakeOverrideShadowColor;
         dto.RnmBakeShadowSoftRadius = data.RnmBakeShadowSoftRadius;
+        dto.PointCloudStored = true;
+        dto.PointCloudSkyR = data.PointCloudSkyColor.r; dto.PointCloudSkyG = data.PointCloudSkyColor.g; dto.PointCloudSkyB = data.PointCloudSkyColor.b;
+        dto.PointCloudSkyIntensity = data.PointCloudSkyIntensity;
+        dto.PointCloudGroundReflection = data.PointCloudGroundReflection;
+        dto.PointCloudSkyInGround = data.PointCloudSkyInGround;
+        dto.PointCloudBlurTexels = data.PointCloudBlurTexels;
+        dto.PointCloudSunShadow = data.PointCloudSunShadow;
+        dto.PointCloudBoxOrigin = data.PointCloudBoxOrigin;
+        dto.PointCloudBoxSize = data.PointCloudBoxSize;
+        dto.PointCloudUpDds = data.PointCloudUpDds ?? Array.Empty<byte>();
+        dto.PointCloudDownDds = data.PointCloudDownDds ?? Array.Empty<byte>();
 
         data.EnsureObjectsLists();
         dto.ObjProps = new List<SC2ObjProp>(data.ObjProps);
@@ -1036,6 +1065,19 @@ public static class SC2RuntimeTerrainPersistence
         data.RnmBakeOverrideSunIntensity = dto.RnmBakeOverrideSunIntensity;
         data.RnmBakeOverrideShadowColor = dto.RnmBakeOverrideShadowColor;
         data.RnmBakeShadowSoftRadius = dto.RnmBakeShadowSoftRadius;
+        if (dto.PointCloudStored)
+        {
+            data.PointCloudSkyColor = new Color(dto.PointCloudSkyR, dto.PointCloudSkyG, dto.PointCloudSkyB, 1f);
+            data.PointCloudSkyIntensity = dto.PointCloudSkyIntensity;
+            data.PointCloudGroundReflection = dto.PointCloudGroundReflection;
+            data.PointCloudSkyInGround = dto.PointCloudSkyInGround;
+            data.PointCloudBlurTexels = dto.PointCloudBlurTexels;
+            data.PointCloudSunShadow = dto.PointCloudSunShadow;
+            data.PointCloudBoxOrigin = dto.PointCloudBoxOrigin;
+            data.PointCloudBoxSize = dto.PointCloudBoxSize;
+        }
+        data.PointCloudUpDds = dto.PointCloudUpDds is { Length: > 0 } ? dto.PointCloudUpDds : null;
+        data.PointCloudDownDds = dto.PointCloudDownDds is { Length: > 0 } ? dto.PointCloudDownDds : null;
 
         data.ObjProps = dto.ObjProps ?? new List<SC2ObjProp>();
         foreach (var prop in data.ObjProps)
