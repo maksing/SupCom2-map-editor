@@ -69,6 +69,127 @@ public sealed class SC2InfoModelFieldDrawer
 
         m.SunIntensity = SliderR("SunIntensity", m.SunIntensity, InfoFieldLimits.SunIntensity.Min, InfoFieldLimits.SunIntensity.Max, Original.SunIntensity);
         if (SC2EnvFieldGui.Button("▶ Apply to Directional Light")) ApplyToLight(m);
+
+        DrawSunShadowPreview(new Vector3(m.SunDirectionX, m.SunDirectionY, m.SunDirectionZ));
+    }
+
+    // ---- Shadow preview (Sun tab) ----
+    // A cube on flat ground seen from above (SC2's Z grows down the map, so map up = -Z; right = +X): its shadow shows which way the
+    // sun throws shadows and how long they get. Rendered on the CPU into a small texture that is rebuilt
+    // only when the sun direction or the cube height changes.
+    private float _sunPreviewHeight = 10f;
+    private Texture2D _sunPreviewTex;
+    private Vector3 _sunPreviewDir = new Vector3(float.NaN, 0f, 0f);
+    private float _sunPreviewBuiltHeight = -1f;
+    private const int SunPreviewPixels = 240;
+
+    private void DrawSunShadowPreview(Vector3 sunDirection)
+    {
+        GUILayout.Space(SC2UiScale.Pxf(6f));
+        SC2EnvFieldGui.SectionLabel("Shadow preview");
+        _sunPreviewHeight = Mathf.Max(0.1f, SC2EnvFieldGui.FloatField("Cube height (units)", _sunPreviewHeight, "sun.preview.height"));
+
+        var shadow = SC2SunShadowMath.Compute(sunDirection);
+        if (_sunPreviewTex == null || _sunPreviewDir != sunDirection || !Mathf.Approximately(_sunPreviewBuiltHeight, _sunPreviewHeight))
+        {
+            RebuildSunPreview(shadow, sunDirection);
+            _sunPreviewDir = sunDirection;
+            _sunPreviewBuiltHeight = _sunPreviewHeight;
+        }
+
+        var size = SC2UiScale.Pxf(SunPreviewPixels);
+        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
+        if (Event.current.type == EventType.Repaint)
+            GUI.DrawTexture(rect, _sunPreviewTex, ScaleMode.ScaleToFit);
+
+        if (!shadow.HasShadow)
+        {
+            SC2EnvFieldGui.WrapLabel("The sun is at or below the horizon (SunDirection.Y ≤ 0): objects cast no ground shadow.", size);
+            return;
+        }
+        var length = shadow.LengthPerUnit * _sunPreviewHeight;
+        var towards = (shadow.AzimuthDeg + 180f) % 360f;
+        SC2EnvFieldGui.WrapLabel(
+            $"Sun {shadow.ElevationDeg:F1}° above the horizon, from {shadow.AzimuthDeg:F0}°. " +
+            $"A cube {_sunPreviewHeight:0.##} units tall casts a shadow {length:0.#} units long toward {towards:F0}° " +
+            "(degrees clockwise from map up). Top view as on the map: Z grows downward, X to the right; yellow line = toward the sun; grid = 10 units.",
+            size);
+    }
+
+    private void RebuildSunPreview(SC2SunShadowMath.Result shadow, Vector3 sunDirection)
+    {
+        if (_sunPreviewTex == null)
+        {
+            _sunPreviewTex = new Texture2D(SunPreviewPixels, SunPreviewPixels, TextureFormat.RGBA32, false)
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp
+            };
+        }
+
+        var side = _sunPreviewHeight;
+        // Picture coordinates: x right, y up the map. SC2's Z grows downward, so it is flipped here.
+        var offset = shadow.HasShadow ? new Vector2(shadow.OffsetPerUnit.x, -shadow.OffsetPerUnit.y) * _sunPreviewHeight : Vector2.zero;
+        // Frame the cube and its shadow; a near-horizontal sun would need an endless frame, so the shadow
+        // is allowed to run off the picture past 7 heights.
+        var reach = Mathf.Min(offset.magnitude, side * 7f);
+        var halfView = Mathf.Max(side * 1.8f, (reach + side) * 0.6f);
+        var centre = offset.sqrMagnitude > 1e-8f ? offset.normalized * (reach * 0.5f) : Vector2.zero;
+        var unitsPerPixel = halfView * 2f / SunPreviewPixels;
+
+        var ground = new Color32(92, 104, 92, 255);
+        var gridLine = new Color32(110, 124, 110, 255);
+        var shadowColor = new Color32(28, 32, 38, 255);
+        var cubeColor = new Color32(232, 224, 190, 255);
+        var cubeEdge = new Color32(120, 110, 80, 255);
+        var sunColor = new Color32(255, 215, 40, 255);
+        var pixels = new Color32[SunPreviewPixels * SunPreviewPixels];
+        const float gridStep = 10f;
+        var lineWidth = unitsPerPixel * 1.2f;
+
+        for (var y = 0; y < SunPreviewPixels; y++)
+        {
+            for (var x = 0; x < SunPreviewPixels; x++)
+            {
+                var p = centre + new Vector2((x + 0.5f) * unitsPerPixel - halfView, (y + 0.5f) * unitsPerPixel - halfView);
+                var c = ground;
+                var gx = Mathf.Abs(Mathf.Repeat(p.x + gridStep * 0.5f, gridStep) - gridStep * 0.5f);
+                var gz = Mathf.Abs(Mathf.Repeat(p.y + gridStep * 0.5f, gridStep) - gridStep * 0.5f);
+                if (gx < lineWidth * 0.5f || gz < lineWidth * 0.5f) c = gridLine;
+                if (shadow.HasShadow && SC2SunShadowMath.InSweptSquare(p, side, offset)) c = shadowColor;
+                var inCube = Mathf.Abs(p.x) <= side * 0.5f && Mathf.Abs(p.y) <= side * 0.5f;
+                if (inCube)
+                {
+                    var edge = Mathf.Min(side * 0.5f - Mathf.Abs(p.x), side * 0.5f - Mathf.Abs(p.y)) < unitsPerPixel * 1.5f;
+                    c = edge ? cubeEdge : cubeColor;
+                }
+                pixels[y * SunPreviewPixels + x] = c;
+            }
+        }
+
+        // Toward-the-sun marker: a line from the cube's centre along the sun's horizontal direction.
+        if (new Vector2(sunDirection.x, sunDirection.z).sqrMagnitude > 1e-8f)
+        {
+            var d = new Vector2(Mathf.Sin(shadow.AzimuthDeg * Mathf.Deg2Rad), Mathf.Cos(shadow.AzimuthDeg * Mathf.Deg2Rad));
+            var lengthUnits = halfView * 0.55f;
+            for (var s = 0f; s <= lengthUnits; s += unitsPerPixel * 0.5f)
+            {
+                var wp = d * s;
+                var px = Mathf.RoundToInt((wp.x - centre.x + halfView) / unitsPerPixel - 0.5f);
+                var py = Mathf.RoundToInt((wp.y - centre.y + halfView) / unitsPerPixel - 0.5f);
+                for (var ox = -1; ox <= 1; ox++)
+                    for (var oy = -1; oy <= 1; oy++)
+                    {
+                        var qx = px + ox; var qy = py + oy;
+                        if (qx >= 0 && qy >= 0 && qx < SunPreviewPixels && qy < SunPreviewPixels)
+                            pixels[qy * SunPreviewPixels + qx] = sunColor;
+                    }
+            }
+        }
+
+        _sunPreviewTex.SetPixels32(pixels);
+        _sunPreviewTex.Apply(false, false);
     }
 
     // ---- Shadow tab ---- (same reasoning as Sun above — no inner foldout.)
