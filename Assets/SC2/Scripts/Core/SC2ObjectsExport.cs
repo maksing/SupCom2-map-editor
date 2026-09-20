@@ -162,7 +162,7 @@ public static class SC2ObjectsExport
                 Position = new[] { p.Position.x, p.Position.y, p.Position.z },
                 Scale = p.Scale,
                 BlueprintPath = p.BlueprintPath ?? "",
-                Unknown9 = 1f,
+                Unknown9 = Mathf.Clamp01(p.RenderPriority),
                 Flags = p.Flags
             });
         }

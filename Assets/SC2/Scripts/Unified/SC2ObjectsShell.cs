@@ -119,7 +119,7 @@ public sealed class SC2ObjectsShell
     private bool _areaLeftFieldWasFocused, _areaRightFieldWasFocused, _areaBottomFieldWasFocused, _areaTopFieldWasFocused;
 
     // ── Search / system filters ──────────────────────────────────────────
-    private enum SysFilter { All, Selected, Invalid, Unanchored }
+    private enum SysFilter { All, Selected, Invalid, Unanchored, Shadow, NoShadow }
     private string _searchProps = "", _searchMarkers = "", _searchUnits = "", _searchArmies = "", _searchZones = "", _searchChains = "";
     private SysFilter _filterProps, _filterMarkers;
     private bool _propsByBlueprintExpanded;
@@ -1218,6 +1218,22 @@ public sealed class SC2ObjectsShell
         return true;
     }
 
+    /// <summary>Copies the render attributes (shadow flag, render priority) of <paramref name="edited"/> onto the
+    /// other members of its live symmetry group, like the scale: mirrored copies stay identical.</summary>
+    private void PropagateRenderAttributes(SC2ObjProp edited, ISet<int> skipIds = null)
+    {
+        var group = FindSymmetryGroup(edited.Id);
+        if (group == null) return;
+        foreach (var member in group.Members)
+        {
+            if (member.ObjectId == edited.Id || (skipIds != null && skipIds.Contains(member.ObjectId))) continue;
+            var sibling = LookupProp(member.ObjectId);
+            if (sibling == null) continue;
+            sibling.CastsShadow = edited.CastsShadow;
+            sibling.RenderPriority = edited.RenderPriority;
+        }
+    }
+
     private void SetPropPosition(SC2ObjProp p, Vector3 newPos)
     {
         p.Position = newPos;
@@ -1424,6 +1440,7 @@ public sealed class SC2ObjectsShell
                 {
                     Id = Data.AllocateObjectId(), BlueprintPath = canonical.BlueprintPath, Position = slots[slot],
                     Rotation = canonical.Rotation, Scale = canonical.Scale, Flags = canonical.Flags,
+                    RenderPriority = canonical.RenderPriority,
                     AnchorToTerrain = canonical.AnchorToTerrain, HeightOffset = canonical.HeightOffset
                 };
                 Data.ObjProps.Add(member);
@@ -1521,13 +1538,18 @@ public sealed class SC2ObjectsShell
         }
     }
 
-    private void DrawSystemFilterRow(float w, ref SysFilter filter)
+    private void DrawSystemFilterRow(float w, ref SysFilter filter, bool shadowFilters = false)
     {
         GUILayout.BeginHorizontal();
         DrawFilterButton(w, "All", SysFilter.All, ref filter);
         DrawFilterButton(w, "Selected", SysFilter.Selected, ref filter);
         DrawFilterButton(w, "Invalid", SysFilter.Invalid, ref filter);
         DrawFilterButton(w, "Unanchored", SysFilter.Unanchored, ref filter);
+        GUILayout.EndHorizontal();
+        if (!shadowFilters) return;
+        GUILayout.BeginHorizontal();
+        DrawFilterButton(w, "Shadow", SysFilter.Shadow, ref filter);
+        DrawFilterButton(w, "No shadow", SysFilter.NoShadow, ref filter);
         GUILayout.EndHorizontal();
     }
 
@@ -1934,6 +1956,7 @@ public sealed class SC2ObjectsShell
                 Rotation = src.Rotation,
                 Scale = src.Scale,
                 Flags = src.Flags,
+                RenderPriority = src.RenderPriority,
                 AnchorToTerrain = src.AnchorToTerrain,
                 HeightOffset = src.HeightOffset
             });
@@ -1960,6 +1983,7 @@ public sealed class SC2ObjectsShell
                 Rotation = p.Rotation,
                 Scale = p.Scale,
                 Flags = p.Flags,
+                RenderPriority = p.RenderPriority,
                 AnchorToTerrain = p.AnchorToTerrain,
                 HeightOffset = p.HeightOffset
             });
@@ -2031,6 +2055,7 @@ public sealed class SC2ObjectsShell
                 Rotation = src.Rotation,
                 Scale = src.Scale,
                 Flags = src.Flags,
+                RenderPriority = src.RenderPriority,
                 AnchorToTerrain = src.AnchorToTerrain,
                 HeightOffset = src.HeightOffset
             };
@@ -2741,6 +2766,8 @@ public sealed class SC2ObjectsShell
             SysFilter.Selected => visible.Where(p => _selProps.Contains(p.Id)).ToList(),
             SysFilter.Invalid => visible.Where(p => string.IsNullOrEmpty(p.BlueprintPath)).ToList(),
             SysFilter.Unanchored => visible.Where(p => !p.AnchorToTerrain).ToList(),
+            SysFilter.Shadow => visible.Where(p => p.CastsShadow).ToList(),
+            SysFilter.NoShadow => visible.Where(p => !p.CastsShadow).ToList(),
             _ => visible
         };
         // Grouped by blueprint (props scattered via the brush share one
@@ -2760,7 +2787,7 @@ public sealed class SC2ObjectsShell
         SC2EnvFieldGui.SectionLabel($"Props ({Data.ObjProps.Count})");
         if (SC2EnvFieldGui.Button("Browse prop blueprints", GUILayout.Height(SC2UiScale.Pxf(24f)))) OpenPropBrowser(null);
         _searchProps = SC2EnvFieldGui.TextField("Search (blueprint)", _searchProps, "props_search");
-        DrawSystemFilterRow(w, ref _filterProps);
+        DrawSystemFilterRow(w, ref _filterProps, shadowFilters: true);
 
         RefreshVisiblePropsIfNeeded();
         var visible = _cachedVisibleProps;
@@ -2868,7 +2895,7 @@ public sealed class SC2ObjectsShell
         {
             var p = visible[i];
             var isSel = _selProps.Contains(p.Id);
-            var label = $"{(isSel ? "● " : "○ ")}{ShortBlueprint(p.BlueprintPath)}   X:{p.Position.x:0} Z:{p.Position.z:0}" + (p.AnchorToTerrain ? "" : "  [Y locked]") + (_hiddenPropIds.Contains(p.Id) ? "  [hidden]" : "");
+            var label = $"{(isSel ? "● " : "○ ")}{ShortBlueprint(p.BlueprintPath)}   X:{p.Position.x:0} Z:{p.Position.z:0}" + (p.AnchorToTerrain ? "" : "  [Y locked]") + (p.CastsShadow ? "" : "  [no shadow]") + (_hiddenPropIds.Contains(p.Id) ? "  [hidden]" : "");
             var rowRect = new Rect(0, i * PropRowHeight, rowWidth, PropRowHeight - 2);
             if (GUI.Button(rowRect, TruncateForLabel(label, rowWidth - 8)))
                 HandleRowClick(_selProps, visibleIds, p.Id, ref _lastClickedPropIdx);
@@ -2972,6 +2999,8 @@ public sealed class SC2ObjectsShell
     private float _propsBrushRotationJitter = 180f; // +/- degrees around Y
     private float _propsBrushScaleMin = 0.8f; // absolute scale multiplier range, not a +/- jitter around 1.0
     private float _propsBrushScaleMax = 1.2f;
+    private float _propsBrushShadowChance = 100f;     // % of scattered props that cast a shadow onto the terrain (Flags 0)
+    private float _propsBrushPriorityMin = 0.2f, _propsBrushPriorityMax = 1f; // render priority range, 0..1
     private float _propsBrushMinSpacing = 2f;
     private bool _propsBrushDragging;
     private readonly List<SC2ObjProp> _propsBrushStrokeNewProps = new();
@@ -3003,6 +3032,12 @@ public sealed class SC2ObjectsShell
         _propsBrushScaleMax = SC2EnvFieldGui.Slider("Scale max", _propsBrushScaleMax, 0f, 100f, "propsbrush:scaleMax");
         if (_propsBrushScaleMin > _propsBrushScaleMax) _propsBrushScaleMax = _propsBrushScaleMin;
         _propsBrushMinSpacing = Mathf.Max(0.1f, SC2EnvFieldGui.Slider("Min spacing", _propsBrushMinSpacing, 0.1f, 20f, "propsbrush:minSpacing"));
+        // Render attributes of the scattered props: a share of them casts a shadow onto the terrain, and their
+        // render priority is drawn from a range (vanilla forests spread it so the trees drop out gradually).
+        _propsBrushShadowChance = Mathf.Clamp(SC2EnvFieldGui.Slider("Shadow chance (%)", _propsBrushShadowChance, 0f, 100f, "propsbrush:shadowChance"), 0f, 100f);
+        _propsBrushPriorityMin = Mathf.Clamp01(SC2EnvFieldGui.Slider("Priority min", _propsBrushPriorityMin, 0f, 1f, "propsbrush:priorityMin"));
+        _propsBrushPriorityMax = Mathf.Clamp01(SC2EnvFieldGui.Slider("Priority max", _propsBrushPriorityMax, 0f, 1f, "propsbrush:priorityMax"));
+        if (_propsBrushPriorityMin > _propsBrushPriorityMax) _propsBrushPriorityMax = _propsBrushPriorityMin;
 
         _propsBrushErasing = SC2EnvFieldGui.Toggle("Eraser mode", _propsBrushErasing);
 
@@ -3060,6 +3095,8 @@ public sealed class SC2ObjectsShell
                 Position = new Vector3(x, groundHeight, z),
                 Rotation = Quaternion.Euler(0f, rotY, 0f),
                 Scale = Mathf.Max(0.05f, scale),
+                RenderPriority = Mathf.Clamp01(UnityEngine.Random.Range(_propsBrushPriorityMin, _propsBrushPriorityMax)),
+                CastsShadow = UnityEngine.Random.value * 100f < _propsBrushShadowChance,
                 AnchorToTerrain = true
             };
             Data.ObjProps.Add(prop);
@@ -3127,6 +3164,7 @@ public sealed class SC2ObjectsShell
     // with a mixed selection there's no single "current" value to compare
     // an edit against, so auto-apply would be ambiguous).
     private string _bulkScaleInput = "", _bulkBlueprintInput = "";
+    private string _bulkShadowPercentInput = "80", _bulkPriorityInput = "1", _bulkPriorityMinInput = "0.5", _bulkPriorityMaxInput = "1";
 
     // The selected props among `visible`, cached: the panel is drawn several times per frame and
     // filtering + copying thousands of props each time showed up in frame time. Rebuilt only when
@@ -3137,7 +3175,8 @@ public sealed class SC2ObjectsShell
     private int _selectedVisibleSelectionCount;
 
     private int _selectedVisibleDataVersion = -1;
-    private bool _selectedScaleMixed, _selectedBlueprintMixed;
+    private bool _selectedScaleMixed, _selectedBlueprintMixed, _selectedPriorityMixed;
+    private int _selectedShadowCount;
 
     private List<SC2ObjProp> SelectedVisibleProps(List<SC2ObjProp> visible)
     {
@@ -3154,14 +3193,79 @@ public sealed class SC2ObjectsShell
             _selectedVisibleSelectionCount = _selProps.Count;
             _selectedVisibleDataVersion = _dataVersion;
             var first = _selectedVisibleCache.Count > 0 ? _selectedVisibleCache[0] : null;
-            _selectedScaleMixed = false; _selectedBlueprintMixed = false;
+            _selectedScaleMixed = false; _selectedBlueprintMixed = false; _selectedPriorityMixed = false; _selectedShadowCount = 0;
             foreach (var p in _selectedVisibleCache)
             {
                 if (first != null && p.Scale != first.Scale) _selectedScaleMixed = true;
                 if (first != null && p.BlueprintPath != first.BlueprintPath) _selectedBlueprintMixed = true;
+                if (first != null && p.RenderPriority != first.RenderPriority) _selectedPriorityMixed = true;
+                if (p.CastsShadow) _selectedShadowCount++;
             }
         }
         return _selectedVisibleCache;
+    }
+
+    /// <summary>Applies <paramref name="change"/> to every selected prop and to their symmetry siblings that are
+    /// not selected themselves.</summary>
+    private void ApplyRenderAttributes(List<SC2ObjProp> selected, Action<SC2ObjProp> change)
+    {
+        PushUndo();
+        _selectedVisibleCache = null;
+        var selectedIds = new HashSet<int>(selected.Select(x => x.Id));
+        BeginBulkLookup();
+        try
+        {
+            foreach (var p in selected) change(p);
+            foreach (var p in selected) PropagateRenderAttributes(p, selectedIds);
+        }
+        finally { EndBulkLookup(); }
+        MarkObjectsDirty();
+    }
+
+    /// <summary>Bulk edit of the shadow flag and render priority of the selected props.</summary>
+    private void DrawBulkRenderAttributes(List<SC2ObjProp> selected)
+    {
+        var count = selected.Count;
+        GUILayout.Label(_selectedShadowCount == 0 ? "Shadow: off" : _selectedShadowCount == count ? "Shadow: on"
+            : $"Shadow: mixed ({_selectedShadowCount} of {count} on)");
+        GUILayout.BeginHorizontal();
+        if (SC2EnvFieldGui.Button("Shadow on", GUILayout.Width(SC2UiScale.Pxf(90f))))
+            ApplyRenderAttributes(selected, p => p.CastsShadow = true);
+        if (SC2EnvFieldGui.Button("Shadow off", GUILayout.Width(SC2UiScale.Pxf(90f))))
+            ApplyRenderAttributes(selected, p => p.CastsShadow = false);
+        GUILayout.EndHorizontal();
+        GUILayout.BeginHorizontal();
+        _bulkShadowPercentInput = SC2EnvFieldGui.TextField("", _bulkShadowPercentInput, "bulk_shadow_pct");
+        if (SC2EnvFieldGui.Button("Shadow on N% (random)", GUILayout.Width(SC2UiScale.Pxf(150f))) && float.TryParse(_bulkShadowPercentInput, out var percent))
+        {
+            var on = Mathf.RoundToInt(count * Mathf.Clamp(percent, 0f, 100f) / 100f);
+            var shuffled = selected.OrderBy(_ => UnityEngine.Random.value).ToList();
+            var turnedOn = new HashSet<int>(shuffled.Take(on).Select(x => x.Id));
+            ApplyRenderAttributes(selected, p => p.CastsShadow = turnedOn.Contains(p.Id));
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.Label(_selectedPriorityMixed ? "Render priority: (mixed)" : $"Render priority: {selected[0].RenderPriority:0.###}");
+        GUILayout.BeginHorizontal();
+        _bulkPriorityInput = SC2EnvFieldGui.TextField("", _bulkPriorityInput, "bulk_priority");
+        if (SC2EnvFieldGui.Button($"Apply to {count}", GUILayout.Width(SC2UiScale.Pxf(90f))) && float.TryParse(_bulkPriorityInput, out var priority))
+        {
+            var value = Mathf.Clamp01(priority);
+            ApplyRenderAttributes(selected, p => p.RenderPriority = value);
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.BeginHorizontal();
+        _bulkPriorityMinInput = SC2EnvFieldGui.TextField("min", _bulkPriorityMinInput, "bulk_priority_min");
+        _bulkPriorityMaxInput = SC2EnvFieldGui.TextField("max", _bulkPriorityMaxInput, "bulk_priority_max");
+        if (SC2EnvFieldGui.Button("Randomize priority", GUILayout.Width(SC2UiScale.Pxf(130f)))
+            && float.TryParse(_bulkPriorityMinInput, out var lo) && float.TryParse(_bulkPriorityMaxInput, out var hi))
+        {
+            lo = Mathf.Clamp01(lo); hi = Mathf.Clamp01(hi);
+            if (lo > hi) (lo, hi) = (hi, lo);
+            ApplyRenderAttributes(selected, p => p.RenderPriority = UnityEngine.Random.Range(lo, hi));
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Space(4);
     }
 
     private void DrawPropsMixedEditPanel(float w, List<SC2ObjProp> selected)
@@ -3182,6 +3286,8 @@ public sealed class SC2ObjectsShell
             MarkObjectsDirty();
         }
         GUILayout.EndHorizontal();
+
+        DrawBulkRenderAttributes(selected);
 
         var bpMixed = _selectedBlueprintMixed;
         GUILayout.Label(bpMixed ? "Blueprint: (mixed)" : $"Blueprint: {ShortBlueprint(selected[0].BlueprintPath)}");
@@ -3215,6 +3321,15 @@ public sealed class SC2ObjectsShell
         if (SC2EnvFieldGui.Button("Choose prop blueprint", GUILayout.Height(SC2UiScale.Pxf(20f)))) OpenPropBrowser(p);
         p.Scale = SC2EnvFieldGui.FloatField("Scale", p.Scale, "propi_scale");
         if (p.Scale != prevScale) PropagateSymmetryRotationScale(p, p.Rotation);
+        var prevShadow = p.CastsShadow;
+        var prevPriority = p.RenderPriority;
+        p.CastsShadow = SC2EnvFieldGui.Toggle("Casts shadow on terrain", p.CastsShadow);
+        p.RenderPriority = Mathf.Clamp01(SC2EnvFieldGui.Slider("Render priority (0–1)", p.RenderPriority, 0f, 1f, "propi_priority"));
+        if (p.CastsShadow != prevShadow || p.RenderPriority != prevPriority)
+        {
+            PropagateRenderAttributes(p);
+            MarkObjectsDirty();
+        }
 
         DrawAnchorBlock(ref p.AnchorToTerrain, ref p.HeightOffset, p.Position.y,
             () => SetPropPosition(p, ReprojectedProp(p)),

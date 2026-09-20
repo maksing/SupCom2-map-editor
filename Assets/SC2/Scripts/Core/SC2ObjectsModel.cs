@@ -29,6 +29,20 @@ public class SC2ObjProp
     public Quaternion Rotation = Quaternion.identity;
     public float Scale = 1f;
     public uint Flags;
+    /// <summary>Render priority 0..1 (mapobjs.bdf's "Unknown9"): vanilla maps give trees a spread of values
+    /// and everything else 1. 1 = always drawn first-class, lower = the first to drop out.</summary>
+    public float RenderPriority = 1f;
+    /// <summary>True for every prop written since RenderPriority existed. A saved prop without it (older saves,
+    /// where JSON may not run field initializers) reads back false and is set to full priority on load.</summary>
+    public bool RenderPriorityStored = true;
+    /// <summary>Bit 0 of <see cref="Flags"/> is set when the prop does NOT cast a shadow onto the terrain
+    /// (Flags 0 = shadow, 1 = no shadow; 92% of vanilla props are 0). The other bits are left as they are.</summary>
+    public const uint NoShadowFlag = 1u;
+    public bool CastsShadow
+    {
+        get => (Flags & NoShadowFlag) == 0;
+        set => Flags = value ? (Flags & ~NoShadowFlag) : (Flags | NoShadowFlag);
+    }
     /// <summary>Height-anchoring model: when
     /// true, Position.y is treated as HeightOffset above the terrain height
     /// sampled at (Position.x, Position.z) and recomputed by "Reproject" —

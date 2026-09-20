@@ -257,7 +257,8 @@ public static class SC2ObjectsImport
                 Position = new Vector3(p.Position[0], p.Position[1], p.Position[2]),
                 Rotation = new Quaternion(p.Quat[1], p.Quat[2], p.Quat[3], p.Quat[0]),
                 Scale = p.Scale,
-                Flags = p.Flags
+                Flags = p.Flags,
+                RenderPriority = Mathf.Clamp01(p.Unknown9)
             });
 
         var candidateSourceIndexes = new HashSet<int>();

@@ -572,6 +572,7 @@ namespace SC2.MapEditor.Document
             o.Set("rotation", WriteQuaternion(p.Rotation));
             o.Set("scale", SC2JsonValue.Of(p.Scale));
             o.Set("flags", SC2JsonValue.Of(p.Flags));
+            o.Set("renderPriority", SC2JsonValue.Of(p.RenderPriority));
             o.Set("anchorToTerrain", SC2JsonValue.Of(p.AnchorToTerrain));
             o.Set("heightOffset", SC2JsonValue.Of(p.HeightOffset));
             return o;
@@ -585,6 +586,7 @@ namespace SC2.MapEditor.Document
             Rotation = ReadQuaternion(o.Get("rotation")),
             Scale = (float)o.Get("scale").AsDouble(1),
             Flags = (uint)o.Get("flags").AsLong(0),
+            RenderPriority = (float)o.Get("renderPriority").AsDouble(1),
             AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
             HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
         };

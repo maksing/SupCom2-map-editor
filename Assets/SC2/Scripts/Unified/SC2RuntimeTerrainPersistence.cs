@@ -975,6 +975,8 @@ public static class SC2RuntimeTerrainPersistence
         data.RnmBakeShadowSoftRadius = dto.RnmBakeShadowSoftRadius;
 
         data.ObjProps = dto.ObjProps ?? new List<SC2ObjProp>();
+        foreach (var prop in data.ObjProps)
+            if (!prop.RenderPriorityStored) { prop.RenderPriority = 1f; prop.RenderPriorityStored = true; }
         data.ObjMarkers = dto.ObjMarkers ?? new List<SC2ObjMarker>();
         data.ObjGraphs = dto.ObjGraphs ?? new List<SC2ObjGraph>();
         data.ObjArmies = dto.ObjArmies ?? new List<SC2ObjArmy>();
