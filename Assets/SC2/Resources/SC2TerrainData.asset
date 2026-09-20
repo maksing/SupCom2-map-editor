@@ -66156,6 +66156,9 @@ MonoBehaviour:
   PlayableWater: 0
   UseCustomCollision2: 0
   CustomCollision2Bytes: 
+  Collision2PreviewBytes: 
+  Collision2HidePreview: 0
+  Collision2Wireframe: 0
   WaterPlaneSize: 4096
   WaterTexturePaths:
   - /textures/Terrain/Water/foam_001.dds
