@@ -56,7 +56,35 @@ public static class SC2MapPreviewCapture
     /// frame with the result (null if no camera could be resolved).</summary>
     public static void RequestMinimapCapture(SC2TerrainData data, Action<Texture2D> onCaptured)
     {
-        _pendingWork = () => onCaptured?.Invoke(CaptureMinimap(data));
+        // An imported custom picture replaces the render everywhere a minimap is used.
+        _pendingWork = () => onCaptured?.Invoke(DecodeCustomMinimap(data) ?? CaptureMinimap(data));
+    }
+
+    /// <summary>The imported custom minimap as an RGBA32 texture in Unity's natural orientation (the
+    /// same form a rendered capture has), or null when none is set.</summary>
+    public static Texture2D DecodeCustomMinimap(SC2TerrainData data)
+    {
+        if (data?.CustomMinimapPng == null || data.CustomMinimapPng.Length == 0) return null;
+        var decoded = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        try
+        {
+            if (!ImageConversion.LoadImage(decoded, data.CustomMinimapPng, false)) return null;
+            // LoadImage may hand back RGB24; the callers expect 4 bytes per pixel.
+            var rgba = new Texture2D(decoded.width, decoded.height, TextureFormat.RGBA32, false);
+            rgba.SetPixels32(decoded.GetPixels32());
+            rgba.Apply(false, false);
+            return rgba;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(decoded); }
+    }
+
+    /// <summary>Opaque black BGRA pixels of the map-select preview size — what is exported when no preview
+    /// was captured or imported (the vanilla frame is stamped on top).</summary>
+    public static byte[] BlackMapShotBgra()
+    {
+        var pixels = new byte[MapShotWidth * MapShotHeight * 4];
+        for (var i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
+        return pixels;
     }
 
     /// <summary>Queues a capture that reuses the CURRENT main viewport

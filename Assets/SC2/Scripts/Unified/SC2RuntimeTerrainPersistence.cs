@@ -611,6 +611,9 @@ public static class SC2RuntimeTerrainPersistence
         public byte[] Collision2PreviewBytes;
         public bool Collision2HidePreview;
         public bool Collision2Wireframe;
+        // Scenario > Preview: the map-select preview pixels and an imported custom minimap.
+        public byte[] MapShotBgraPixels;
+        public byte[] CustomMinimapPng;
         public byte[] EnvironmentHeader; // JsonUtility supports byte[] natively (base64), no BlockCopy workaround needed
         public string EnvironmentMap, SkyMap, TexturePath3, ColorCorrectionCube, FogOfWarCorrectionCube;
         public string[] EnvironmentTextureSourceTags;
@@ -775,6 +778,8 @@ public static class SC2RuntimeTerrainPersistence
         dto.Collision2PreviewBytes = data.Collision2PreviewBytes ?? Array.Empty<byte>();
         dto.Collision2HidePreview = data.Collision2HidePreview;
         dto.Collision2Wireframe = data.Collision2Wireframe;
+        dto.MapShotBgraPixels = data.MapShotBgraPixels ?? Array.Empty<byte>();
+        dto.CustomMinimapPng = data.CustomMinimapPng ?? Array.Empty<byte>();
         dto.EnvironmentHeader = data.EnvironmentHeader != null ? (byte[])data.EnvironmentHeader.Clone() : new byte[508];
         dto.EnvironmentMap = data.EnvironmentMap;
         dto.SkyMap = data.SkyMap;
@@ -947,6 +952,8 @@ public static class SC2RuntimeTerrainPersistence
         data.Collision2PreviewBytes = dto.Collision2PreviewBytes is { Length: > 0 } ? dto.Collision2PreviewBytes : null;
         data.Collision2HidePreview = dto.Collision2HidePreview;
         data.Collision2Wireframe = dto.Collision2Wireframe;
+        data.MapShotBgraPixels = dto.MapShotBgraPixels is { Length: > 0 } ? dto.MapShotBgraPixels : null;
+        data.CustomMinimapPng = dto.CustomMinimapPng is { Length: > 0 } ? dto.CustomMinimapPng : null;
         data.EnvironmentHeader = dto.EnvironmentHeader != null && dto.EnvironmentHeader.Length == 508 ? dto.EnvironmentHeader : new byte[508];
         data.EnvironmentMap = dto.EnvironmentMap ?? "";
         data.SkyMap = dto.SkyMap ?? "";

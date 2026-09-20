@@ -204,6 +204,21 @@ public sealed class SC2ScenarioShell
         if (!string.IsNullOrEmpty(_minimapPreviewStatus))
             SC2TerrainShell.DrawUnifiedNote(_minimapPreviewStatus);
 
+        if (GUILayout.Button("Import Custom Minimap Image...", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            ImportCustomMinimap();
+        if (Data.CustomMinimapPng != null && Data.CustomMinimapPng.Length > 0)
+        {
+            SC2TerrainShell.DrawUnifiedNote("A custom minimap image is in use: export, the previews and the Lobby Spawns editor use it instead of rendering the map.");
+            if (GUILayout.Button("Remove Custom Minimap (render the map again)", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            {
+                Data.CustomMinimapPng = null;
+                EditorUtility.SetDirty(Data);
+                if (_minimapPreviewTexture != null) { UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture); _minimapPreviewTexture = null; }
+                _minimapPreviewStatus = "Custom minimap removed — the minimap renders from the map again.";
+                _terrainShell.MarkDirtyAndRepaint();
+            }
+        }
+
         GUILayout.Space(12);
 
         SC2EnvFieldGui.SectionLabel("Map Preview");
@@ -217,7 +232,7 @@ public sealed class SC2ScenarioShell
         }
         else
         {
-            SC2TerrainShell.DrawUnifiedNote("No preview captured yet.");
+            SC2TerrainShell.DrawUnifiedNote("No preview captured or imported yet — export writes a black picture with the preview frame.");
         }
 
         var capturePending = SC2MapPreviewCapture.IsCapturePending;
@@ -239,6 +254,15 @@ public sealed class SC2ScenarioShell
             });
         }
         GUI.enabled = guiEnabledBeforeCapture;
+        if (GUILayout.Button("Import Custom Preview Image...", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            ImportCustomMapShot();
+        if (Data.MapShotBgraPixels != null && GUILayout.Button("Clear Preview (export black + frame)", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        {
+            Data.MapShotBgraPixels = null;
+            EditorUtility.SetDirty(Data);
+            _terrainShell.MarkDirtyAndRepaint();
+            _captureStatus = "Preview cleared.";
+        }
         if (!string.IsNullOrEmpty(_captureStatus))
             SC2TerrainShell.DrawUnifiedNote(_captureStatus);
 
@@ -248,6 +272,38 @@ public sealed class SC2ScenarioShell
         SC2TerrainShell.DrawUnifiedNote("Where each army's start marker is drawn on the minimap in the game lobby (_scenario.lua). Only the lobby picture changes — the armies' real spawn positions (_save.lua) stay exactly where they are.");
         if (GUILayout.Button("Edit Lobby Spawns...", GUILayout.Width(w), GUILayout.MaxWidth(w)))
             OpenLobbySpawnEditor?.Invoke();
+    }
+
+    private void ImportCustomMinimap()
+    {
+        var path = SC2PreviewImageImport.PickImageFile("Import Minimap Image");
+        if (string.IsNullOrEmpty(path)) return;
+        if (!SC2PreviewImageImport.TryImportMinimapPng(path, out var png, out var error))
+        {
+            _minimapPreviewStatus = "Import failed: " + error;
+            return;
+        }
+        Data.CustomMinimapPng = png;
+        EditorUtility.SetDirty(Data);
+        if (_minimapPreviewTexture != null) UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture);
+        _minimapPreviewTexture = SC2MapPreviewCapture.DecodeCustomMinimap(Data);
+        _minimapPreviewStatus = "Custom minimap imported (fitted to 1024x1024, cropped to fill).";
+        _terrainShell.MarkDirtyAndRepaint();
+    }
+
+    private void ImportCustomMapShot()
+    {
+        var path = SC2PreviewImageImport.PickImageFile("Import Preview Image");
+        if (string.IsNullOrEmpty(path)) return;
+        if (!SC2PreviewImageImport.TryImportMapShot(path, out var bgra, out var error))
+        {
+            _captureStatus = "Import failed: " + error;
+            return;
+        }
+        Data.MapShotBgraPixels = bgra;
+        EditorUtility.SetDirty(Data);
+        _terrainShell.MarkDirtyAndRepaint();
+        _captureStatus = "Custom preview imported (fitted to 448x206, cropped to fill).";
     }
 
     /// <summary>Rebuilds the on-screen thumbnail only when Data.

@@ -1411,14 +1411,17 @@ public static class SC2TerrainExporter
         // live render needed here at all.
         if (minimapDdsBytes != null)
             File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.minimap.win.dds"), minimapDdsBytes);
-        if (data.MapShotBgraPixels != null && data.MapShotBgraPixels.Length == SC2MapPreviewCapture.MapShotWidth * SC2MapPreviewCapture.MapShotHeight * 4)
+        // Nothing captured or imported: a black picture (with the frame stamped below) instead of no file at all.
+        var mapShotPixels = data.MapShotBgraPixels != null && data.MapShotBgraPixels.Length == SC2MapPreviewCapture.MapShotWidth * SC2MapPreviewCapture.MapShotHeight * 4
+            ? data.MapShotBgraPixels
+            : SC2MapPreviewCapture.BlackMapShotBgra();
         {
             // MapShotBgraPixels is stored in Unity's own natural (unflipped)
             // row orientation (so the Export tab's own preview thumbnail
             // displays right-side up) — flip only at the point of writing
             // the DDS file itself. See SC2MapPreviewCapture.
             // FlipRowsVertically's own doc comment.
-            var ddsBgra = SC2MapPreviewCapture.FlipRowsVertically(data.MapShotBgraPixels, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, 4);
+            var ddsBgra = SC2MapPreviewCapture.FlipRowsVertically(mapShotPixels, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, 4);
             // Re-stamped at export so a preview captured before the frame
             // matched vanilla still ships with the vanilla frame.
             SC2MapShotFrameMask.ApplyToBgra(ddsBgra, SC2MapPreviewCapture.MapShotWidth, SC2MapPreviewCapture.MapShotHeight, bottomRowFirst: false);

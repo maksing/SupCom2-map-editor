@@ -49,12 +49,16 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// "Capture Preview" button (SC2MapPreviewCapture) and re-used at every
     /// export until re-captured, unlike the minimap (which always renders
     /// fresh at export time — see SC2TerrainExporter.BuildExportArtifacts).
-    /// Null until the user captures one; export simply skips writing the
-    /// file in that case. Deliberately not part of the undo stack (see
+    /// Null until the user captures or imports one; export then writes a black
+    /// image with the vanilla frame instead. Deliberately not part of the undo stack (see
     /// SC2TerrainShell.CaptureAuxState) — which camera angle was last
     /// screenshotted isn't an editing operation Ctrl+Z is expected to touch,
     /// unlike terrain edits.</summary>
     public byte[] MapShotBgraPixels;
+
+    /// <summary>A custom minimap picture (1024x1024 PNG bytes) imported on Scenario > Preview. When set, every
+    /// minimap (export, previews, the lobby spawn editor) uses it instead of rendering the map. Null = render.</summary>
+    public byte[] CustomMinimapPng;
 
     /// <summary>A real "the live procedural plane
     /// contributes nothing to the shipped map" switch, for maps built purely
