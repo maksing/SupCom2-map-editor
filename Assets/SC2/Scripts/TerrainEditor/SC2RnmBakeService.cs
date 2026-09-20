@@ -618,7 +618,7 @@ public static class SC2RnmBakeService
                 // Sampled against the CORE's own profile using skirtVerts[vi]
                 // directly (core world space, pre-offset) — the skirt
                 // bridges the core terrain's edge, not the background's.
-                var uv = SC2TerrainUv1Unwrap.Sample(coreUv1ProfileU, coreUv1ProfileV, coreData.GridWidth, coreData.GridHeight, coreData.CellSize,
+                var uv = SC2TerrainUv1Unwrap.SampleExtended(coreUv1ProfileU, coreUv1ProfileV, coreData.GridWidth, coreData.GridHeight, coreData.CellSize,
                     skirtVerts[vi].x, skirtVerts[vi].z);
                 model.Vertices.Add(new TerrainVertex
                 {

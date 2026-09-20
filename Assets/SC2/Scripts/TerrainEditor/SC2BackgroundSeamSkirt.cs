@@ -72,7 +72,6 @@ public static class SC2BackgroundSeamSkirt
         // below already needs anyway.
         var coreWForHeight = coreData.GridWidth * coreData.CellSize;
         var coreDForHeight = coreData.GridHeight * coreData.CellSize;
-        var bgOffsetForTile = SC2BackgroundTerrain.GetWorldOffset(coreData);
         var uv2 = new Vector2[verts.Length];
         for (var i = 0; i < verts.Length; i++)
         {
@@ -80,13 +79,13 @@ public static class SC2BackgroundSeamSkirt
             var onCore = v.x >= 0f && v.x <= coreWForHeight && v.z >= 0f && v.z <= coreDForHeight;
             v.y = onCore ? shell.SampleLiveRuntimeHeight(v.x, v.z) : shell.SampleLiveBackgroundHeight(v.x, v.z);
             verts[i] = v;
-            // Same stretch-compensated tiling coordinate the surrounding
-            // real chunks use on whichever side this vertex sits — core's
-            // own runtime for the core side, background's own (in ITS
-            // local space, hence the -offset) for the background side.
-            uv2[i] = onCore
-                ? shell.Runtime.SampleUv1Tile(v.x, v.z)
-                : shell.BackgroundRuntime.SampleUv1Tile(v.x - bgOffsetForTile.x, v.z - bgOffsetForTile.z);
+            // The stretch-compensated tiling coordinate of the CORE for every skirt vertex, continued
+            // past the core's edge for the ones outside it — the same thing the exporter writes into
+            // UV1. Taking the background's own coordinate for the outer vertices (as an earlier
+            // version did) put two unrelated coordinate frames (core-local vs background-local,
+            // hundreds of units apart) at the two ends of a strip only one coarse cell wide, so the
+            // texture was smeared across it.
+            uv2[i] = shell.Runtime.SampleUv1TileExtended(v.x, v.z);
         }
 
         if (_go == null)

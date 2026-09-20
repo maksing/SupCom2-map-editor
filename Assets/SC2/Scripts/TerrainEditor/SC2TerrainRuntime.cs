@@ -506,6 +506,14 @@ public class SC2TerrainRuntime : IDisposable
         return SC2TerrainUv1Unwrap.Sample(_uv1ProfileU, _uv1ProfileV, GridWidth, GridHeight, CellSize, localX, localZ);
     }
 
+    /// <summary>SampleUv1Tile that continues past this runtime's own grid edge (see
+    /// SC2TerrainUv1Unwrap.SampleExtended) — for the seam skirt, which reaches beyond the core.</summary>
+    public Vector2 SampleUv1TileExtended(float localX, float localZ)
+    {
+        EnsureUv1Profile();
+        return SC2TerrainUv1Unwrap.SampleExtended(_uv1ProfileU, _uv1ProfileV, GridWidth, GridHeight, CellSize, localX, localZ);
+    }
+
     /// <summary>
     /// Sets (or clears) the costs/terrainTypes brush overlay — see
     /// SC2CostsShell. Unlike an earlier version of this that issued ad-hoc

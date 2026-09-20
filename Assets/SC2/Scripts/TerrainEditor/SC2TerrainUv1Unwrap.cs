@@ -115,4 +115,23 @@ public static class SC2TerrainUv1Unwrap
         var vv = Mathf.Lerp(v[z0], v[z1], tz);
         return new Vector2(uu, vv);
     }
+
+    /// <summary>Like <see cref="Sample"/>, but a position outside the profiled grid continues the
+    /// profile linearly with the slope of its last cell instead of clamping to the edge value. The
+    /// seam skirt reaches one coarse cell past the core terrain: with clamping every skirt vertex
+    /// beyond the core edge got the very same UV1, so the tiled texture collapsed into streaks across
+    /// the strip; with the continuation the strip keeps texturing at the core's own scale.</summary>
+    public static Vector2 SampleExtended(float[] u, float[] v, int gridWidth, int gridHeight, float cellSize, float localX, float localZ)
+    {
+        if (cellSize <= 0f || gridWidth <= 0 || gridHeight <= 0 || u.Length == 0 || v.Length == 0) return Vector2.zero;
+        var inside = Sample(u, v, gridWidth, gridHeight, cellSize, localX, localZ);
+        var fx = localX / cellSize;
+        var fz = localZ / cellSize;
+        var uu = inside.x; var vv = inside.y;
+        if (fx < 0f && gridWidth >= 1 && u.Length > 1) uu += fx * (u[1] - u[0]);
+        else if (fx > gridWidth && u.Length > gridWidth) uu += (fx - gridWidth) * (u[gridWidth] - u[gridWidth - 1]);
+        if (fz < 0f && gridHeight >= 1 && v.Length > 1) vv += fz * (v[1] - v[0]);
+        else if (fz > gridHeight && v.Length > gridHeight) vv += (fz - gridHeight) * (v[gridHeight] - v[gridHeight - 1]);
+        return new Vector2(uu, vv);
+    }
 }

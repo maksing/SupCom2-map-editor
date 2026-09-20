@@ -899,7 +899,7 @@ public static class SC2TerrainExporter
                 var skirtUv1V = new float[skirtVerts.Length];
                 for (var vi = 0; vi < skirtVerts.Length; vi++)
                 {
-                    var uv = SC2TerrainUv1Unwrap.Sample(coreUv1ProfileU, coreUv1ProfileV, data.GridWidth, data.GridHeight, data.CellSize,
+                    var uv = SC2TerrainUv1Unwrap.SampleExtended(coreUv1ProfileU, coreUv1ProfileV, data.GridWidth, data.GridHeight, data.CellSize,
                         skirtVerts[vi].x, skirtVerts[vi].z);
                     skirtUv1U[vi] = uv.x / uvScale; skirtUv1V[vi] = uv.y / uvScale;
                 }
