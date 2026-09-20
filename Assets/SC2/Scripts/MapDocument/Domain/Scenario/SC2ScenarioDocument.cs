@@ -92,6 +92,13 @@ namespace SC2.MapEditor.Document
         /// SC2ObjectsExport.RegenerateScenarioLua).</summary>
         public List<SC2LobbyStartPosition> LobbyStartPositions = new();
 
+        /// <summary>The map-select preview (Scenario > Preview): opaque BGRA pixels, 448x206. Empty = none captured
+        /// or imported (export then writes a black picture with the frame).</summary>
+        public SC2BlobReference MapShotBgra;
+
+        /// <summary>An imported custom minimap picture as PNG bytes. Empty = the minimap is rendered from the map.</summary>
+        public SC2BlobReference CustomMinimapPng;
+
         public SC2LuaPatchMode ScenarioMode;
         public SC2LuaPatchMode SaveMode;
         public SC2LuaPatchMode ScriptMode;

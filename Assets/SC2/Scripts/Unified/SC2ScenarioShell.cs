@@ -83,6 +83,8 @@ public sealed class SC2ScenarioShell
     // SC2ExportPanel's Export button handler); this is purely so the user
     // can check the framing without running a full export.
     private Texture2D _minimapPreviewTexture;
+    // The imported minimap bytes _minimapPreviewTexture was decoded from (null = a rendered preview or none).
+    private byte[] _minimapThumbSource;
     private string _minimapPreviewStatus;
 
     public SC2ScenarioShell(SC2TerrainShell terrainShell, SC2MapSession session)
@@ -176,7 +178,22 @@ public sealed class SC2ScenarioShell
     private void DrawPreviewTab(float w)
     {
         SC2EnvFieldGui.SectionLabel("Minimap");
-        SC2TerrainShell.DrawUnifiedNote("Orthographic top-down render (RNM + props) — written fresh into minimap.win.dds on every Export. Preview one here any time to check the framing.");
+        SC2TerrainShell.DrawUnifiedNote("Orthographic top-down render (RNM + props) — written fresh into minimap.win.dds on every Export, unless a custom image is imported below. Preview one here any time to check the framing.");
+
+        // An imported minimap is shown as soon as the tab opens (also after the map was reloaded or switched).
+        var custom = Data.CustomMinimapPng is { Length: > 0 } ? Data.CustomMinimapPng : null;
+        if (custom != null && !ReferenceEquals(_minimapThumbSource, custom))
+        {
+            if (_minimapPreviewTexture != null) UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture);
+            _minimapPreviewTexture = SC2MapPreviewCapture.DecodeCustomMinimap(Data);
+            _minimapThumbSource = custom; // also when decoding failed, so it is not retried every frame
+        }
+        else if (custom == null && _minimapThumbSource != null)
+        {
+            if (_minimapPreviewTexture != null) UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture);
+            _minimapPreviewTexture = null;
+            _minimapThumbSource = null;
+        }
 
         if (_minimapPreviewTexture != null)
         {
@@ -196,6 +213,7 @@ public sealed class SC2ScenarioShell
             {
                 if (_minimapPreviewTexture != null) UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture);
                 _minimapPreviewTexture = tex;
+                _minimapThumbSource = data.CustomMinimapPng is { Length: > 0 } ? data.CustomMinimapPng : null;
                 terrainShell.MarkDirtyAndRepaint();
                 _minimapPreviewStatus = tex != null ? "Preview rendered." : "Render failed — no camera found.";
             });
@@ -287,6 +305,7 @@ public sealed class SC2ScenarioShell
         EditorUtility.SetDirty(Data);
         if (_minimapPreviewTexture != null) UnityEngine.Object.DestroyImmediate(_minimapPreviewTexture);
         _minimapPreviewTexture = SC2MapPreviewCapture.DecodeCustomMinimap(Data);
+        _minimapThumbSource = Data.CustomMinimapPng;
         _minimapPreviewStatus = "Custom minimap imported (fitted to 1024x1024, cropped to fill).";
         _terrainShell.MarkDirtyAndRepaint();
     }

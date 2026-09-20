@@ -77,6 +77,17 @@ namespace SC2.MapEditor.Document
 
             data.Collision2HeightOffset = ReconstructCollision2HeightOffset(document.Collision2);
             data.Collision2PolygonBudget = ReconstructCollision2PolygonBudget(document.Collision2);
+            data.Collision2PreviewBytes = NullIfEmpty(ReadBytes(blobStore, document.Collision2.PreviewMeshBytes));
+            data.CustomCollision2Bytes = NullIfEmpty(ReadBytes(blobStore, document.Collision2.CustomMeshBytes));
+            data.UseCustomCollision2 = document.Collision2.UseCustomMesh && data.CustomCollision2Bytes != null;
+            data.Collision2HidePreview = document.Collision2.HidePreview;
+            data.Collision2Wireframe = document.Collision2.Wireframe;
+
+            if (document.Scenario != null)
+            {
+                data.MapShotBgraPixels = NullIfEmpty(ReadBytes(blobStore, document.Scenario.MapShotBgra));
+                data.CustomMinimapPng = NullIfEmpty(ReadBytes(blobStore, document.Scenario.CustomMinimapPng));
+            }
 
             var env = ReconstructEnvironment(document.Environment);
             data.EnvironmentHeader = env.Header;

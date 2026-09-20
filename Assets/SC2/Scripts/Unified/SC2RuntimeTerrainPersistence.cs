@@ -353,6 +353,17 @@ public static class SC2RuntimeTerrainPersistence
         if (session?.Document?.Scenario?.LobbyStartPositions != null)
             doc.Scenario.LobbyStartPositions = SC2LobbyStartPosition.CloneList(session.Document.Scenario.LobbyStartPositions);
 
+        // The preview pictures and the Collision2 tab's meshes/flags have no counterpart in the
+        // legacy bridges above; without these blobs a normal load (which reads this package, not
+        // the legacy JSON) would drop them.
+        doc.Scenario.MapShotBgra = PutBlobBytes(blobStore, data.MapShotBgraPixels);
+        doc.Scenario.CustomMinimapPng = PutBlobBytes(blobStore, data.CustomMinimapPng);
+        doc.Collision2.PreviewMeshBytes = PutBlobBytes(blobStore, data.Collision2PreviewBytes);
+        doc.Collision2.CustomMeshBytes = PutBlobBytes(blobStore, data.CustomCollision2Bytes);
+        doc.Collision2.UseCustomMesh = data.UseCustomCollision2;
+        doc.Collision2.HidePreview = data.Collision2HidePreview;
+        doc.Collision2.Wireframe = data.Collision2Wireframe;
+
         // Prefer the ACTIVE session's Decals document when one exists —
         // SC2DecalsShell has no legacy SC2TerrainData field to fall back to
         // at all, so rebuilding from RawData's original imported bytes here
@@ -378,6 +389,12 @@ public static class SC2RuntimeTerrainPersistence
         }
 
         return doc;
+    }
+
+    private static SC2BlobReference PutBlobBytes(ISC2BlobStore blobStore, byte[] bytes)
+    {
+        if (bytes == null || bytes.Length == 0) return SC2BlobReference.Empty;
+        return blobStore.Put(new MemoryStream(bytes));
     }
 
     /// <summary>Deletes a saved terrain's file from disk. Returns false if it didn't exist.</summary>

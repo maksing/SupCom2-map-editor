@@ -27,5 +27,16 @@ namespace SC2.MapEditor.Document
         public SC2CollisionGenerationSettings Generation = new();
         public long SourceHfieldRevision;
         public SC2DerivedState State;
+
+        /// <summary>The Collision2 tab's preview mesh (last Generate or import) as container bytes, so it survives a
+        /// restart. Empty = none.</summary>
+        public SC2BlobReference PreviewMeshBytes;
+
+        /// <summary>The imported/corrected mesh written to collision2.win.bdf when <see cref="UseCustomMesh"/> is set.</summary>
+        public SC2BlobReference CustomMeshBytes;
+
+        public bool UseCustomMesh;
+        public bool HidePreview;
+        public bool Wireframe;
     }
 }

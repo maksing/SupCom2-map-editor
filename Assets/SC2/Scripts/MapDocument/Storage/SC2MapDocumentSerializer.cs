@@ -370,6 +370,11 @@ namespace SC2.MapEditor.Document
             o.Set("generation", gen);
             o.Set("sourceHfieldRevision", SC2JsonValue.Of(c.SourceHfieldRevision));
             o.Set("state", SC2JsonValue.Of(c.State.ToString()));
+            o.Set("previewMeshBytes", WriteBlobRef(c.PreviewMeshBytes));
+            o.Set("customMeshBytes", WriteBlobRef(c.CustomMeshBytes));
+            o.Set("useCustomMesh", SC2JsonValue.Of(c.UseCustomMesh));
+            o.Set("hidePreview", SC2JsonValue.Of(c.HidePreview));
+            o.Set("wireframe", SC2JsonValue.Of(c.Wireframe));
             return o;
         }
 
@@ -387,6 +392,11 @@ namespace SC2.MapEditor.Document
                 },
                 SourceHfieldRevision = o.Get("sourceHfieldRevision").AsLong(0),
                 State = ParseEnum(o.Get("state"), SC2DerivedState.Original),
+                PreviewMeshBytes = ReadBlobRef(o.Get("previewMeshBytes")),
+                CustomMeshBytes = ReadBlobRef(o.Get("customMeshBytes")),
+                UseCustomMesh = o.Get("useCustomMesh").AsBool(false),
+                HidePreview = o.Get("hidePreview").AsBool(false),
+                Wireframe = o.Get("wireframe").AsBool(false),
             };
         }
 
@@ -1251,6 +1261,8 @@ namespace SC2.MapEditor.Document
             o.Set("originalScriptLua", WriteBlobRef(s.OriginalScriptLua));
             o.Set("knownFields", WriteScenarioKnownFields(s.KnownFields));
             o.Set("lobbyStartPositions", WriteLobbyStartPositions(s.LobbyStartPositions));
+            o.Set("mapShotBgra", WriteBlobRef(s.MapShotBgra));
+            o.Set("customMinimapPng", WriteBlobRef(s.CustomMinimapPng));
             o.Set("scenarioMode", SC2JsonValue.Of(s.ScenarioMode.ToString()));
             o.Set("saveMode", SC2JsonValue.Of(s.SaveMode.ToString()));
             o.Set("scriptMode", SC2JsonValue.Of(s.ScriptMode.ToString()));
@@ -1265,6 +1277,8 @@ namespace SC2.MapEditor.Document
             OriginalScriptLua = ReadBlobRef(o.Get("originalScriptLua")),
             KnownFields = ReadScenarioKnownFields(o.Get("knownFields")),
             LobbyStartPositions = ReadLobbyStartPositions(o.Get("lobbyStartPositions")),
+            MapShotBgra = ReadBlobRef(o.Get("mapShotBgra")),
+            CustomMinimapPng = ReadBlobRef(o.Get("customMinimapPng")),
             ScenarioMode = ParseEnum(o.Get("scenarioMode"), SC2LuaPatchMode.OriginalPassthrough),
             SaveMode = ParseEnum(o.Get("saveMode"), SC2LuaPatchMode.OriginalPassthrough),
             ScriptMode = ParseEnum(o.Get("scriptMode"), SC2LuaPatchMode.OriginalPassthrough),

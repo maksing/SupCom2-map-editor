@@ -437,6 +437,8 @@ namespace SC2.MapEditor.Document
             return "Untitled";
         }
 
+        private static byte[] NullIfEmpty(byte[] bytes) => bytes != null && bytes.Length > 0 ? bytes : null;
+
         private static byte[] ReadBytes(ISC2BlobStore blobStore, SC2BlobReference reference)
         {
             if (blobStore == null || reference.IsEmpty)
