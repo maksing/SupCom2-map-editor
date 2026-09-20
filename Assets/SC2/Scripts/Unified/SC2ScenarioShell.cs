@@ -392,8 +392,9 @@ public sealed class SC2ScenarioShell
         if (_session?.Document != null)
         {
             var knownName = _session.Document.Scenario.KnownFields.Name;
-            Data.DisplayName = !string.IsNullOrEmpty(knownName) ? knownName
-                : !string.IsNullOrEmpty(Data.DisplayName) ? Data.DisplayName
+            // A name already on the loaded data (restored from a save) wins over the session document's.
+            Data.DisplayName = !string.IsNullOrEmpty(Data.DisplayName) ? Data.DisplayName
+                : !string.IsNullOrEmpty(knownName) ? knownName
                 : Data.MapName;
             _session.Document.Scenario.KnownFields.Name = Data.DisplayName;
         }

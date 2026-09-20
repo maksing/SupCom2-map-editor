@@ -345,7 +345,11 @@ public static class SC2RuntimeTerrainPersistence
         var scriptLuaBytes = rawData != null && !string.IsNullOrEmpty(rawData.ScriptLua)
             ? Encoding.UTF8.GetBytes(rawData.ScriptLua) : Array.Empty<byte>();
         doc.Scenario = SC2ScenarioLegacyBridge.BuildFromLegacy(scenarioLuaBytes, saveLuaBytes, scriptLuaBytes, blobStore);
-        if (string.IsNullOrEmpty(doc.Scenario.KnownFields.Name))
+        // The Display Name field edits data.DisplayName; the name parsed from the original scenario
+        // lua above is only what an untouched imported map started with.
+        if (!string.IsNullOrEmpty(data.DisplayName))
+            doc.Scenario.KnownFields.Name = data.DisplayName;
+        else if (string.IsNullOrEmpty(doc.Scenario.KnownFields.Name))
             doc.Scenario.KnownFields.Name = data.MapName ?? "";
         // The lobby-minimap positions exist only on the session's document
         // (no SC2TerrainData field mirrors them, like Decals below) — the
@@ -628,6 +632,7 @@ public static class SC2RuntimeTerrainPersistence
         public byte[] Collision2PreviewBytes;
         public bool Collision2HidePreview;
         public bool Collision2Wireframe;
+        public string DisplayName;
         // Scenario > Preview: the map-select preview pixels and an imported custom minimap.
         public byte[] MapShotBgraPixels;
         public byte[] CustomMinimapPng;
@@ -795,6 +800,7 @@ public static class SC2RuntimeTerrainPersistence
         dto.Collision2PreviewBytes = data.Collision2PreviewBytes ?? Array.Empty<byte>();
         dto.Collision2HidePreview = data.Collision2HidePreview;
         dto.Collision2Wireframe = data.Collision2Wireframe;
+        dto.DisplayName = data.DisplayName ?? "";
         dto.MapShotBgraPixels = data.MapShotBgraPixels ?? Array.Empty<byte>();
         dto.CustomMinimapPng = data.CustomMinimapPng ?? Array.Empty<byte>();
         dto.EnvironmentHeader = data.EnvironmentHeader != null ? (byte[])data.EnvironmentHeader.Clone() : new byte[508];
@@ -969,6 +975,7 @@ public static class SC2RuntimeTerrainPersistence
         data.Collision2PreviewBytes = dto.Collision2PreviewBytes is { Length: > 0 } ? dto.Collision2PreviewBytes : null;
         data.Collision2HidePreview = dto.Collision2HidePreview;
         data.Collision2Wireframe = dto.Collision2Wireframe;
+        data.DisplayName = dto.DisplayName ?? "";
         data.MapShotBgraPixels = dto.MapShotBgraPixels is { Length: > 0 } ? dto.MapShotBgraPixels : null;
         data.CustomMinimapPng = dto.CustomMinimapPng is { Length: > 0 } ? dto.CustomMinimapPng : null;
         data.EnvironmentHeader = dto.EnvironmentHeader != null && dto.EnvironmentHeader.Length == 508 ? dto.EnvironmentHeader : new byte[508];

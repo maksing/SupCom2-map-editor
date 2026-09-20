@@ -85,6 +85,7 @@ namespace SC2.MapEditor.Document
 
             if (document.Scenario != null)
             {
+                data.DisplayName = document.Scenario.KnownFields?.Name ?? "";
                 data.MapShotBgraPixels = NullIfEmpty(ReadBytes(blobStore, document.Scenario.MapShotBgra));
                 data.CustomMinimapPng = NullIfEmpty(ReadBytes(blobStore, document.Scenario.CustomMinimapPng));
             }
