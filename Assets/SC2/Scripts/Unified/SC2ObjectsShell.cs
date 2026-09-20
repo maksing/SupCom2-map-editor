@@ -3639,6 +3639,8 @@ public sealed class SC2ObjectsShell
             ("Copy JSON to clipboard", () => ExportMarkersJson(visible.Where(x => _selMarkers.Contains(x.Id)).ToList()))
         });
 
+        if (_selMarkers.Count >= 2) DrawMarkerPathGraphSection(w);
+
         if (_selMarkers.Count > 0)
         {
             _renamePrefixMarkers = SC2EnvFieldGui.TextField("Rename selected → prefix_001..", _renamePrefixMarkers, "markers_rename_prefix");
@@ -4534,19 +4536,68 @@ public sealed class SC2ObjectsShell
             GUILayout.Space(6);
             SC2EnvFieldGui.SectionLabel($"Selected markers ({_selMarkers.Count}) — from the Markers tab");
             SC2EnvFieldGui.WrapLabel("Connect links every selected pair exactly once (2 selected → 1 edge, 3 → a full triangle, etc.).", w);
-            GUILayout.BeginHorizontal();
-            if (SC2EnvFieldGui.Button("Connect selected (mesh)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.48f)))
-            {
-                PushUndo();
-                ConnectSelectedMarkersMesh(g2);
-            }
-            if (SC2EnvFieldGui.Button("Disconnect selected", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.48f)))
-            {
-                PushUndo();
-                DisconnectSelectedMarkers(g2);
-            }
-            GUILayout.EndHorizontal();
+            DrawConnectSelectedButtons(g2, w);
         }
+    }
+
+    /// <summary>"Connect selected (mesh)" / "Disconnect selected" for the marker selection, acting on
+    /// <paramref name="g"/>. Shared by the Paths tab and the Markers tab.</summary>
+    private void DrawConnectSelectedButtons(SC2ObjGraph g, float w)
+    {
+        GUILayout.BeginHorizontal();
+        if (SC2EnvFieldGui.Button("Connect selected (mesh)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.48f)))
+        {
+            PushUndo();
+            ConnectSelectedMarkersMesh(g);
+        }
+        if (SC2EnvFieldGui.Button("Disconnect selected", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.48f)))
+        {
+            PushUndo();
+            DisconnectSelectedMarkers(g);
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    // Summary for the Markers tab's path-graph section, cached: counting the edges among the selected
+    // markers is O(edges), and the panel is drawn several times per frame.
+    private int _pathSummaryGraphId = -1, _pathSummaryEdgeCount = -1, _pathSummarySelectionHash, _pathSummarySelectionCount = -1;
+    private int _pathSummaryNodes, _pathSummaryExistingEdges;
+
+    /// <summary>Markers tab: join the selected markers into the path graph chosen on the Paths tab
+    /// (which graph is targeted is switched there, not here).</summary>
+    private void DrawMarkerPathGraphSection(float w)
+    {
+        GUILayout.Space(4);
+        SC2EnvFieldGui.SectionLabel($"Path graph ({_selMarkers.Count} selected)");
+        var graph = Data.ObjGraphs.FirstOrDefault(x => x.Id == _selectedGraphId);
+        if (graph == null)
+        {
+            SC2EnvFieldGui.WrapLabel("No path graph is chosen. Pick Land / Air / ... on the Paths tab; the buttons here act on that graph.", w);
+            return;
+        }
+        SC2EnvFieldGui.WrapLabel($"Target graph: {graph.Name} [{graph.GraphKind}] — switch it on the Paths tab.", w);
+
+        var selectionHash = 17;
+        foreach (var id in _selMarkers) selectionHash = selectionHash * 31 + id;
+        var edgeCount = graph.MarkerIdsA?.Count ?? 0;
+        if (_pathSummaryGraphId != graph.Id || _pathSummaryEdgeCount != edgeCount
+            || _pathSummarySelectionHash != selectionHash || _pathSummarySelectionCount != _selMarkers.Count)
+        {
+            _pathSummaryGraphId = graph.Id; _pathSummaryEdgeCount = edgeCount;
+            _pathSummarySelectionHash = selectionHash; _pathSummarySelectionCount = _selMarkers.Count;
+            var pathNodeIds = new HashSet<int>();
+            foreach (var m in Data.ObjMarkers)
+                if (_selMarkers.Contains(m.Id) && ConnectablePathNodeTypes.Contains(m.Type)) pathNodeIds.Add(m.Id);
+            _pathSummaryNodes = pathNodeIds.Count;
+            _pathSummaryExistingEdges = 0;
+            foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(graph))
+                if (pathNodeIds.Contains(a) && pathNodeIds.Contains(b)) _pathSummaryExistingEdges++;
+        }
+        var possible = _pathSummaryNodes * (_pathSummaryNodes - 1) / 2;
+        SC2EnvFieldGui.WrapLabel(_pathSummaryNodes < 2
+            ? $"Needs 2+ path-node markers in the selection (now {_pathSummaryNodes}); other marker types are skipped."
+            : $"{_pathSummaryNodes} path-node marker(s), {_pathSummaryExistingEdges} of {possible} possible edge(s) already in this graph. Symmetric siblings are connected too.", w);
+        DrawConnectSelectedButtons(graph, w);
     }
 
     /// <summary>Only these marker Types (see SC2MarkerTemplates — the exact
@@ -4584,7 +4635,7 @@ public sealed class SC2ObjectsShell
         for (var i = 0; i < ids.Count; i++)
             for (var j = i + 1; j < ids.Count; j++)
                 added += AddEdgeWithSymmetry(g, ids[i], ids[j], existing);
-        _lastActionSummary = $"Connected {added} new edge(s) among {ids.Count} path-node marker(s), including symmetric siblings."
+        _lastActionSummary = $"Connected {added} new edge(s) in {g.GraphKind} among {ids.Count} path-node marker(s), including symmetric siblings."
             + (skipped > 0 ? $" ({skipped} non-path-node marker(s) in the selection were skipped.)" : "");
         if (added > 0) MarkObjectsDirty();
     }
@@ -4690,7 +4741,7 @@ public sealed class SC2ObjectsShell
             var (a, b) = edges[i];
             if (ids.Contains(a) && ids.Contains(b)) { SC2ObjectGraphRefs.RemoveAt(g, i); removed++; }
         }
-        _lastActionSummary = $"Disconnected {removed} edge(s) among selected markers.";
+        _lastActionSummary = $"Disconnected {removed} edge(s) in {g.GraphKind} among selected markers.";
         if (removed > 0) MarkObjectsDirty();
     }
 
@@ -5982,7 +6033,7 @@ public sealed class SC2ObjectsShell
         // (mouse over the viewport, Objects tab active), and the same
         // "2+ selected markers, a graph is selected" precondition the
         // button itself already requires.
-        if (allowInput && _lastSubTab == TabPaths && Event.current != null &&
+        if (allowInput && (_lastSubTab == TabPaths || _lastSubTab == TabMarkers) && Event.current != null &&
             Event.current.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.ConnectMarkers", Event.current) &&
             _selMarkers.Count >= 2)
         {
@@ -6000,7 +6051,7 @@ public sealed class SC2ObjectsShell
         // Alt+R — the Paths tab's own "Disconnect selected" button
         // (DrawPaths), the exact inverse of Ctrl+R above. Same gating
         // reasoning as that hotkey in every respect.
-        if (allowInput && _lastSubTab == TabPaths && Event.current != null &&
+        if (allowInput && (_lastSubTab == TabPaths || _lastSubTab == TabMarkers) && Event.current != null &&
             Event.current.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.DisconnectMarkers", Event.current) &&
             _selMarkers.Count >= 2)
         {
