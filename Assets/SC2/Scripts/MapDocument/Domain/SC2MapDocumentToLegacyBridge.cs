@@ -419,10 +419,11 @@ namespace SC2.MapEditor.Document
             };
         }
 
-        /// <summary>SC2TerrainData.MapName has no domain of its own — every
-        /// bridge that touches map identity treats Scenario.KnownFields.Name
-        /// as authoritative when set (SC2ScenarioShell keeps it in lockstep
-        /// with live MapName renames), falling back to Identity.DisplayName
+        /// <summary>SC2TerrainData.MapName is the technical file/folder
+        /// identifier, which the document keeps in Identity.MapStem — that wins
+        /// (Scenario.KnownFields.Name is the separate in-game Display Name, and
+        /// taking it as the map name renamed the map on load). Older documents
+        /// without a stem fall back to Scenario.KnownFields.Name, then to Identity.DisplayName
         /// (populated at document-snapshot time even when Scenario.
         /// KnownFields was never parsed — e.g. a from-scratch procedural map
         /// with no real scenario.lua to parse at all).</summary>
@@ -430,6 +431,8 @@ namespace SC2.MapEditor.Document
         {
             if (document == null) throw new ArgumentNullException(nameof(document));
 
+            if (!string.IsNullOrEmpty(document.Identity?.MapStem))
+                return document.Identity.MapStem;
             if (!string.IsNullOrEmpty(document.Scenario?.KnownFields?.Name))
                 return document.Scenario.KnownFields.Name;
             if (!string.IsNullOrEmpty(document.Identity?.DisplayName))

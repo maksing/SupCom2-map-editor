@@ -468,6 +468,16 @@ public class MapDocumentToLegacyBridgeTests
     // ---- MapName ----
 
     [Fact]
+    public void ReconstructMapName_PrefersTheMapStem_OverTheScenarioDisplayName()
+    {
+        var document = new SC2MapDocument();
+        document.Identity.MapStem = "MyMap";
+        document.Scenario.KnownFields.Name = "A Pretty In-Game Name";
+
+        Assert.Equal("MyMap", SC2MapDocumentToLegacyBridge.ReconstructMapName(document));
+    }
+
+    [Fact]
     public void ReconstructMapName_PrefersScenarioKnownFieldsName()
     {
         var document = new SC2MapDocument();
