@@ -2993,13 +2993,16 @@ public sealed class SC2ObjectsShell
             });
         GUILayout.EndHorizontal();
 
-        _propsBrushRadius = DrawCompactSliderLocal("Radius (F resize)", _propsBrushRadius, 1f, 60f);
-        _propsBrushDensity = DrawCompactSliderLocal("Density", _propsBrushDensity, 0.5f, 20f);
-        _propsBrushRotationJitter = DrawCompactSliderLocal("Rotation jitter (deg)", _propsBrushRotationJitter, 0f, 180f);
-        _propsBrushScaleMin = DrawCompactSliderLocal("Scale min", _propsBrushScaleMin, 0.05f, 3f);
-        _propsBrushScaleMax = DrawCompactSliderLocal("Scale max", _propsBrushScaleMax, 0.05f, 3f);
+        // Every slider has a number box next to it (a typed value can go past the slider's range), so exact
+        // values can be entered; the lower limits keep a typed value valid.
+        _propsBrushRadius = Mathf.Max(1f, SC2EnvFieldGui.Slider("Radius (F resize)", _propsBrushRadius, 1f, 60f, "propsbrush:radius"));
+        _propsBrushDensity = Mathf.Max(0.1f, SC2EnvFieldGui.Slider("Density", _propsBrushDensity, 0.5f, 20f, "propsbrush:density"));
+        _propsBrushRotationJitter = Mathf.Clamp(SC2EnvFieldGui.Slider("Rotation jitter (deg)", _propsBrushRotationJitter, 0f, 180f, "propsbrush:rotJitter"), 0f, 180f);
+        // Scale 0..100: a big prop such as a building may need a large multiplier.
+        _propsBrushScaleMin = SC2EnvFieldGui.Slider("Scale min", _propsBrushScaleMin, 0f, 100f, "propsbrush:scaleMin");
+        _propsBrushScaleMax = SC2EnvFieldGui.Slider("Scale max", _propsBrushScaleMax, 0f, 100f, "propsbrush:scaleMax");
         if (_propsBrushScaleMin > _propsBrushScaleMax) _propsBrushScaleMax = _propsBrushScaleMin;
-        _propsBrushMinSpacing = DrawCompactSliderLocal("Min spacing", _propsBrushMinSpacing, 0.1f, 20f);
+        _propsBrushMinSpacing = Mathf.Max(0.1f, SC2EnvFieldGui.Slider("Min spacing", _propsBrushMinSpacing, 0.1f, 20f, "propsbrush:minSpacing"));
 
         _propsBrushErasing = SC2EnvFieldGui.Toggle("Eraser mode", _propsBrushErasing);
 
@@ -3015,15 +3018,6 @@ public sealed class SC2ObjectsShell
             SC2EnvFieldGui.WrapLabel("Pick a blueprint first (or turn on Eraser mode).", w);
     }
 
-    private static float DrawCompactSliderLocal(string label, float value, float min, float max)
-    {
-        GUILayout.BeginHorizontal();
-        GUILayout.Label(label, GUILayout.Width(SC2UiScale.Pxf(140f)));
-        var v = GUILayout.HorizontalSlider(value, min, max);
-        GUILayout.Label(v.ToString("0.##"), GUILayout.Width(SC2UiScale.Pxf(40f)));
-        GUILayout.EndHorizontal();
-        return v;
-    }
 
     /// <summary>Continuous paint gesture — called every frame the brush is
     /// active while the mouse is down/dragging in the viewport, from
@@ -3057,7 +3051,7 @@ public sealed class SC2ObjectsShell
             // PlacePropAt's own comment for the fix history behind this.
             var groundHeight = _terrainShell.SampleLiveHeightGrid(x, z);
 
-            var scale = UnityEngine.Random.Range(_propsBrushScaleMin, _propsBrushScaleMax);
+            var scale = Mathf.Max(0.01f, UnityEngine.Random.Range(_propsBrushScaleMin, _propsBrushScaleMax)); // never a zero-size prop
             var rotY = UnityEngine.Random.Range(-_propsBrushRotationJitter, _propsBrushRotationJitter);
             var prop = new SC2ObjProp
             {
