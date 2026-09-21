@@ -88,10 +88,18 @@ namespace SC2.MapEditor.Document
         /// SC2TerrainUndoStack.RecordBeforeChange or SC2CommandHistory.
         /// Execute) — mirrors every existing shell's own "record, then push
         /// a marker" call order.</summary>
-        public void Record(ISC2UndoChannel channel)
+        public void Record(ISC2UndoChannel channel, int maxMarkers = 0)
         {
             _undoMarkers.Push(new Marker(channel, System.Diagnostics.Stopwatch.GetTimestamp()));
             _redoMarkers.Clear();
+            if (maxMarkers > 0 && _undoMarkers.Count > maxMarkers)
+            {
+                // A channel that keeps a bounded number of steps drops its oldest; the marker for that step has to go
+                // too, or it would sit at the bottom of the stack and answer every later Undo with "nothing".
+                var newestFirst = _undoMarkers.ToArray();
+                _undoMarkers.Clear();
+                for (var i = maxMarkers - 1; i >= 0; i--) _undoMarkers.Push(newestFirst[i]);
+            }
         }
 
         public bool Undo()

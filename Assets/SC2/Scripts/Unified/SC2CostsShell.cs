@@ -117,6 +117,10 @@ public sealed class SC2CostsShell
     // means passable.
     private bool _importCostsInvertColors;
     private Vector2? _lastPaintPos;
+    /// <summary>True from the moment a stroke's undo step is recorded until its mouse-up. A stroke whose mouse-down
+    /// never reached this shell (it landed on the panel, or was consumed by another handler, or missed the terrain)
+    /// still starts here, on its first drag, so every painted stroke owns exactly one undo step.</summary>
+    private bool _strokeActive;
     /// <summary>Tracks the host's top-level sub-tab index (SC2GameViewEditorUI.
     /// _subTab) so a real CHANGE (a tab click) can be told apart from every
     /// other frame's redraw — see GetSubtabLabels/DrawEmbeddedGUI.</summary>
@@ -1013,6 +1017,13 @@ public sealed class SC2CostsShell
             return;
 
         var e = Event.current;
+        // The stroke ends on the button release wherever the cursor is (over the panel, off the terrain), otherwise
+        // its derived-block resync and document sync would be skipped.
+        if (e != null && _strokeActive && e.type == EventType.MouseUp && e.button == 0)
+        {
+            EndStroke();
+            return;
+        }
         if (e == null || !_painting)
             return;
         if (!viewportRect.Contains(mousePosition))
@@ -1095,10 +1106,8 @@ public sealed class SC2CostsShell
 
         if (e.type == EventType.MouseDown && e.button == 0)
         {
-            if (ActiveTarget == PaintTarget.TerrainTypes)
-                RecordTerrainTypesStrokeStart();
-            else
-                RecordUndo();
+            if (_strokeActive) EndStroke();
+            BeginStroke();
             _lastPaintPos = new Vector2(hit.x, hit.z);
             PaintAt(_lastPaintPos.Value);
             _overlayDirty = true;
@@ -1107,31 +1116,47 @@ public sealed class SC2CostsShell
         else if (e.type == EventType.MouseDrag && e.button == 0)
         {
             var cur = new Vector2(hit.x, hit.z);
+            if (!_strokeActive)
+            {
+                BeginStroke();
+                _lastPaintPos = cur;
+            }
             var from = _lastPaintPos ?? cur;
             PaintLine(from, cur);
             _lastPaintPos = cur;
             _overlayDirty = true;
             RepaintHost?.Invoke();
         }
-        else if (e.type == EventType.MouseUp && e.button == 0)
+    }
+
+    private void BeginStroke()
+    {
+        if (ActiveTarget == PaintTarget.TerrainTypes)
+            RecordTerrainTypesStrokeStart();
+        else
+            RecordUndo();
+        _strokeActive = true;
+    }
+
+    private void EndStroke()
+    {
+        _strokeActive = false;
+        _lastPaintPos = null;
+        // Sync once per completed stroke, not per drag frame — a Put()
+        // call hashes the whole grid (~1MB per block), so doing this on
+        // every MouseDrag would be real, avoidable per-frame cost for no
+        // benefit (the shell's own legacy undo already covers every
+        // intermediate frame of the stroke).
+        if (ActiveTarget == PaintTarget.TerrainTypes)
+            CommitTerrainTypesStroke();
+        else
         {
-            _lastPaintPos = null;
-            // Sync once per completed stroke, not per drag frame — a Put()
-            // call hashes the whole grid (~1MB per block), so doing this on
-            // every MouseDrag would be real, avoidable per-frame cost for no
-            // benefit (the shell's own legacy undo already covers every
-            // intermediate frame of the stroke).
-            if (ActiveTarget == PaintTarget.TerrainTypes)
-                CommitTerrainTypesStroke();
-            else
-            {
-                // Block 0 (and the shore-hint-capable
-                // block) are the only Costs blocks still hand-painted —
-                // every other block auto-resyncs right after any stroke
-                // completes, not just after the dedicated generate button.
-                RecomputeDerivedCostsBlocks();
-                SyncDocumentFromLive();
-            }
+            // Block 0 (and the shore-hint-capable
+            // block) are the only Costs blocks still hand-painted —
+            // every other block auto-resyncs right after any stroke
+            // completes, not just after the dedicated generate button.
+            RecomputeDerivedCostsBlocks();
+            SyncDocumentFromLive();
         }
     }
 
@@ -1173,6 +1198,8 @@ public sealed class SC2CostsShell
     /// other paint tool (nothing in the panel visibly flips).</summary>
     private static bool IsErasingHeld() => SC2Hotkeys.ModifierHeld("Costs.EraseModifier", Event.current);
 
+    private readonly List<Vector2Int> _rotatedCellsScratch = new();
+
     private void PaintAt(Vector2 worldXZ)
     {
         var erasing = IsErasingHeld();
@@ -1187,11 +1214,36 @@ public sealed class SC2CostsShell
         var symCenter = new Vector2(Data.SymmetryCenter.x, Data.SymmetryCenter.z);
         var r2 = _brushRadius * _brushRadius;
 
+        // A rotation by 120, 72, ... degrees does not map grid cells one to one, so rotating each brush cell
+        // leaves a mesh of holes in the copies. The brush is a disc, and a disc rotates into a disc: rotate only
+        // its centre and paint the whole disc around each rounded copy centre.
+        Vector2Int[] rotatedCentres = null;
+        if (symMode == SC2SymmetryMode.Rotational && Data.RadialCount >= 3)
+        {
+            rotatedCentres = new Vector2Int[Data.RadialCount];
+            var offset = worldXZ - symCenter;
+            for (var k = 0; k < rotatedCentres.Length; k++)
+            {
+                var angle = 2f * Mathf.PI * k / rotatedCentres.Length;
+                var sin = Mathf.Sin(angle); var cos = Mathf.Cos(angle);
+                var rotated = symCenter + new Vector2(offset.x * cos - offset.y * sin, offset.x * sin + offset.y * cos);
+                rotatedCentres[k] = new Vector2Int(Mathf.RoundToInt(rotated.x), Mathf.RoundToInt(rotated.y));
+            }
+        }
+
         for (var dz = -Mathf.CeilToInt(_brushRadius); dz <= Mathf.CeilToInt(_brushRadius); dz++)
         for (var dx = -Mathf.CeilToInt(_brushRadius); dx <= Mathf.CeilToInt(_brushRadius); dx++)
         {
             if (dx * dx + dz * dz > r2) continue;
-            var cells = SC2Symmetry.GetSymmetricCells(new Vector2Int(cx + dx, cz + dz), symCenter, gridSize, symMode, Data.RadialCount);
+            IEnumerable<Vector2Int> cells;
+            if (rotatedCentres != null)
+            {
+                _rotatedCellsScratch.Clear();
+                foreach (var centre in rotatedCentres) _rotatedCellsScratch.Add(new Vector2Int(centre.x + dx, centre.y + dz));
+                cells = _rotatedCellsScratch;
+            }
+            else
+                cells = SC2Symmetry.GetSymmetricCells(new Vector2Int(cx + dx, cz + dz), symCenter, gridSize, symMode, Data.RadialCount);
             foreach (var cell in cells)
             {
                 if (cell.x < 0 || cell.x >= gridSize || cell.y < 0 || cell.y >= gridSize) continue;
@@ -1476,7 +1528,7 @@ public sealed class SC2CostsShell
             foreach (var s in tmp.Take(MaxUndoSteps).Reverse()) _undoStack.Push(s);
         }
         _redoStack.Clear();
-        _undo.Record(new SC2DelegateUndoChannel(TryLegacyUndo, TryLegacyRedo));
+        _undo.Record(new SC2DelegateUndoChannel(TryLegacyUndo, TryLegacyRedo), MaxUndoSteps);
     }
 
     /// <summary>Call BEFORE a terrain-types paint stroke starts (mirrors
@@ -1495,7 +1547,7 @@ public sealed class SC2CostsShell
         }
 
         Data.EnsureCostsAndTerrainTypes();
-        _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
+        _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo), MaxUndoSteps);
     }
 
     private Snapshot Capture() => new Snapshot
@@ -1547,6 +1599,8 @@ public sealed class SC2CostsShell
         if (_undoStack.Count == 0) return false;
         _redoStack.Push(Capture());
         Apply(_undoStack.Pop());
+        // The outline / shore caches the overlay and the outline brush read are rebuilt from the restored walls.
+        RecomputeDerivedCostsBlocks();
         SyncDocumentFromLive();
         return true;
     }
@@ -1556,6 +1610,7 @@ public sealed class SC2CostsShell
         if (_redoStack.Count == 0) return false;
         _undoStack.Push(Capture());
         Apply(_redoStack.Pop());
+        RecomputeDerivedCostsBlocks();
         SyncDocumentFromLive();
         return true;
     }
