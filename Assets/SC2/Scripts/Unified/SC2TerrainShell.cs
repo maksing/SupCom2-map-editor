@@ -2100,6 +2100,14 @@ public class SC2TerrainShell : ScriptableObject
     /// <summary>Flush terrain state before export or save. Same logic as the private SaveState below (kept as one method to avoid the two silently drifting apart).</summary>
     public void SaveTerrainState(bool writeAssets) => SaveState(writeAssets);
 
+    /// <summary>Time.realtimeSinceStartupAsDouble of the last save that
+    /// actually wrote to disk (writeAssets=true), or -1 if none happened
+    /// yet this session — SC2GameViewEditorUI.TickAutosave's countdown
+    /// baseline, so ANY save (manual, from any tab's own "Save Terrain"
+    /// button, or a previous autosave) restarts the interval, not just the
+    /// one autosave itself triggers.</summary>
+    public double LastSaveRealtimeSeconds { get; private set; } = -1;
+
     public bool IsPairCpuDataStale => _pairCpuDataStale;
 
     // ── Toolbar drawing ──────────────────────────────────────────────────────
@@ -4214,70 +4222,101 @@ public class SC2TerrainShell : ScriptableObject
 #endif
     }
 
+    // Every stage below is logged through SC2Log (its file writer is
+    // AutoFlush=true, so a stage's line is on disk the instant it's
+    // written) and the whole body is now caught, not left to propagate —
+    // an editor crashed here once with no way to tell why (nothing in this
+    // method logged anything at all before this fix), and an uncaught
+    // exception from a GUI button handler risks the same "rest of the UI
+    // silently stops drawing" class of bug HandleCostsGameViewInput's own
+    // try/catch already guards against. Same reasoning as
+    // SC2TerrainExporter.ExportCorrect's own top-level try/catch/finally.
     private void SaveState(bool writeAssets)
     {
         if (_data == null) return;
-        PreSaveSync?.Invoke();
-        if (_runtime != null)
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        SC2Log.Log($"[SC2TerrainShell] Save started. MapName='{_data.MapName}', writeAssets={writeAssets}");
+        try
         {
-            _data.Heights = _runtime.GetHeightsCopy();
-            _data.InvalidateGeometryCache();
-            if (_paintMode != null)
+            PreSaveSync?.Invoke();
+            SC2Log.Log($"[SC2TerrainShell] Save: PreSaveSync done ({sw.ElapsedMilliseconds}ms).");
+
+            if (_runtime != null)
             {
-                // Explicit-target overload — always the CORE, regardless of
-                // whichever surface the brush was last pointing at (see
-                // SC2PaintMode.SyncPairMapToCPU's own doc comment).
-                _paintMode.SyncPairMapToCPU(_runtime, _data);
-                MarkPairCpuDataSynced();
+                _data.Heights = _runtime.GetHeightsCopy();
+                _data.InvalidateGeometryCache();
+                if (_paintMode != null)
+                {
+                    // Explicit-target overload — always the CORE, regardless of
+                    // whichever surface the brush was last pointing at (see
+                    // SC2PaintMode.SyncPairMapToCPU's own doc comment).
+                    _paintMode.SyncPairMapToCPU(_runtime, _data);
+                    MarkPairCpuDataSynced();
+                }
+                _runtime.FlushActiveBlendGroup(_data);
+                SC2Log.Log($"[SC2TerrainShell] Save: runtime->CPU sync done ({sw.ElapsedMilliseconds}ms).");
             }
-            _runtime.FlushActiveBlendGroup(_data);
-        }
-        // The ONLY place that used to push Environment
-        // edits from the live, always-current document
-        // (Session.Document.Environment.WorkingHeader, kept in sync by
-        // SC2EnvironmentShell.MaybeSnapshot every frame regardless of which
-        // tab is active) into Data.EnvironmentHeader — the field that
-        // actually gets serialized below — was SC2EnvironmentShell.Commit(),
-        // fired only by the Environment tab's OWN "Save Terrain (incl.
-        // Environment)" button. Saving from the Terrain tab's identically-
-        // named "Save Terrain" button (or Ctrl+S/RequestSave) skipped this
-        // entirely, silently serializing a stale EnvironmentHeader. Doing it
-        // here instead means every save path commits Environment
-        // consistently, not just one specific button.
-        var envDoc = Session?.Document?.Environment;
-        if (envDoc?.WorkingHeader != null)
-        {
-            _data.EnvironmentHeader = (byte[])envDoc.WorkingHeader.Clone();
-            _data.EnvironmentMap = envDoc.EnvironmentMap;
-            _data.SkyMap = envDoc.SkyMap;
-            _data.TexturePath3 = envDoc.TexturePath3;
-            _data.ColorCorrectionCube = envDoc.ColorCorrectionCube;
-            _data.FogOfWarCorrectionCube = envDoc.FogOfWarCorrectionCube;
-        }
-        _data.EnsureSerializableState();
-        EditorUtility.SetDirty(_data);
-        if (writeAssets)
-        {
+            // The ONLY place that used to push Environment
+            // edits from the live, always-current document
+            // (Session.Document.Environment.WorkingHeader, kept in sync by
+            // SC2EnvironmentShell.MaybeSnapshot every frame regardless of which
+            // tab is active) into Data.EnvironmentHeader — the field that
+            // actually gets serialized below — was SC2EnvironmentShell.Commit(),
+            // fired only by the Environment tab's OWN "Save Terrain (incl.
+            // Environment)" button. Saving from the Terrain tab's identically-
+            // named "Save Terrain" button (or Ctrl+S/RequestSave) skipped this
+            // entirely, silently serializing a stale EnvironmentHeader. Doing it
+            // here instead means every save path commits Environment
+            // consistently, not just one specific button.
+            var envDoc = Session?.Document?.Environment;
+            if (envDoc?.WorkingHeader != null)
+            {
+                _data.EnvironmentHeader = (byte[])envDoc.WorkingHeader.Clone();
+                _data.EnvironmentMap = envDoc.EnvironmentMap;
+                _data.SkyMap = envDoc.SkyMap;
+                _data.TexturePath3 = envDoc.TexturePath3;
+                _data.ColorCorrectionCube = envDoc.ColorCorrectionCube;
+                _data.FogOfWarCorrectionCube = envDoc.FogOfWarCorrectionCube;
+            }
+            _data.EnsureSerializableState();
+            SC2Log.Log($"[SC2TerrainShell] Save: EnsureSerializableState done ({sw.ElapsedMilliseconds}ms).");
+            EditorUtility.SetDirty(_data);
+            if (writeAssets)
+            {
 #if UNITY_EDITOR
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+                SC2Log.Log($"[SC2TerrainShell] Save: AssetDatabase.SaveAssets/Refresh done ({sw.ElapsedMilliseconds}ms).");
 #else
-            // AssetDatabase.SaveAssets()/Refresh() are Editor-only APIs — the
-            // UnityEditorRuntimeShim versions are no-ops, since there is no
-            // project/asset database in a standalone player. Without this,
-            // "Save Terrain" silently did nothing in Build & Run and every
-            // edit was lost on exit.
-            // Session threaded through so the document-package dual-write
-            // can persist the ACTIVE Decals document instead of rebuilding
-            // it from the original imported decals.bdf bytes (or nothing,
-            // for a from-scratch map) — confirmed real via the MapDocument
-            // audit: Save Terrain was silently discarding every catalog
-            // entry/placement/symmetry group SC2DecalsShell had authored.
-            SC2RuntimeTerrainPersistence.Save(_data, Session);
-            var savePath = SC2RuntimeTerrainPersistence.GetSavePath(_data.MapName);
-            var savedBytes = System.IO.File.Exists(savePath) ? new System.IO.FileInfo(savePath).Length : -1L;
-            _lastSaveInfo = $"Saved to: {savePath}\n({savedBytes:N0} bytes, MapName='{_data.MapName}')";
+                // AssetDatabase.SaveAssets()/Refresh() are Editor-only APIs — the
+                // UnityEditorRuntimeShim versions are no-ops, since there is no
+                // project/asset database in a standalone player. Without this,
+                // "Save Terrain" silently did nothing in Build & Run and every
+                // edit was lost on exit.
+                // Session threaded through so the document-package dual-write
+                // can persist the ACTIVE Decals document instead of rebuilding
+                // it from the original imported decals.bdf bytes (or nothing,
+                // for a from-scratch map) — confirmed real via the MapDocument
+                // audit: Save Terrain was silently discarding every catalog
+                // entry/placement/symmetry group SC2DecalsShell had authored.
+                SC2RuntimeTerrainPersistence.Save(_data, Session);
+                var savePath = SC2RuntimeTerrainPersistence.GetSavePath(_data.MapName);
+                var savedBytes = System.IO.File.Exists(savePath) ? new System.IO.FileInfo(savePath).Length : -1L;
+                _lastSaveInfo = $"Saved to: {savePath}\n({savedBytes:N0} bytes, MapName='{_data.MapName}')";
+                SC2Log.Log($"[SC2TerrainShell] Save: SC2RuntimeTerrainPersistence.Save done ({sw.ElapsedMilliseconds}ms), {savedBytes:N0} bytes.");
 #endif
+                LastSaveRealtimeSeconds = Time.realtimeSinceStartupAsDouble;
+            }
+            SC2Log.Log($"[SC2TerrainShell] Save finished in {sw.ElapsedMilliseconds}ms.");
+        }
+        catch (System.Exception ex)
+        {
+            SC2Log.LogException(ex);
+            _lastSaveInfo = "Save FAILED (see Logs/SC2TerrainEditor.log): " + ex.Message;
+        }
+        finally
+        {
+            SC2Log.Flush();
         }
     }
 

@@ -148,13 +148,25 @@ public static class SC2RuntimeTerrainPersistence
     // silently discarded all of it. `session` is optional (this class is
     // deliberately session-agnostic by design, per its own original doc
     // comment) — when absent, behavior is unchanged from before.
+    // Every stage below is logged through SC2Log, whose file writer is
+    // AutoFlush=true — each line lands on disk the instant it's written, not
+    // just when this method returns. A prior crash with no way to tell which
+    // step of Save it happened during (nothing here logged anything at all —
+    // unlike SC2TerrainExporter, whose own per-stage SC2Log coverage already
+    // made THAT class of bug traceable) is exactly what this closes: whatever
+    // the last logged "Save: ..." line in Logs/SC2TerrainEditor.log says is
+    // the last stage that actually completed before whatever happened next.
     public static void Save(SC2TerrainData data, SC2MapSession session = null)
     {
         if (data == null) return;
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save started. MapName='{data.MapName}'.");
+
         Directory.CreateDirectory(SaveDirectory);
         var dto = ToDto(data);
         var json = JsonUtility.ToJson(dto);
+        SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: legacy JSON built ({sw.ElapsedMilliseconds}ms, {json.Length:N0} chars).");
         var finalPath = GetSavePath(data.MapName);
         var tempPath = finalPath + ".tmp";
         File.WriteAllText(tempPath, json, Encoding.UTF8);
@@ -162,8 +174,10 @@ public static class SC2RuntimeTerrainPersistence
             File.Replace(tempPath, finalPath, null);
         else
             File.Move(tempPath, finalPath);
+        SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: legacy JSON written to '{finalPath}' ({sw.ElapsedMilliseconds}ms).");
 
         SaveDocumentPackage(data, session);
+        SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save finished in {sw.ElapsedMilliseconds}ms.");
     }
 
     /// <summary>Dual-write — builds a full
@@ -178,11 +192,14 @@ public static class SC2RuntimeTerrainPersistence
     /// above, hence the blanket catch.</summary>
     private static void SaveDocumentPackage(SC2TerrainData data, SC2MapSession session)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var blobStore = CreateBlobStore();
             var document = BuildDocumentSnapshot(data, session, blobStore);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: document snapshot built ({sw.ElapsedMilliseconds}ms).");
             var manifestJson = SC2MapDocumentSerializer.Serialize(document);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: manifest serialized ({sw.ElapsedMilliseconds}ms, {manifestJson.Length:N0} chars).");
 
             var packageDir = DocumentPackageDirectory(data.MapName);
             Directory.CreateDirectory(packageDir);
@@ -193,13 +210,18 @@ public static class SC2RuntimeTerrainPersistence
                 File.Replace(manifestTempPath, manifestPath, null);
             else
                 File.Move(manifestTempPath, manifestPath);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: manifest written to '{manifestPath}' ({sw.ElapsedMilliseconds}ms).");
 
             CollectUnreferencedBlobs(blobStore);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: blob GC done ({sw.ElapsedMilliseconds}ms).");
             RefreshShareablePackage(data.MapName, manifestJson, blobStore);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: shareable package refreshed ({sw.ElapsedMilliseconds}ms).");
+            CreateBackupSnapshot(data.MapName, manifestJson, blobStore);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: backup snapshot step done ({sw.ElapsedMilliseconds}ms).");
         }
         catch (Exception ex)
         {
-            Debug.LogWarning("[SC2RuntimeTerrainPersistence] Document package dual-write failed " +
+            SC2Log.LogWarning("[SC2RuntimeTerrainPersistence] Document package dual-write failed " +
                               $"(legacy JSON save above still succeeded): {ex}");
         }
     }
@@ -227,32 +249,165 @@ public static class SC2RuntimeTerrainPersistence
         var shareDir = SharePackageDirectory(mapName);
         if (Directory.Exists(shareDir))
             Directory.Delete(shareDir, recursive: true);
-        Directory.CreateDirectory(shareDir);
-
-        var savePath = GetSavePath(mapName);
-        File.Copy(savePath, Path.Combine(shareDir, Path.GetFileName(savePath)), overwrite: true);
-
-        var shareManifestDir = Path.Combine(shareDir, Path.GetFileName(DocumentPackageDirectory(mapName)));
-        Directory.CreateDirectory(shareManifestDir);
-        File.WriteAllText(Path.Combine(shareManifestDir, "manifest.json"), manifestJson, Encoding.UTF8);
-
-        foreach (var hash in SC2BlobStoreGarbageCollector.CollectReferencedHashes(manifestJson))
-        {
-            if (!blobStore.Contains(hash)) continue; // referenced but somehow missing from the store — nothing to copy
-            var destDir = Path.Combine(shareDir, "Blobs", hash.Substring(0, 2));
-            Directory.CreateDirectory(destDir);
-            using var src = blobStore.OpenRead(hash);
-            using var dest = File.Create(Path.Combine(destDir, hash + ".bin"));
-            src.CopyTo(dest);
-        }
-
-        Debug.Log($"[SC2RuntimeTerrainPersistence] Shareable package refreshed: {shareDir}");
+        WriteSelfContainedPackage(shareDir, mapName, manifestJson, blobStore);
+        SC2Log.Log($"[SC2RuntimeTerrainPersistence] Shareable package refreshed: {shareDir}");
     }
 
     /// <summary>Sibling of DocumentPackageDirectory — see
     /// RefreshShareablePackage's own doc comment for what lives here.</summary>
     public static string SharePackageDirectory(string mapName) =>
         Path.Combine(SaveDirectory, SanitizeFileName(string.IsNullOrWhiteSpace(mapName) ? "Untitled" : mapName) + ".sc2mapshare");
+
+    /// <summary>Shared by RefreshShareablePackage and CreateBackupSnapshot —
+    /// writes a complete, self-contained copy of one map's save (the legacy
+    /// .sc2terrain.json + its manifest.json + only the blobs that manifest
+    /// actually references) into `destDir`, in the same relative layout
+    /// SaveDirectory itself uses. Self-contained on purpose: a backup must
+    /// keep working even after the shared blob pool's own GC (see
+    /// CollectUnreferencedBlobs) has long since swept whatever the CURRENT
+    /// save stopped referencing.</summary>
+    private static void WriteSelfContainedPackage(string destDir, string mapName, string manifestJson, ISC2BlobStore blobStore)
+    {
+        Directory.CreateDirectory(destDir);
+
+        var savePath = GetSavePath(mapName);
+        File.Copy(savePath, Path.Combine(destDir, Path.GetFileName(savePath)), overwrite: true);
+
+        var manifestDir = Path.Combine(destDir, Path.GetFileName(DocumentPackageDirectory(mapName)));
+        Directory.CreateDirectory(manifestDir);
+        File.WriteAllText(Path.Combine(manifestDir, "manifest.json"), manifestJson, Encoding.UTF8);
+
+        foreach (var hash in SC2BlobStoreGarbageCollector.CollectReferencedHashes(manifestJson))
+        {
+            if (!blobStore.Contains(hash)) continue; // referenced but somehow missing from the store — nothing to copy
+            var blobDestDir = Path.Combine(destDir, "Blobs", hash.Substring(0, 2));
+            Directory.CreateDirectory(blobDestDir);
+            using var src = blobStore.OpenRead(hash);
+            using var dest = File.Create(Path.Combine(blobDestDir, hash + ".bin"));
+            src.CopyTo(dest);
+        }
+    }
+
+    // ==================================================================
+    // Backups — a rotating history of self-contained snapshots per map
+    // (see WriteSelfContainedPackage), independent of the shared blob
+    // pool's own GC, so a corrupted/lost current save can be recovered from
+    // whatever was last known-good. Count is configurable via
+    // SC2SaveSettings.MaxBackupsPerMap (0 disables backups outright).
+    // ==================================================================
+
+    // Local time, filesystem-safe, and lexically sortable in chronological
+    // order — the exact same string IS both the folder name (the backup's
+    // id) and its human-readable label in the "Restore Backup..." menu, so
+    // no separate id<->label mapping is needed anywhere that lists them.
+    private const string BackupStampFormat = "yyyy-MM-dd_HH-mm-ss";
+
+    public static string BackupsDirectory(string mapName) =>
+        Path.Combine(SaveDirectory, "Backups", SanitizeFileName(string.IsNullOrWhiteSpace(mapName) ? "Untitled" : mapName));
+
+    /// <summary>Called from SaveDocumentPackage's own try/catch — a backup
+    /// failure must never make an otherwise-successful Save look like it
+    /// failed, same reasoning as every other step in that method.</summary>
+    private static void CreateBackupSnapshot(string mapName, string manifestJson, ISC2BlobStore blobStore)
+    {
+        if (SC2SaveSettings.MaxBackupsPerMap <= 0) return;
+        try
+        {
+            var stamp = DateTime.Now.ToString(BackupStampFormat);
+            var backupDir = Path.Combine(BackupsDirectory(mapName), stamp);
+            // Two saves within the same second (autosave racing a manual Ctrl+S,
+            // say) would otherwise collide on the same folder name.
+            var suffix = 1;
+            while (Directory.Exists(backupDir))
+                backupDir = Path.Combine(BackupsDirectory(mapName), $"{stamp}_{suffix++}");
+
+            WriteSelfContainedPackage(backupDir, mapName, manifestJson, blobStore);
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Backup snapshot created: {backupDir}");
+            PruneOldBackups(mapName);
+        }
+        catch (Exception ex)
+        {
+            SC2Log.LogWarning($"[SC2RuntimeTerrainPersistence] Backup snapshot failed (save itself still succeeded): {ex}");
+        }
+    }
+
+    private static void PruneOldBackups(string mapName)
+    {
+        var dir = BackupsDirectory(mapName);
+        if (!Directory.Exists(dir)) return;
+        var entries = Directory.GetDirectories(dir);
+        // Folder names are the BackupStampFormat timestamp — ordinal string
+        // order already matches chronological order.
+        Array.Sort(entries, StringComparer.Ordinal);
+        var excess = entries.Length - SC2SaveSettings.MaxBackupsPerMap;
+        for (var i = 0; i < excess; i++)
+        {
+            try { Directory.Delete(entries[i], recursive: true); }
+            catch (Exception ex) { SC2Log.LogWarning($"[SC2RuntimeTerrainPersistence] Could not prune old backup '{entries[i]}': {ex.Message}"); }
+        }
+    }
+
+    /// <summary>Newest first — what the "Restore Backup..." dropdown lists.</summary>
+    public static List<string> ListBackups(string mapName)
+    {
+        var result = new List<string>();
+        var dir = BackupsDirectory(mapName);
+        if (!Directory.Exists(dir)) return result;
+        foreach (var entry in Directory.GetDirectories(dir))
+            result.Add(Path.GetFileName(entry));
+        result.Sort(StringComparer.Ordinal);
+        result.Reverse();
+        return result;
+    }
+
+    /// <summary>Copies one backup snapshot's files back over the live save
+    /// (legacy JSON + manifest.json + its blobs merged back into the shared
+    /// pool — Put() is content-addressed, so re-adding a blob that's already
+    /// there is a safe no-op). The caller is expected to reload the map
+    /// afterward (e.g. LoadFromDisk) to bring the in-memory state in line
+    /// with what was just restored on disk.</summary>
+    public static bool RestoreBackup(string mapName, string backupId)
+    {
+        var backupDir = Path.Combine(BackupsDirectory(mapName), backupId);
+        var backupJson = Path.Combine(backupDir, Path.GetFileName(GetSavePath(mapName)));
+        if (!File.Exists(backupJson))
+        {
+            SC2Log.LogWarning($"[SC2RuntimeTerrainPersistence] RestoreBackup: no backup json at '{backupJson}'.");
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(SaveDirectory);
+            File.Copy(backupJson, GetSavePath(mapName), overwrite: true);
+
+            var backupManifest = Path.Combine(backupDir, Path.GetFileName(DocumentPackageDirectory(mapName)), "manifest.json");
+            if (File.Exists(backupManifest))
+            {
+                var packageDir = DocumentPackageDirectory(mapName);
+                Directory.CreateDirectory(packageDir);
+                File.Copy(backupManifest, Path.Combine(packageDir, "manifest.json"), overwrite: true);
+
+                var backupBlobsDir = Path.Combine(backupDir, "Blobs");
+                if (Directory.Exists(backupBlobsDir))
+                {
+                    var blobStore = CreateBlobStore();
+                    foreach (var shardDir in Directory.GetDirectories(backupBlobsDir))
+                        foreach (var blobFile in Directory.GetFiles(shardDir, "*.bin"))
+                            using (var s = File.OpenRead(blobFile))
+                                blobStore.Put(s);
+                }
+            }
+
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Restored backup '{backupId}' for '{mapName}'.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SC2Log.LogException(ex);
+            return false;
+        }
+    }
 
     /// <summary>Runs after every successful
     /// document-package write, scoped inside the SAME try/catch as the
@@ -278,7 +433,7 @@ public static class SC2RuntimeTerrainPersistence
 
         var deleted = SC2BlobStoreGarbageCollector.CollectUnreferencedBlobs(blobStore, manifestJsons);
         if (deleted > 0)
-            Debug.Log($"[SC2RuntimeTerrainPersistence] Blob GC: deleted {deleted} unreferenced blob(s).");
+            SC2Log.Log($"[SC2RuntimeTerrainPersistence] Blob GC: deleted {deleted} unreferenced blob(s).");
     }
 
     /// <summary>Same root SC2MapSession.BlobStore already uses

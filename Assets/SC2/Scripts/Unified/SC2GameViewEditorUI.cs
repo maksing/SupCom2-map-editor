@@ -1304,6 +1304,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // flat terrain"/"Import Heightmap") until SetData() started hitting
         // it on every single load, not just those two buttons.
         _terrainShell?.Update();
+        TickAutosave();
 
 #if !UNITY_EDITOR
         // A single attempt in OnEnable was unreliable (window handle can still
@@ -1312,6 +1313,52 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // no-op once done (see SC2RuntimeWindow.RetryEnableNativeMaximizeIfNeeded).
         SC2RuntimeWindow.RetryEnableNativeMaximizeIfNeeded();
 #endif
+    }
+
+    // Baseline for the autosave countdown — restarted by ANY save that
+    // actually wrote to disk (manual, any tab's own "Save Terrain" button,
+    // or a previous autosave), via SC2TerrainShell.LastSaveRealtimeSeconds;
+    // -1 means "nothing observed yet this session/terrain".
+    private double _autosaveBaselineRealtime = -1;
+    private double _lastObservedSaveRealtime = -1;
+
+    /// <summary>Called once per tick from both Update() (Play mode/standalone)
+    /// and EditorTick() (Editor edit-mode) — same dual-call pattern
+    /// _terrainShell.Update() itself already uses right above, since this
+    /// tool is normally used in the Editor OUTSIDE Play mode. Default
+    /// interval is 15 minutes (SC2SaveSettings); disabling autosave, or
+    /// having no active terrain, simply skips the countdown.</summary>
+    private void TickAutosave()
+    {
+        if (_terrainShell == null || _terrainShell.Data == null)
+        {
+            _autosaveBaselineRealtime = -1;
+            return;
+        }
+
+        // Any save — manual or a previous autosave — restarts the countdown,
+        // without every manual "Save Terrain" call site needing to know this
+        // timer exists.
+        var savedAt = _terrainShell.LastSaveRealtimeSeconds;
+        if (savedAt > _lastObservedSaveRealtime)
+        {
+            _lastObservedSaveRealtime = savedAt;
+            _autosaveBaselineRealtime = savedAt;
+        }
+        if (_autosaveBaselineRealtime < 0)
+            _autosaveBaselineRealtime = Time.realtimeSinceStartupAsDouble; // nothing saved yet this session — start counting from now
+
+        if (!SC2SaveSettings.AutosaveEnabled)
+            return;
+
+        var now = Time.realtimeSinceStartupAsDouble;
+        if (now - _autosaveBaselineRealtime < SC2SaveSettings.AutosaveIntervalMinutes * 60.0)
+            return;
+
+        _autosaveBaselineRealtime = now;
+        SC2Log.Log($"[Autosave] {SC2SaveSettings.AutosaveIntervalMinutes:0.#}-minute interval reached — autosaving '{_terrainShell.Data.MapName}'.");
+        if (_terrainShell.RequestSave())
+            SetStatus($"Autosaved '{_terrainShell.Data.MapName}'.");
     }
 
 #if UNITY_EDITOR
@@ -1341,6 +1388,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // frame (Play-mode-inside-the-Editor triggers both this and
         // Update()), so no extra guard is needed here.
         _terrainShell?.Update();
+        // Same idempotence as above — TickAutosave only ever fires once real
+        // time has actually advanced past the interval, so calling it again
+        // from Update() the same frame (Play mode inside the Editor) is a
+        // harmless no-op.
+        TickAutosave();
 
         if (!Application.isPlaying)
         {
@@ -1518,6 +1570,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             ApplyLoadedTerrainName(loadTerrainName);
         if (SC2RuntimeDropdown.TryConsumeLabel(DeleteTerrainDropdownId, out var deleteTerrainName))
             RequestDeleteTerrainName(deleteTerrainName);
+        if (SC2RuntimeDropdown.TryConsumeLabel(RestoreBackupDropdownId, out var restoreBackupId))
+            RequestRestoreBackup(restoreBackupId);
 #endif
 
         // Not gated behind #if !UNITY_EDITOR: SC2MapImportPanel/
@@ -2148,9 +2202,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         DrawMenuPanel(_fileMenuRect.x, TitleBarHeight, 210,
 #if UNITY_EDITOR
-            10,
+            11,
 #else
-            11, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
+            12, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
 #endif
             () =>
         {
@@ -2162,6 +2216,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             if (GUILayout.Button("Save Terrain (Ctrl+S)", _dropdownItemStyle)) { SaveActiveTerrain(); _showFileMenu = false; }
             if (GUILayout.Button("Load Terrain...", _dropdownItemStyle)) { OpenLoadTerrainMenu(); _showFileMenu = false; }
             if (GUILayout.Button("Delete Saved Terrain...", _dropdownItemStyle)) { OpenDeleteTerrainMenu(); _showFileMenu = false; }
+            if (GUILayout.Button("Restore Backup...", _dropdownItemStyle)) { OpenRestoreBackupMenu(); _showFileMenu = false; }
             if (GUILayout.Button("Diagnostics", _dropdownItemStyle)) { OpenBatchImportDiagnostics(); _showFileMenu = false; }
             if (GUILayout.Button("Show Game View UI", _dropdownItemStyle)) { OpenGameViewUiBootstrap(); _showFileMenu = false; }
 #if !UNITY_EDITOR
@@ -2203,18 +2258,20 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // ghost-button background — which reads as plain unclickable text
         // next to the solid toggles right beside it.
         //
-        // 5 MenuItemHeight-based rows (2 Panels toggles + Hotkeys toggle +
-        // Edit Hotkeys button + Reset View button) + a fixed per-scale
-        // budget for everything else whose real height isn't
-        // MenuItemHeight-based (section labels, divider blocks, hint lines,
-        // the two slider rows) — scaled by Scale too so it keeps pace with
+        // 6 MenuItemHeight-based rows (2 Panels toggles + Hotkeys toggle +
+        // Edit Hotkeys button + Reset View button + Autosave enabled toggle)
+        // + a fixed per-scale budget for everything else whose real height
+        // isn't MenuItemHeight-based (section labels, divider blocks, hint
+        // lines, the three slider rows: Reference Opacity, Autosave
+        // interval, Zoom Speed) — scaled by Scale too so it keeps pace with
         // how big those rows actually render now; see MenuItemHeight's own
         // doc comment for why this class of bug exists at all. Deliberately
         // generous (this only sizes the background card + hit-test rect,
         // never clips GUILayout content) rather than exactly tuned.
-        var contentHeight = 9 * MenuItemHeight + 340f * SC2UiScale.Scale;
+        var contentHeight = 10 * MenuItemHeight + 400f * SC2UiScale.Scale;
 #if !UNITY_EDITOR
-        contentHeight += 16f * SC2UiScale.Scale;
+        // + the Build-only "Backups to keep" field (see AUTOSAVE section).
+        contentHeight += 16f * SC2UiScale.Scale + MenuItemHeight;
 #endif
         DrawMenuPanel(_viewMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
@@ -2271,6 +2328,23 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // this is a "go do a thing now" action, not a list row, and needs
             // to visibly read as clickable next to the toggle above it.
             if (GUILayout.Button("Edit Hotkeys…", GUILayout.Height(SC2UiScale.Pxf(26f)))) { SC2HotkeysPanel.Open(); _showViewMenu = false; }
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("AUTOSAVE", _dropdownSectionLabelStyle);
+            var autosaveEnabled = GUILayout.Toggle(SC2SaveSettings.AutosaveEnabled, "Autosave enabled", _dropdownToggleStyle);
+            if (autosaveEnabled != SC2SaveSettings.AutosaveEnabled) SC2SaveSettings.AutosaveEnabled = autosaveEnabled;
+            GUILayout.Label($"Every {SC2SaveSettings.AutosaveIntervalMinutes:0} min", _miniTextStyle);
+            var nextAutosaveMinutes = Mathf.Round(GUILayout.HorizontalSlider(SC2SaveSettings.AutosaveIntervalMinutes, 1f, 60f));
+            if (!Mathf.Approximately(nextAutosaveMinutes, SC2SaveSettings.AutosaveIntervalMinutes)) SC2SaveSettings.AutosaveIntervalMinutes = nextAutosaveMinutes;
+#if !UNITY_EDITOR
+            // Backups only exist against the real disk persistence layer
+            // (SC2RuntimeTerrainPersistence) — same Build-only scope as
+            // Load/Delete Saved Terrain in the File menu.
+            SC2SaveSettings.MaxBackupsPerMap = Mathf.Max(0, SC2EnvFieldGui.IntField("Backups to keep", SC2SaveSettings.MaxBackupsPerMap, "MaxBackupsPerMap"));
+#endif
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -4433,6 +4507,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 #if !UNITY_EDITOR
     private const int LoadTerrainDropdownId = 0x5C2A1CAD;
     private const int DeleteTerrainDropdownId = 0x5C2A1CAE;
+    private const int RestoreBackupDropdownId = 0x5C2A1CAF;
 #endif
 
     private void OpenLoadTerrainMenu()
@@ -4464,6 +4539,28 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         SC2RuntimeDropdown.Toggle(DeleteTerrainDropdownId, names.ToArray(), anchor);
 #else
         SetStatus("Delete Saved Terrain only applies to standalone builds — in the Editor, delete the .asset file from the Project window.");
+#endif
+    }
+
+    private void OpenRestoreBackupMenu()
+    {
+#if !UNITY_EDITOR
+        var mapName = _terrainShell?.Data?.MapName;
+        if (string.IsNullOrEmpty(mapName))
+        {
+            SetStatus("No active terrain.");
+            return;
+        }
+        var backups = SC2RuntimeTerrainPersistence.ListBackups(mapName);
+        if (backups.Count == 0)
+        {
+            SetStatus($"No backups found for '{mapName}' (see View > Autosave > Backups to keep).");
+            return;
+        }
+        var anchor = new Rect(_fileMenuRect.x, TitleBarHeight + 4f, 220f, TitleBarHeight);
+        SC2RuntimeDropdown.Toggle(RestoreBackupDropdownId, backups.ToArray(), anchor);
+#else
+        SetStatus("Backups only apply to standalone builds — in the Editor, saving goes through the asset database, not the backup rotation.");
 #endif
     }
 
@@ -4540,6 +4637,33 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         else
         {
             SetStatus("Failed to delete terrain: " + mapName);
+        }
+    }
+
+    /// <summary>backupId doubles as its own label — see
+    /// SC2RuntimeTerrainPersistence.BackupStampFormat's own doc comment.</summary>
+    private void RequestRestoreBackup(string backupId)
+    {
+        var mapName = _terrainShell?.Data?.MapName;
+        if (string.IsNullOrEmpty(mapName)) return;
+        SC2RuntimeConfirm.Open(
+            "Restore Backup",
+            $"Restore '{mapName}' to the backup from {backupId.Replace('_', ' ')}? " +
+            "This overwrites the currently saved file on disk (your in-memory unsaved edits are untouched until you reload).",
+            "Restore",
+            () => ApplyRestoreBackup(mapName, backupId));
+    }
+
+    private void ApplyRestoreBackup(string mapName, string backupId)
+    {
+        if (SC2RuntimeTerrainPersistence.RestoreBackup(mapName, backupId))
+        {
+            ApplyLoadedTerrainName(mapName); // reload so the in-memory state matches what was just restored on disk
+            SetStatus($"Restored backup from {backupId.Replace('_', ' ')}.");
+        }
+        else
+        {
+            SetStatus("Failed to restore backup (see log).");
         }
     }
 #endif
