@@ -21,7 +21,7 @@ public static class SC2SaveSettings
     private const string BackupCountPrefKey = "SC2.Backups.MaxCount";
 
     public const float DefaultAutosaveIntervalMinutes = 15f;
-    public const int DefaultMaxBackupsPerMap = 10;
+    public const int DefaultMaxBackupsPerMap = 2;
     private const float MinAutosaveIntervalMinutes = 1f;
     private const float MaxAutosaveIntervalMinutes = 120f;
     private const int MaxBackupsCap = 100;
