@@ -2700,8 +2700,30 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (!_pathFieldLocked.TryGetValue(key, out var locked)) { locked = true; _pathFieldLocked[key] = locked; }
         var lockStyle = SafeGuiStyle(GUI.skin.button);
-        lockStyle.fontSize = SC2UiScale.F(10);
-        var newLocked = GUILayout.Toggle(locked, locked ? "\U0001F512" : "\U0001F513", lockStyle, GUILayout.Width(SC2UiScale.Pxf(26f)));
+        // Was a lock/unlock emoji (U+1F512/1F513) drawn as text — invisible on the default GUI
+        // font (no astral-plane emoji glyphs at all) and, on a follow-up attempt to fix that by
+        // swapping in an OS emoji font, actively corrupted a neighbouring control's layout instead
+        // (see SC2UiIcon's own doc comment). Drawn as an actual icon texture now — but NOT via
+        // GUIContent's own image slot: GUILayout.Toggle shrinks that image down to fit the
+        // button style's normal text padding, which for a 26x20 button left only a few pixels of
+        // the icon visible (confirmed real: it read as a barely-visible dot, not a lock).
+        // Drawing the background/click target and the icon separately gives the icon a real,
+        // fixed size regardless of the button style's own padding.
+        var size = SC2UiScale.Pxf(28f);
+        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
+        var newLocked = GUI.Toggle(rect, locked, GUIContent.none, lockStyle);
+        var icon = SC2UiIcon.Get(locked ? "lock" : "unlock");
+        if (icon != null)
+        {
+            var pad = SC2UiScale.Pxf(3f);
+            GUI.DrawTexture(new Rect(rect.x + pad, rect.y + pad, rect.width - pad * 2f, rect.height - pad * 2f), icon);
+        }
+        else
+        {
+            var fallbackStyle = SafeGuiStyle(EditorStyles.centeredGreyMiniLabel);
+            fallbackStyle.fontSize = SC2UiScale.F(8);
+            GUI.Label(rect, locked ? "Lock" : "Edit", fallbackStyle);
+        }
         if (newLocked != locked) _pathFieldLocked[key] = newLocked;
         return _pathFieldLocked[key];
     }
@@ -2715,17 +2737,23 @@ public class SC2TerrainShell : ScriptableObject
         var displayPath = string.IsNullOrEmpty(path) ? (resolvedFallbackPath ?? "") : path;
         var locked = DrawPathLockToggle(pickerKey + ":lock");
 
+        // TextArea + wordWrap, not a single-line TextField — a long path (a real, common case for
+        // an archive-sourced texture, see the screenshot this was reported from) otherwise clipped
+        // past the panel's own right edge with no way to read the rest short of clicking in and
+        // scrolling character-by-character. Same fix, same reasoning, as SC2ExportPanel's own
+        // ExportDirAreaStyle for the Export Folder path.
         var pathStyle = SafeGuiStyle(EditorStyles.textField);
         pathStyle.fontSize = SC2UiScale.F(9);
+        pathStyle.wordWrap = true;
         var prevEnabled = GUI.enabled;
         GUI.enabled = prevEnabled && !locked;
-        // GUILayout.TextField (plain UnityEngine, not EditorGUILayout) used
+        // GUILayout.TextArea (plain UnityEngine, not EditorGUILayout) used
         // deliberately here: the shim's EditorGUILayout (UnityEditorRuntimeShim.cs,
         // #if !UNITY_EDITOR) only implements the label/no-style TextField
         // overloads, not the (text, GUIStyle, options) one — GUILayout itself
         // is real UnityEngine API in both Editor and Standalone player builds,
         // so this works in both without touching the shim.
-        var newPath = GUILayout.TextField(displayPath, pathStyle, GUILayout.Width(GetUnifiedContentWidth()));
+        var newPath = GUILayout.TextArea(displayPath, pathStyle, GUILayout.Width(GetUnifiedContentWidth()));
         GUI.enabled = prevEnabled;
         if (!locked && newPath != displayPath)
         {

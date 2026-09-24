@@ -143,14 +143,48 @@ public static class SC2EnvFieldGui
     private static string FormatFloat(float v) => v.ToString("0.###", CultureInfo.InvariantCulture);
 
     // ---- Section header / foldout ----
-    public static void SectionLabel(string text) => GUILayout.Label(text, BoldLabel);
+    public static void SectionLabel(string text) => SectionLabel(null, text);
 
-    public static bool Foldout(ref bool expanded, string label)
+    /// <summary>iconName is an SC2UiIcon name (Resources/EditorIcons/UI/&lt;name&gt;.png) drawn
+    /// immediately before the text — see SC2InfoModelFieldDrawer.cs for every real use. Null/empty
+    /// draws no icon, same as the plain SectionLabel(text) overload above.</summary>
+    public static void SectionLabel(string iconName, string text)
+    {
+        var tex = SC2UiIcon.Get(iconName);
+        if (tex == null) { GUILayout.Label(text, BoldLabel); return; }
+        GUILayout.BeginHorizontal();
+        var size = SC2UiScale.Pxf(20f);
+        GUILayout.Label(tex, GUILayout.Width(size), GUILayout.Height(size));
+        GUILayout.Space(4);
+        GUILayout.Label(text, BoldLabel);
+        GUILayout.EndHorizontal();
+    }
+
+    public static bool Foldout(ref bool expanded, string label) => Foldout(null, ref expanded, label);
+
+    /// <summary>Same iconName convention as SectionLabel above. Drawn in a fixed Rect (not
+    /// GUILayout flow) between the row's own arrow and its label text, since the whole row
+    /// (background fill + click detection) already has to be one explicit Rect.</summary>
+    public static bool Foldout(string iconName, ref bool expanded, string label)
     {
         var rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(SC2UiScale.Px(20)), GUILayout.ExpandWidth(true));
         FillRect(rect, new Color(0.16f, 0.17f, 0.19f, 1f));
         var arrow = expanded ? "▼" : "▶";
-        GUI.Label(new Rect(rect.x + 4f, rect.y, rect.width - 8f, rect.height), arrow + "  " + label, BoldLabel);
+        var textX = rect.x + 4f;
+        var tex = SC2UiIcon.Get(iconName);
+        if (tex != null)
+        {
+            var arrowWidth = SC2UiScale.Pxf(16f);
+            var iconSize = SC2UiScale.Pxf(17f);
+            GUI.Label(new Rect(textX, rect.y, arrowWidth, rect.height), arrow, BoldLabel);
+            GUI.DrawTexture(new Rect(textX + arrowWidth, rect.y + (rect.height - iconSize) * 0.5f, iconSize, iconSize), tex);
+            textX += arrowWidth + iconSize + 4f;
+            GUI.Label(new Rect(textX, rect.y, rect.xMax - textX - 4f, rect.height), label, BoldLabel);
+        }
+        else
+        {
+            GUI.Label(new Rect(textX, rect.y, rect.width - 8f, rect.height), arrow + "  " + label, BoldLabel);
+        }
 
         var e = Event.current;
         if (e.type == EventType.MouseDown && rect.Contains(e.mousePosition))

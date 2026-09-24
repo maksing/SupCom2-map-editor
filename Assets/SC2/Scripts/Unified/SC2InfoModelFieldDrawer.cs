@@ -57,7 +57,7 @@ public sealed class SC2InfoModelFieldDrawer
     // second collapsible layer was redundant, per direction.)
     public void DrawSunTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("☀  Sun (@4..28)");
+        SC2EnvFieldGui.SectionLabel("sun", "Sun (@4..28)");
         var dir = new Vector3(m.SunDirectionX, m.SunDirectionY, m.SunDirectionZ);
         dir = SC2EnvFieldGui.Vector3Field("SunDirection", dir, "sun.dir");
         if (SC2EnvFieldGui.Button("Normalize", GUILayout.Width(SC2UiScale.Pxf(90f)))) dir = dir.normalized;
@@ -195,7 +195,7 @@ public sealed class SC2InfoModelFieldDrawer
     // ---- Shadow tab ---- (same reasoning as Sun above — no inner foldout.)
     public void DrawShadowTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🌑  ShadowColor (@32..44)");
+        SC2EnvFieldGui.SectionLabel("moon", "ShadowColor (@32..44)");
         var c = new Color(m.ShadowColorR, m.ShadowColorG, m.ShadowColorB, m.ShadowColorA);
         c = SC2EnvFieldGui.ColorField("ShadowColor", c, "shadow.color");
         m.ShadowColorR = c.r; m.ShadowColorG = c.g; m.ShadowColorB = c.b; m.ShadowColorA = c.a;
@@ -211,7 +211,7 @@ public sealed class SC2InfoModelFieldDrawer
     // two separate top-level tabs. ----
     public void DrawWaterTab(InfoModel m)
     {
-        if (SC2EnvFieldGui.Foldout(ref _fWater, "🌊  Water (@48, @212..220)"))
+        if (SC2EnvFieldGui.Foldout("water", ref _fWater, "Water (@48, @212..220)"))
         {
             m.WaterEnabled = ToggleR("WaterEnabled", m.WaterEnabled, Original.WaterEnabled);
             // Restores whatever GUI.enabled was BEFORE this field group
@@ -228,14 +228,14 @@ public sealed class SC2InfoModelFieldDrawer
             GUI.enabled = guiEnabledBeforeWaterFields;
         }
 
-        if (SC2EnvFieldGui.Foldout(ref _fWColor, "🌊  WaterColor (@100..112)"))
+        if (SC2EnvFieldGui.Foldout("water", ref _fWColor, "WaterColor (@100..112)"))
         {
             var c = new Color(m.WaterColorR, m.WaterColorG, m.WaterColorB, m.WaterColorA);
             c = SC2EnvFieldGui.ColorField("WaterColor", c, "water.color");
             m.WaterColorR = c.r; m.WaterColorG = c.g; m.WaterColorB = c.b; m.WaterColorA = c.a;
         }
 
-        if (SC2EnvFieldGui.Foldout(ref _fWMove, "🌊  WaterDiffuse/NormalMovement (@52..96)"))
+        if (SC2EnvFieldGui.Foldout("water", ref _fWMove, "WaterDiffuse/NormalMovement (@52..96)"))
         {
             (m.WaterDiffuse1MovementX, m.WaterDiffuse1MovementY) = MoveXY("WaterDiffuse1Movement", m.WaterDiffuse1MovementX, m.WaterDiffuse1MovementY);
             (m.WaterDiffuse2MovementX, m.WaterDiffuse2MovementY) = MoveXY("WaterDiffuse2Movement", m.WaterDiffuse2MovementX, m.WaterDiffuse2MovementY);
@@ -245,7 +245,7 @@ public sealed class SC2InfoModelFieldDrawer
             (m.WaterNormal4MovementX, m.WaterNormal4MovementY) = MoveXY("WaterNormal4Movement", m.WaterNormal4MovementX, m.WaterNormal4MovementY);
         }
 
-        if (SC2EnvFieldGui.Foldout(ref _fWTile, "🌊  WaterFoam/NormalRepeatRate (@116..136)"))
+        if (SC2EnvFieldGui.Foldout("water", ref _fWTile, "WaterFoam/NormalRepeatRate (@116..136)"))
         {
             var fr = new Vector2(m.WaterFoamRepeatRateX, m.WaterFoamRepeatRateY);
             fr = SC2EnvFieldGui.Vector2Field("WaterFoamRepeatRate", fr, "water.foamrate");
@@ -257,7 +257,7 @@ public sealed class SC2InfoModelFieldDrawer
             m.WaterNormalRepeatRateZ = nr.z; m.WaterNormalRepeatRateW = nr.w;
         }
 
-        if (SC2EnvFieldGui.Foldout(ref _fWOptics, "🌊  Water Optics (@140..212)"))
+        if (SC2EnvFieldGui.Foldout("water", ref _fWOptics, "Water Optics (@140..212)"))
         {
             m.WaterRefractionScale = SliderR("WaterRefractionScale", m.WaterRefractionScale, InfoFieldLimits.WaterRefractionScale.Min, InfoFieldLimits.WaterRefractionScale.Max, Original.WaterRefractionScale);
             m.WaterReflectionScale = SliderR("WaterReflectionScale", m.WaterReflectionScale, InfoFieldLimits.WaterReflectionScale.Min, InfoFieldLimits.WaterReflectionScale.Max, Original.WaterReflectionScale);
@@ -275,7 +275,7 @@ public sealed class SC2InfoModelFieldDrawer
             m.WaterWaveStartDepth = SliderR("WaterWaveStartDepth", m.WaterWaveStartDepth, InfoFieldLimits.WaterWaveStartDepth.Min, InfoFieldLimits.WaterWaveStartDepth.Max, Original.WaterWaveStartDepth);
         }
 
-        if (SC2EnvFieldGui.Foldout(ref _fWMisc, "🌊  WaterDepthOrigin / WaterDepthBoundsSize (@196..208)"))
+        if (SC2EnvFieldGui.Foldout("water", ref _fWMisc, "WaterDepthOrigin / WaterDepthBoundsSize (@196..208)"))
         {
             var off = new Vector2(m.WaterDepthOriginX, m.WaterDepthOriginY);
             off = SC2EnvFieldGui.Vector2Field("WaterDepthOrigin", off, "water.depthorigin");
@@ -291,7 +291,7 @@ public sealed class SC2InfoModelFieldDrawer
     // foldout with both interleaved) ----
     public void DrawFogTab(InfoModel m)
     {
-        if (SC2EnvFieldGui.Foldout(ref _fFogCore, "🌫  Core (@260..296)"))
+        if (SC2EnvFieldGui.Foldout("fog", ref _fFogCore, "Core (@260..296)"))
         {
             var cc = new Color(m.CoreFogColorR, m.CoreFogColorG, m.CoreFogColorB, m.CoreFogColorA);
             cc = SC2EnvFieldGui.ColorField("CoreFogColor", cc, "fog.core.color");
@@ -304,7 +304,7 @@ public sealed class SC2InfoModelFieldDrawer
             m.CoreFogDist2 = SliderR("CoreFogDist2", m.CoreFogDist2, InfoFieldLimits.CoreFogDist2.Min, InfoFieldLimits.CoreFogDist2.Max, Original.CoreFogDist2);
         }
 
-        if (SC2EnvFieldGui.Foldout(ref _fFogHorizon, "🌫  Horizon (@296..328)"))
+        if (SC2EnvFieldGui.Foldout("fog", ref _fFogHorizon, "Horizon (@296..328)"))
         {
             var hc = new Color(m.HorizonFogColorR, m.HorizonFogColorG, m.HorizonFogColorB, m.HorizonFogColorA);
             hc = SC2EnvFieldGui.ColorField("HorizonFogColor", hc, "fog.horizon.color");
@@ -323,7 +323,7 @@ public sealed class SC2InfoModelFieldDrawer
     // Sun/Shadow above.)
     public void DrawPointCloudTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("✨  PointCloud (@332..352)");
+        SC2EnvFieldGui.SectionLabel("sparkles", "PointCloud (@332..352)");
         SC2EnvFieldGui.WrapLabel("When a point cloud is baked (Terrain > Lighting Bake > Bake Point Cloud), its own box replaces Origin and Size at export.", SC2UiScale.Pxf(240f));
         var origin = new Vector3(m.PointCloudOriginX, m.PointCloudOriginY, m.PointCloudOriginZ);
         origin = SC2EnvFieldGui.Vector3Field("PointCloudOrigin", origin, "pointcloud.origin");
@@ -340,7 +340,7 @@ public sealed class SC2InfoModelFieldDrawer
     // parameters stay visible but disabled when the branch is off. ----
     public void DrawGlowTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("✨  Glow (@356..380)");
+        SC2EnvFieldGui.SectionLabel("sparkles", "Glow (@356..380)");
         m.GlowEnabled = ToggleR("GlowEnabled", m.GlowEnabled, Original.GlowEnabled);
         // See DrawWaterTab's own comment for why this restores the prior
         // value instead of hardcoding true.
@@ -360,7 +360,7 @@ public sealed class SC2InfoModelFieldDrawer
     // GlowEnabled above.)
     public void DrawBloomTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🌀  Bloom (@368..416)");
+        SC2EnvFieldGui.SectionLabel("cyclone", "Bloom (@368..416)");
         m.BloomEnabled = ToggleR("BloomEnabled", m.BloomEnabled, Original.BloomEnabled);
         // See DrawWaterTab's own comment for why this restores the prior
         // value instead of hardcoding true.
@@ -383,7 +383,7 @@ public sealed class SC2InfoModelFieldDrawer
     // any of these 5, same reasoning as Sun/Shadow/PointCloud above) ----
     public void DrawFogOfWarTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🔭  Fog of War (@424..432)");
+        SC2EnvFieldGui.SectionLabel("telescope", "Fog of War (@424..432)");
         m.FogOfWarLowerHeight = SliderR("FogOfWarLowerHeight", m.FogOfWarLowerHeight, InfoFieldLimits.FogOfWarLowerHeight.Min, InfoFieldLimits.FogOfWarLowerHeight.Max, Original.FogOfWarLowerHeight);
         m.FogOfWarHighestHeight = SliderR("FogOfWarHighestHeight", m.FogOfWarHighestHeight, InfoFieldLimits.FogOfWarHighestHeight.Min, InfoFieldLimits.FogOfWarHighestHeight.Max, Original.FogOfWarHighestHeight);
         m.FogOfWarHeightStrength = SliderR("FogOfWarHeightStrength", m.FogOfWarHeightStrength, InfoFieldLimits.FogOfWarHeightStrength.Min, InfoFieldLimits.FogOfWarHeightStrength.Max, Original.FogOfWarHeightStrength);
@@ -391,7 +391,7 @@ public sealed class SC2InfoModelFieldDrawer
 
     public void DrawIntelTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🔭  Intel (@436..444)");
+        SC2EnvFieldGui.SectionLabel("telescope", "Intel (@436..444)");
         m.IntelLowerHeight = SliderR("IntelLowerHeight", m.IntelLowerHeight, InfoFieldLimits.IntelLowerHeight.Min, InfoFieldLimits.IntelLowerHeight.Max, Original.IntelLowerHeight);
         m.IntelHighestHeight = SliderR("IntelHighestHeight", m.IntelHighestHeight, InfoFieldLimits.IntelHighestHeight.Min, InfoFieldLimits.IntelHighestHeight.Max, Original.IntelHighestHeight);
         m.IntelHeightStrength = SliderR("IntelHeightStrength", m.IntelHeightStrength, InfoFieldLimits.IntelHeightStrength.Min, InfoFieldLimits.IntelHeightStrength.Max, Original.IntelHeightStrength);
@@ -401,7 +401,7 @@ public sealed class SC2InfoModelFieldDrawer
     // off) — per the CSV's recommended_editor_control for this flag.
     public void DrawDepthOfFieldTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🎬  DepthOfField (@448..456)");
+        SC2EnvFieldGui.SectionLabel("clapper", "DepthOfField (@448..456)");
         m.DepthOfFieldEnabled = ToggleR("DepthOfFieldEnabled", m.DepthOfFieldEnabled, Original.DepthOfFieldEnabled);
         // See DrawWaterTab's own comment for why this restores the prior
         // value instead of hardcoding true.
@@ -416,7 +416,7 @@ public sealed class SC2InfoModelFieldDrawer
     // them real, Confirmed names.
     public void DrawSharpenTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🔪  Sharpen (@460..476)");
+        SC2EnvFieldGui.SectionLabel("knife", "Sharpen (@460..476)");
         m.SharpenStart = SliderR("SharpenStart", m.SharpenStart, InfoFieldLimits.SharpenStart.Min, InfoFieldLimits.SharpenStart.Max, Original.SharpenStart);
         m.SharpenEnd = SliderR("SharpenEnd", m.SharpenEnd, InfoFieldLimits.SharpenEnd.Min, InfoFieldLimits.SharpenEnd.Max, Original.SharpenEnd);
         m.SharpenBaseAmount = SliderR("SharpenBaseAmount", m.SharpenBaseAmount, InfoFieldLimits.SharpenBaseAmount.Min, InfoFieldLimits.SharpenBaseAmount.Max, Original.SharpenBaseAmount);
@@ -426,7 +426,7 @@ public sealed class SC2InfoModelFieldDrawer
 
     public void DrawRenderPassesTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🎞  Render Passes (@480..488)");
+        SC2EnvFieldGui.SectionLabel("film", "Render Passes (@480..488)");
         m.RenderPassACEnabled = ToggleR("RenderPassACEnabled", m.RenderPassACEnabled, Original.RenderPassACEnabled);
         m.RenderPassB0Enabled = ToggleR("RenderPassB0Enabled", m.RenderPassB0Enabled, Original.RenderPassB0Enabled);
         m.RenderPassB4Enabled = ToggleR("RenderPassB4Enabled", m.RenderPassB4Enabled, Original.RenderPassB4Enabled);
@@ -437,13 +437,13 @@ public sealed class SC2InfoModelFieldDrawer
     // direction — each single-category, no inner foldout.
     public void DrawAirElevationTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🗺  AirElevation (@232)");
+        SC2EnvFieldGui.SectionLabel("map", "AirElevation (@232)");
         m.AirElevation = SliderR("AirElevation", m.AirElevation, InfoFieldLimits.AirElevation.Min, InfoFieldLimits.AirElevation.Max, Original.AirElevation);
     }
 
     public void DrawWindTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🍃  Wind (@496..504)");
+        SC2EnvFieldGui.SectionLabel("leaf", "Wind (@496..504)");
         m.WindDirectionX = SliderR("WindDirectionX", m.WindDirectionX, InfoFieldLimits.WindDirectionX.Min, InfoFieldLimits.WindDirectionX.Max, Original.WindDirectionX);
         m.WindDirectionZ = SliderR("WindDirectionZ", m.WindDirectionZ, InfoFieldLimits.WindDirectionZ.Min, InfoFieldLimits.WindDirectionZ.Max, Original.WindDirectionZ);
         m.WindSpeed = SliderR("WindSpeed", m.WindSpeed, InfoFieldLimits.WindSpeed.Min, InfoFieldLimits.WindSpeed.Max, Original.WindSpeed);
@@ -467,7 +467,7 @@ public sealed class SC2InfoModelFieldDrawer
 
     public void DrawTexturesTab(InfoModel m)
     {
-        SC2EnvFieldGui.SectionLabel("🖼  Texture Paths (@240..256)");
+        SC2EnvFieldGui.SectionLabel("picture", "Texture Paths (@240..256)");
         m.EnvironmentMap = DrawInfoTextureField(SC2EnvironmentTextureSlot.EnvironmentMap, "EnvironmentMap", "InfoBdf:EnvironmentMap:env", m.EnvironmentMap, ref _texEnvironmentMap, ref _texEnvironmentMapPath);
         m.SkyMap = DrawInfoTextureField(SC2EnvironmentTextureSlot.SkyMap, "SkyMap", "InfoBdf:SkyMap:sky", m.SkyMap, ref _texSkyMap, ref _texSkyMapPath);
         m.ReservedTexturePath = DrawInfoTextureField(SC2EnvironmentTextureSlot.TexturePath3, "ReservedTexturePath", "InfoBdf:ReservedTexturePath", m.ReservedTexturePath, ref _texReservedTexturePath, ref _texReservedTexturePathPath);
