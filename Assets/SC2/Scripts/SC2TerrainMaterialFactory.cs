@@ -215,16 +215,29 @@ public static class SC2TerrainMaterialFactory
     /// to do better without a saved path.</summary>
     /// <param name="materialName">Diagnostic only — identifies which
     /// material this slot belongs to in the log line below.</param>
-    /// <param name="slotLabel">Diagnostic only — "Diffuse"/"Normal"/"Mask",
-    /// so a failure log line says exactly which slot didn't resolve.</param>
+    /// <param name="slotLabel">"Diffuse"/"Normal"/"Mask" — used for the
+    /// failure log line below AND (not just diagnostic any more) to decide
+    /// whether the resolved texture is raw linear data. A Normal map is
+    /// tangent-space vector data, not sRGB color; every OTHER path that
+    /// resolves one already treats it as linear (see
+    /// SC2TextureBrowser.ResolveRealAsset/SC2TextureThumbnailCache.Load's
+    /// own `entry.Usage == SC2TextureUsage.Normal` check) — this one, used
+    /// to rebuild a material's textures when a saved map is RELOADED, was
+    /// the one path that didn't, decoding a reloaded Normal texture as sRGB
+    /// and leaving it visibly different (flatter, differently-colored) from
+    /// the very same file re-picked through the texture browser, which
+    /// already resolves it correctly. Same bug class, same fix, as
+    /// SC2CustomTextureImporter.TryLoadAny's own linear parameter — this
+    /// call site was just never updated to use it.</param>
     public static Texture2D ResolveTextureByPathOrName(string name, string resourcePath = null, string materialName = null, string slotLabel = null)
     {
+        var isLinear = slotLabel == "Normal";
         if (!string.IsNullOrEmpty(resourcePath))
         {
             if (resourcePath.StartsWith("file:", System.StringComparison.Ordinal))
             {
                 var filePath = resourcePath.Substring(5);
-                if (SC2CustomTextureImporter.TryLoad(filePath, out var custom, out var customError))
+                if (SC2CustomTextureImporter.TryLoad(filePath, out var custom, out var customError, isLinear))
                 {
                     custom.name = string.IsNullOrEmpty(name) ? System.IO.Path.GetFileNameWithoutExtension(filePath) : name;
                     RegisterResourcePath(custom, resourcePath);
@@ -244,7 +257,7 @@ public static class SC2TerrainMaterialFactory
                 var entryPath = resourcePath.Substring(8);
                 string archiveError = null;
                 if (SC2GameArchiveRegistry.TryGetReader(out var reader) &&
-                    SC2CustomTextureImporter.TryLoadFromArchive(reader, entryPath, out var archiveTex, out archiveError) &&
+                    SC2CustomTextureImporter.TryLoadFromArchive(reader, entryPath, out var archiveTex, out archiveError, isLinear) &&
                     archiveTex is Texture2D archiveTex2D)
                 {
                     archiveTex2D.name = string.IsNullOrEmpty(name) ? System.IO.Path.GetFileNameWithoutExtension(entryPath) : name;
@@ -276,7 +289,7 @@ public static class SC2TerrainMaterialFactory
             if (!string.IsNullOrEmpty(entry.ResourcePath))
                 candidate = Resources.Load<Texture2D>(entry.ResourcePath);
             else if (!string.IsNullOrEmpty(entry.GamePath))
-                SC2CustomTextureImporter.TryLoad(entry.GamePath, out candidate, out _);
+                SC2CustomTextureImporter.TryLoad(entry.GamePath, out candidate, out _, isLinear);
             if (candidate == null) continue;
             RegisterResourcePath(candidate,
                 !string.IsNullOrEmpty(entry.ResourcePath) ? entry.ResourcePath : "file:" + entry.GamePath);
