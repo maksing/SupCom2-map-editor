@@ -160,10 +160,30 @@ public sealed class SC2DecalSurfaceProvider
             AddMesh(result, collider.sharedMesh, collider.transform.localToWorldMatrix, boundsList);
         }
 
-        foreach (var surface in _cachedSurfaces)
-            foreach (var filter in surface.GetComponentsInChildren<MeshFilter>(false))
-                if (filter != null && filter.sharedMesh != null && filter.GetComponent<Collider>() == null)
-                    AddMesh(result, filter.sharedMesh, filter.transform.localToWorldMatrix, boundsList);
+        // A no-Collider SC2DecalProjectionSurface is, today, only ever the
+        // live SC2TerrainRuntime chunk root (core or background — both add
+        // this marker with no MeshCollider, see its own class doc comment;
+        // imported terrain.bdf DOES get a MeshCollider, so it's already
+        // covered by the loop above and never reaches here). That chunk mesh
+        // is always the CURRENT, un-simplified painted geometry — Simplify
+        // is only ever applied to a separate copy built for export
+        // (SC2TerrainLayerBuilder.Build), never to this live mesh itself.
+        // AddLiveHeightGrid below is the one caller-supplied substitute for
+        // exactly this mesh (see liveTerrainSampleHeight's own doc comment),
+        // and at export time it's built from the FINAL, SIMPLIFIED exported
+        // mesh — so once it's available, adding this live mesh on top too
+        // was real, confirmed real: it duplicated the decal footprint from
+        // two disagreeing surfaces (the live pre-simplify one and the
+        // exported post-simplify one), and wherever Simplify actually moved
+        // the surface, part of the resulting decal geometry ended up sunk
+        // below the real exported terrain. Skip it whenever a substitute is
+        // available; fall back to it only when none was supplied (there is
+        // then no other way to reach this collider-less mesh at all).
+        if (liveTerrainSampleHeight == null)
+            foreach (var surface in _cachedSurfaces)
+                foreach (var filter in surface.GetComponentsInChildren<MeshFilter>(false))
+                    if (filter != null && filter.sharedMesh != null && filter.GetComponent<Collider>() == null)
+                        AddMesh(result, filter.sharedMesh, filter.transform.localToWorldMatrix, boundsList);
 
         foreach (var terrain in Terrain.activeTerrains)
             if (terrain != null && terrain.terrainData != null && terrain.terrainData.bounds.Transform(terrain.transform.localToWorldMatrix).Intersects(combined))
