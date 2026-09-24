@@ -49,7 +49,6 @@ public sealed class SC2DecalsShell : IDisposable
     private int _selectedEntry = -1;
     private int _selectedPlacement = -1;
     private bool _placementsExpanded = true;
-    private Vector2 _catalogScroll;
     private Vector2 _atlasPan;
     private float _atlasZoom = 0.8f;
     private string _search = "";
@@ -198,8 +197,14 @@ public sealed class SC2DecalsShell : IDisposable
         }
         _search = GUILayout.TextField(_search ?? "", GUILayout.Width(w - 8));
 
-        _catalogScroll = GUILayout.BeginScrollView(_catalogScroll, GUILayout.Width(w - 4), GUILayout.MinHeight(140), GUILayout.MaxHeight(220));
-        var filtered = Doc.Entries.Select((e, i) => (e, i)).Where(x => string.IsNullOrWhiteSpace(_search) || x.e.Name.IndexOf(_search, StringComparison.OrdinalIgnoreCase) >= 0);
+        // No scroll view of its own any more — a capped-height inner scroll
+        // still meant scrolling to see the rest of the catalog (per the
+        // user's own report). This whole panel already sits inside
+        // SC2GameViewEditorUI's own outer _panelScroll (see DrawSidePanel),
+        // so the list can just grow to fit every entry and let THAT scroll
+        // handle overflow, same as every other section of this panel.
+        var filtered = Doc.Entries.Select((e, i) => (e, i))
+            .Where(x => string.IsNullOrWhiteSpace(_search) || x.e.Name.IndexOf(_search, StringComparison.OrdinalIgnoreCase) >= 0);
         foreach (var item in filtered)
         {
             var selected = item.i == _selectedEntry;
@@ -216,7 +221,6 @@ public sealed class SC2DecalsShell : IDisposable
             }
             GUILayout.EndHorizontal();
         }
-        GUILayout.EndScrollView();
         if (_selectedEntry >= 0 && _selectedEntry < Doc.Entries.Count)
         {
             GUILayout.BeginHorizontal(GUILayout.Width(w));
