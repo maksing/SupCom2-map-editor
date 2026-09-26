@@ -318,6 +318,20 @@ public class SC2TerrainRuntime : IDisposable
         _initialized = false;
     }
 
+    /// <summary>Every chunk's own mesh with its local-to-world matrix (the
+    /// background runtime's chunk root sits at a world offset), empty while
+    /// the chunk root is hidden. This is the ground the decal tools clip
+    /// against for the live terrain - taken from the runtime itself rather
+    /// than found by a scene search, so it never depends on scene-object
+    /// lookup or renderer state.</summary>
+    public IEnumerable<(Mesh Mesh, Matrix4x4 LocalToWorld)> VisibleChunkMeshes()
+    {
+        if (_chunkRoot == null || !_chunkRoot.activeInHierarchy) yield break;
+        foreach (var chunk in _chunks)
+            if (chunk.Mesh != null && chunk.GO != null)
+                yield return (chunk.Mesh, chunk.GO.transform.localToWorldMatrix);
+    }
+
     public void SetVisible(bool visible)
     {
         if (_chunkRoot != null) _chunkRoot.SetActive(visible);

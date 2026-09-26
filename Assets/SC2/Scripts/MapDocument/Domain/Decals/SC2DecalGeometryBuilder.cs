@@ -33,10 +33,22 @@ namespace SC2.MapEditor.Document
         public float NBX, NBY, NBZ;
         public float NCX, NCY, NCZ;
 
+        /// <summary>The terrain's own tangent frame at each corner (the final terrain model's
+        /// vertex Tangent/Binormal, next to the Normal above) - only sources that ARE the exported
+        /// terrain model have it. The game lights a decal's normal map in the terrain's tangent
+        /// space, so an export needs it (see BuildPlacement's terrainTangentSpace).</summary>
+        public bool HasTangentFrame;
+        public float TgAX, TgAY, TgAZ;
+        public float TgBX, TgBY, TgBZ;
+        public float TgCX, TgCY, TgCZ;
+        public float BnAX, BnAY, BnAZ;
+        public float BnBX, BnBY, BnBZ;
+        public float BnCX, BnCY, BnCZ;
+
         /// <summary>Null for real, shared geometry (a collider/MeshFilter/Unity Terrain — there is
         /// only ever one instance of that mesh, so any placement whose bounds reach it should
         /// clip against it). Set to a placement's own Id for a synthetic quad
-        /// SC2DecalSurfaceProvider.AddLiveHeightGrid tessellated JUST for that one placement's own
+        /// SC2DecalSurfaceProvider.AddTerrain (Unity native Terrain) tessellated JUST for that one placement's own
         /// footprint — two nearby placements each get their OWN independent tessellation of
         /// what can be overlapping ground, at different grid resolutions/alignments, so mixing
         /// one placement's synthetic quads into a DIFFERENT placement's clip produced duplicate,
@@ -84,7 +96,35 @@ namespace SC2.MapEditor.Document
         /// everything else within its footprint/depth bounds.</summary>
         private const double MinFaceAngleDot = 0.0;
 
-        public static DecalsModel Build(SC2DecalsDocument document, IEnumerable<SC2DecalSurfaceTriangle> source)
+        /// <summary>A clipped fragment smaller than this (world units squared)
+        /// is a sliver the source triangle barely reached across the decal
+        /// box's edge. It adds vertices and triangles to decals.bdf without
+        /// covering anything a viewer could see - a decal's own edge pixels are
+        /// transparent anyway.</summary>
+        private const double MinFragmentArea = 0.005;
+
+        private static double PolygonArea(P[] polygon, int count)
+        {
+            var origin = polygon[0].World;
+            var area = 0.0;
+            for (var i = 1; i + 1 < count; i++)
+            {
+                var c = Cross(polygon[i].World - origin, polygon[i + 1].World - origin);
+                area += 0.5 * Math.Sqrt(Dot(c, c));
+            }
+            return area;
+        }
+
+        /// <param name="terrainTangentSpace">true (the game export): TangentXform0/1/2 are written the
+        /// way the game's decal.hlsl consumes them - the decal's tangent, binormal and normal
+        /// expressed in the TERRAIN's tangent space at that vertex (dot with the terrain's own
+        /// tangent, binormal, normal), which the shader then writes straight into the terrain's
+        /// normal buffer. Needs sources that carry the terrain frame (HasTangentFrame); anything
+        /// else falls back to world space. false (the editor preview, whose SC2Decal.shader reads
+        /// world-space vectors): the same right-handed basis in world space. Measured on the
+        /// vanilla maps: T2 is (0,0,1) at every vertex, T0/T1 lie in the terrain tangent plane
+        /// (z = 0), T0 follows increasing U and T1 = N x T0, so (T0,T1,N) is right-handed.</param>
+        public static DecalsModel Build(SC2DecalsDocument document, IEnumerable<SC2DecalSurfaceTriangle> source, bool terrainTangentSpace = false)
         {
             if (document == null) throw new ArgumentNullException(nameof(document));
             var model = new DecalsModel { DiffuseAtlasPath = document.DiffuseAtlasPath ?? "", NormalAtlasPath = document.NormalAtlasPath ?? "" };
@@ -95,7 +135,7 @@ namespace SC2.MapEditor.Document
             foreach (var placement in document.Placements.Where(p => p != null && p.Enabled))
             {
                 if (!entries.TryGetValue(placement.AtlasEntryId ?? "", out var entry)) continue;
-                BuildPlacement(model, placement, entry, FilterTrianglesNearPlacement(triangles, placement), document.AtlasWidth, document.AtlasHeight);
+                BuildPlacement(model, placement, entry, FilterTrianglesNearPlacement(triangles, placement), document.AtlasWidth, document.AtlasHeight, terrainTangentSpace);
             }
 
             return model;
@@ -113,7 +153,7 @@ namespace SC2.MapEditor.Document
             SC2DecalPlacement placement, SC2DecalAtlasEntry entry, List<SC2DecalSurfaceTriangle> triangles, int atlasW, int atlasH)
         {
             var fragment = new DecalsModel();
-            BuildPlacement(fragment, placement, entry, FilterTrianglesNearPlacement(triangles, placement), atlasW, atlasH);
+            BuildPlacement(fragment, placement, entry, FilterTrianglesNearPlacement(triangles, placement), atlasW, atlasH, terrainTangentSpace: false);
             return (fragment.Vertices, fragment.Indices);
         }
 
@@ -170,7 +210,7 @@ namespace SC2.MapEditor.Document
         }
 
         private static void BuildPlacement(DecalsModel output, SC2DecalPlacement p, SC2DecalAtlasEntry e,
-            List<SC2DecalSurfaceTriangle> triangles, int atlasW, int atlasH)
+            List<SC2DecalSurfaceTriangle> triangles, int atlasW, int atlasH, bool terrainTangentSpace)
         {
             var center = Vec(p.Position, 0, 0, 0);
             var normal = Normalize(Vec(p.SurfaceNormal, 0, 1, 0));
@@ -210,6 +250,13 @@ namespace SC2.MapEditor.Document
                 var normalA = hasVertexNormals ? Normalize(new V(t.NAX, t.NAY, t.NAZ)) : default;
                 var normalB = hasVertexNormals ? Normalize(new V(t.NBX, t.NBY, t.NBZ)) : default;
                 var normalC = hasVertexNormals ? Normalize(new V(t.NCX, t.NCY, t.NCZ)) : default;
+                var useTerrainFrame = terrainTangentSpace && t.HasTangentFrame && hasVertexNormals;
+                var terrainTangentA = useTerrainFrame ? Normalize(new V(t.TgAX, t.TgAY, t.TgAZ)) : default;
+                var terrainTangentB = useTerrainFrame ? Normalize(new V(t.TgBX, t.TgBY, t.TgBZ)) : default;
+                var terrainTangentC = useTerrainFrame ? Normalize(new V(t.TgCX, t.TgCY, t.TgCZ)) : default;
+                var terrainBinormalA = useTerrainFrame ? Normalize(new V(t.BnAX, t.BnAY, t.BnAZ)) : default;
+                var terrainBinormalB = useTerrainFrame ? Normalize(new V(t.BnBX, t.BnBY, t.BnBZ)) : default;
+                var terrainBinormalC = useTerrainFrame ? Normalize(new V(t.BnCX, t.BnCY, t.BnCZ)) : default;
                 var rawFlatNormal = Normalize(Cross(worldB - worldA, worldC - worldA));
 
                 // A real bug: on
@@ -258,6 +305,7 @@ namespace SC2.MapEditor.Document
                 count = ClipInto(bufA, count, bufB, q => q.Local.Z + 1); count = ClipInto(bufB, count, bufA, q => 1 - q.Local.Z);
                 count = ClipInto(bufA, count, bufB, q => q.Local.Y + 0.5); count = ClipInto(bufB, count, bufA, q => 0.5 - q.Local.Y);
                 if (count < 3) continue;
+                if (PolygonArea(bufA, count) < MinFragmentArea) continue;
                 // Final result lives in bufA[0..count) — an even number
                 // (6) of ClipInto calls above always leaves the result back
                 // in bufA.
@@ -291,9 +339,33 @@ namespace SC2.MapEditor.Document
                     if (Dot(shadingNormal, normal) < 0) shadingNormal = shadingNormal * -1;
                     // U runs against `right` (the decal's atlas image is mirrored in U, otherwise text
                     // in a decal reads right to left): the tangent follows +U, so it points along
-                    // -right; the binormal stays along +V, as it was.
+                    // -right. The binormal is Normal x Tangent - the frame is right-handed, as on every
+                    // vanilla decal (a left-handed one flips the normal map's green channel).
                     var tangent = Normalize(right * -1 - shadingNormal * Dot(right * -1, shadingNormal));
-                    var binormal = Normalize(Cross(shadingNormal, right - shadingNormal * Dot(right, shadingNormal)));
+                    var binormal = Normalize(Cross(shadingNormal, tangent));
+                    var basis0 = tangent; var basis1 = binormal; var basis2 = shadingNormal;
+                    if (useTerrainFrame)
+                    {
+                        // The terrain's smooth normal and tangent frame at this exact point, re-orthogonalised
+                        // (the terrain's own binormal keeps its stored handedness - only the decal frame
+                        // is built right-handed).
+                        var terrainNormal = Normalize(BarycentricNormal(worldA, worldB, worldC, normalA, normalB, normalC, q.World));
+                        var rawTangent = BarycentricNormal(worldA, worldB, worldC, terrainTangentA, terrainTangentB, terrainTangentC, q.World);
+                        var rawBinormal = BarycentricNormal(worldA, worldB, worldC, terrainBinormalA, terrainBinormalB, terrainBinormalC, q.World);
+                        var terrainTangent = Normalize(rawTangent - terrainNormal * Dot(rawTangent, terrainNormal));
+                        var terrainBinormal = Normalize(rawBinormal - terrainNormal * Dot(rawBinormal, terrainNormal) - terrainTangent * Dot(rawBinormal, terrainTangent));
+
+                        // The decal's normal IS the terrain normal here (T2 = (0,0,1)); U projected into the
+                        // terrain's tangent plane, V = Normal x U.
+                        var towardU = right * -1;
+                        var inPlane = towardU - terrainNormal * Dot(towardU, terrainNormal);
+                        if (Dot(inPlane, inPlane) < 1e-8) inPlane = forward - terrainNormal * Dot(forward, terrainNormal);
+                        var decalTangent = Normalize(inPlane);
+                        var decalBinormal = Normalize(Cross(terrainNormal, decalTangent));
+                        basis0 = new V(Dot(decalTangent, terrainTangent), Dot(decalTangent, terrainBinormal), Dot(decalTangent, terrainNormal));
+                        basis1 = new V(Dot(decalBinormal, terrainTangent), Dot(decalBinormal, terrainBinormal), Dot(decalBinormal, terrainNormal));
+                        basis2 = new V(Dot(terrainNormal, terrainTangent), Dot(terrainNormal, terrainBinormal), Dot(terrainNormal, terrainNormal));
+                    }
 
                     var world = q.World + shadingNormal * p.HeightOffset;
                     output.Vertices.Add(new DecalVertex
@@ -301,9 +373,9 @@ namespace SC2.MapEditor.Document
                         PositionX = (float)world.X, PositionY = (float)world.Y, PositionZ = (float)world.Z,
                         TexCoordX = (float)(0.5 - q.Local.X * 0.5), TexCoordY = (float)(q.Local.Z * 0.5 + 0.5), TexCoordZ = (float)(q.Local.Y + 0.5),
                         ScaleOffsetX = e.Width / (float)atlasW, ScaleOffsetY = e.Height / (float)atlasH, ScaleOffsetZ = e.X / (float)atlasW, ScaleOffsetW = e.Y / (float)atlasH,
-                        TangentXform0X = (float)tangent.X, TangentXform0Y = (float)tangent.Y, TangentXform0Z = (float)tangent.Z,
-                        TangentXform1X = (float)binormal.X, TangentXform1Y = (float)binormal.Y, TangentXform1Z = (float)binormal.Z,
-                        TangentXform2X = (float)shadingNormal.X, TangentXform2Y = (float)shadingNormal.Y, TangentXform2Z = (float)shadingNormal.Z
+                        TangentXform0X = (float)basis0.X, TangentXform0Y = (float)basis0.Y, TangentXform0Z = (float)basis0.Z,
+                        TangentXform1X = (float)basis1.X, TangentXform1Y = (float)basis1.Y, TangentXform1Z = (float)basis1.Z,
+                        TangentXform2X = (float)basis2.X, TangentXform2Y = (float)basis2.Y, TangentXform2Z = (float)basis2.Z
                     });
                 }
                 for (var i = 1; i + 1 < count; i++)

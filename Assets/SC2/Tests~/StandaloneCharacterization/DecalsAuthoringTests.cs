@@ -107,9 +107,123 @@ public class DecalsAuthoringTests
         var near = model.Vertices.First(v => v.PositionZ < -1.9f);
         var far = model.Vertices.First(v => v.PositionZ > 1.9f);
         Assert.True(far.TexCoordY > near.TexCoordY, "V must still increase toward +Z");
-        // the tangent follows +U (along +X here), the binormal +V (along +Z)
+        // the tangent follows +U (along +X here); the binormal is Normal x Tangent (so the frame is
+        // right-handed, as on every vanilla decal) - that points along -Z, against +V
         Assert.True(right.TangentXform0X > 0.9f);
-        Assert.True(right.TangentXform1Z > 0.9f);
+        Assert.True(right.TangentXform1Z < -0.9f);
+    }
+
+    private static SC2DecalsDocument FlatDecalDocument(float rotation = 0f)
+    {
+        var document = new SC2DecalsDocument { AtlasWidth = 64, AtlasHeight = 64 };
+        document.Entries.Add(new SC2DecalAtlasEntry { Id = "entry", X = 0, Y = 0, Width = 64, Height = 64 });
+        document.Placements.Add(new SC2DecalPlacement
+        {
+            AtlasEntryId = "entry", Position = new[] { 0f, 0f, 0f }, SurfaceNormal = new[] { 0f, 1f, 0f },
+            Rotation = rotation, Width = 4f, Length = 4f, ProjectionDepth = 4f, HeightOffset = 0f
+        });
+        return document;
+    }
+
+    // Flat ground whose own tangent frame is (T, B, N) = (tangent, binormal, up).
+    private static SC2DecalSurfaceTriangle[] FlatGround(float[] tangent, float[] binormal, bool withFrame)
+    {
+        SC2DecalSurfaceTriangle Tri(float ax, float az, float bx, float bz, float cx, float cz) => new()
+        {
+            AX = ax, AY = 0f, AZ = az, BX = bx, BY = 0f, BZ = bz, CX = cx, CY = 0f, CZ = cz,
+            HasNormals = true, NAY = 1f, NBY = 1f, NCY = 1f,
+            HasTangentFrame = withFrame,
+            TgAX = tangent[0], TgAY = tangent[1], TgAZ = tangent[2], TgBX = tangent[0], TgBY = tangent[1], TgBZ = tangent[2],
+            TgCX = tangent[0], TgCY = tangent[1], TgCZ = tangent[2],
+            BnAX = binormal[0], BnAY = binormal[1], BnAZ = binormal[2], BnBX = binormal[0], BnBY = binormal[1], BnBZ = binormal[2],
+            BnCX = binormal[0], BnCY = binormal[1], BnCZ = binormal[2]
+        };
+        return new[] { Tri(-2, -2, 2, 2, 2, -2), Tri(-2, -2, -2, 2, 2, 2) };
+    }
+
+    [Fact]
+    public void WorldSpaceFrame_IsRightHanded_LikeEveryVanillaDecal()
+    {
+        var model = SC2DecalGeometryBuilder.Build(FlatDecalDocument(), FlatGround(new[] { 1f, 0f, 0f }, new[] { 0f, 0f, 1f }, withFrame: false));
+        Assert.NotEmpty(model.Vertices);
+        Assert.All(model.Vertices, v =>
+        {
+            var t = new[] { v.TangentXform0X, v.TangentXform0Y, v.TangentXform0Z };
+            var b = new[] { v.TangentXform1X, v.TangentXform1Y, v.TangentXform1Z };
+            var n = new[] { v.TangentXform2X, v.TangentXform2Y, v.TangentXform2Z };
+            var cross = new[] { t[1] * b[2] - t[2] * b[1], t[2] * b[0] - t[0] * b[2], t[0] * b[1] - t[1] * b[0] };
+            Assert.True(cross[0] * n[0] + cross[1] * n[1] + cross[2] * n[2] > 0.99f, "(T0, T1, N) must be right-handed");
+        });
+    }
+
+    [Fact]
+    public void TerrainTangentSpace_WritesTheDecalBasisInTheTerrainsOwnFrame()
+    {
+        // Terrain frame: tangent +Z, binormal +X, normal up. The decal's U runs along +X, so in
+        // terrain coordinates T0 = (0,1,0); its binormal N x T0 = -Z gives T1 = (-1,0,0); T2 = (0,0,1).
+        var model = SC2DecalGeometryBuilder.Build(FlatDecalDocument(), FlatGround(new[] { 0f, 0f, 1f }, new[] { 1f, 0f, 0f }, withFrame: true), terrainTangentSpace: true);
+        Assert.NotEmpty(model.Vertices);
+        Assert.All(model.Vertices, v =>
+        {
+            Assert.Equal(0f, v.TangentXform0X, 3); Assert.Equal(1f, v.TangentXform0Y, 3); Assert.Equal(0f, v.TangentXform0Z, 3);
+            Assert.Equal(-1f, v.TangentXform1X, 3); Assert.Equal(0f, v.TangentXform1Y, 3); Assert.Equal(0f, v.TangentXform1Z, 3);
+            Assert.Equal(0f, v.TangentXform2X, 3); Assert.Equal(0f, v.TangentXform2Y, 3); Assert.Equal(1f, v.TangentXform2Z, 3);
+        });
+    }
+
+    [Fact]
+    public void TerrainTangentSpace_LiesInTheTangentPlane_AndFollowsTheDecalRotation()
+    {
+        // Right-handed terrain frame aligned with the world (T = +X, B = -Z, N = up): T0 is the decal's U
+        // direction in the terrain's xy, whatever the decal's rotation; T0.z = T1.z = 0 and T2 = (0,0,1).
+        foreach (var rotation in new[] { 0f, 30f, 90f, 200f })
+        {
+            var model = SC2DecalGeometryBuilder.Build(FlatDecalDocument(rotation), FlatGround(new[] { 1f, 0f, 0f }, new[] { 0f, 0f, -1f }, withFrame: true), terrainTangentSpace: true);
+            Assert.NotEmpty(model.Vertices);
+            Assert.All(model.Vertices, v =>
+            {
+                Assert.Equal(0f, v.TangentXform0Z, 3);
+                Assert.Equal(0f, v.TangentXform1Z, 3);
+                Assert.Equal(1f, v.TangentXform0X * v.TangentXform0X + v.TangentXform0Y * v.TangentXform0Y, 3);
+                Assert.Equal(0f, v.TangentXform0X * v.TangentXform1X + v.TangentXform0Y * v.TangentXform1Y, 3);
+                Assert.Equal(1f, v.TangentXform2Z, 3);
+                // T1 = N x T0 with N = +Z in terrain coordinates: (-T0.y, T0.x, 0)
+                Assert.Equal(-v.TangentXform0Y, v.TangentXform1X, 3);
+                Assert.Equal(v.TangentXform0X, v.TangentXform1Y, 3);
+            });
+        }
+    }
+
+    [Fact]
+    public void TerrainTangentSpace_KeepsTheDecalFrameRightHandedInTheWorld_EvenOnALeftHandedTerrainFrame()
+    {
+        // Vanilla terrain vertex frames are not all the same handedness (they come from the UV1
+        // derivatives), yet every vanilla decal frame is right-handed in the world. So on a
+        // left-handed terrain frame the coordinates rotate the other way: T1 = (T0.y, -T0.x).
+        var tangent = new[] { 1f, 0f, 0f }; var binormal = new[] { 0f, 0f, 1f }; // T x B = -N
+        foreach (var rotation in new[] { 0f, 40f, 130f })
+        {
+            var model = SC2DecalGeometryBuilder.Build(FlatDecalDocument(rotation), FlatGround(tangent, binormal, withFrame: true), terrainTangentSpace: true);
+            Assert.NotEmpty(model.Vertices);
+            Assert.All(model.Vertices, v =>
+            {
+                Assert.Equal(v.TangentXform0Y, v.TangentXform1X, 3);
+                Assert.Equal(-v.TangentXform0X, v.TangentXform1Y, 3);
+                // back to world: D0 = T0.x*T + T0.y*B, D1 = T1.x*T + T1.y*B; D0 x D1 must point along +Y (N)
+                var d0 = new[] { v.TangentXform0X * tangent[0] + v.TangentXform0Y * binormal[0], 0f, v.TangentXform0X * tangent[2] + v.TangentXform0Y * binormal[2] };
+                var d1 = new[] { v.TangentXform1X * tangent[0] + v.TangentXform1Y * binormal[0], 0f, v.TangentXform1X * tangent[2] + v.TangentXform1Y * binormal[2] };
+                Assert.True(d0[2] * d1[0] - d0[0] * d1[2] > 0.99f, "decal frame must stay right-handed in the world");
+            });
+        }
+    }
+
+    [Fact]
+    public void TerrainTangentSpace_FallsBackToWorldSpace_WhenTheSourceHasNoTerrainFrame()
+    {
+        var withoutFrame = SC2DecalGeometryBuilder.Build(FlatDecalDocument(), FlatGround(new[] { 0f, 0f, 1f }, new[] { 1f, 0f, 0f }, withFrame: false), terrainTangentSpace: true);
+        Assert.NotEmpty(withoutFrame.Vertices);
+        // world space: the decal's normal is up, not (0,0,1)
+        Assert.All(withoutFrame.Vertices, v => Assert.Equal(1f, v.TangentXform2Y, 3));
     }
 
     [Fact]
@@ -329,6 +443,86 @@ public class DecalsAuthoringTests
         var moved = DecalsBdf.Serialize(parsed);
         var movedExtraStart = BitConverter.ToInt32(moved.Data, 12);
         Assert.Equal(movedExtraStart + 108, BitConverter.ToInt32(moved.Data, movedExtraStart + 32));
+    }
+
+    private static DecalsModel OneQuadModel(string diffusePath, string normalPath)
+    {
+        var document = new SC2DecalsDocument
+        {
+            AtlasWidth = 64, AtlasHeight = 64, DiffuseAtlasPath = diffusePath, NormalAtlasPath = normalPath
+        };
+        document.Entries.Add(new SC2DecalAtlasEntry { Id = "entry", X = 0, Y = 0, Width = 64, Height = 64 });
+        document.Placements.Add(new SC2DecalPlacement
+        {
+            AtlasEntryId = "entry", Position = new[] { 0f, 0f, 0f },
+            SurfaceNormal = new[] { 0f, 1f, 0f }, Width = 2f, Length = 2f, ProjectionDepth = 2f
+        });
+        var source = new[]
+        {
+            new SC2DecalSurfaceTriangle { AX = -2f, AY = 0f, AZ = -2f, BX = 2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = -2f },
+            new SC2DecalSurfaceTriangle { AX = -2f, AY = 0f, AZ = -2f, BX = -2f, BY = 0f, BZ = 2f, CX = 2f, CY = 0f, CZ = 2f }
+        };
+        var model = SC2DecalGeometryBuilder.Build(document, source);
+        DecalsSpatialBuilder.Rebuild(model);
+        return model;
+    }
+
+    [Theory]
+    [InlineData(54, 53)]   // ends at 71 / 125: neither is a multiple of 4 (what a packed pool wrote)
+    [InlineData(59, 58)]   // vanilla's common case
+    [InlineData(0, 40)]    // no diffuse path at all
+    [InlineData(40, 0)]    // no normal atlas (vanilla SC2_D1_101 has exactly this)
+    public void StringPool_StartsEveryStringAndTheSpatialBlockOnAFourByteBoundary_LikeVanilla(int diffuseLength, int normalLength)
+    {
+        var model = OneQuadModel("/" + new string('d', Math.Max(0, diffuseLength - 1)), "/" + new string('n', Math.Max(0, normalLength - 1)));
+        if (diffuseLength == 0) model.DiffuseAtlasPath = "";
+        if (normalLength == 0) model.NormalAtlasPath = "";
+        DecalsSpatialBuilder.Rebuild(model);
+        var serialized = DecalsBdf.Serialize(model);
+        var data = serialized.Data;
+
+        var diffuseOff = BitConverter.ToInt32(data, 4);
+        var normalOff = BitConverter.ToInt32(data, 8);
+        var extraOff = BitConverter.ToInt32(data, 12);
+        var geometryStart = checked((int)BitConverter.ToUInt32(serialized.TrailingData, 4));
+
+        Assert.Equal(16, diffuseOff);
+        Assert.Equal(0, normalOff % 4);
+        Assert.Equal(0, extraOff % 4);
+        Assert.Equal(0, geometryStart % 32);
+        Assert.Equal(0, data.Length % 32);
+        Assert.Equal(model.DiffuseAtlasPath, System.Text.Encoding.ASCII.GetString(data, diffuseOff, model.DiffuseAtlasPath.Length));
+        Assert.Equal(model.NormalAtlasPath, System.Text.Encoding.ASCII.GetString(data, normalOff, model.NormalAtlasPath.Length));
+        Assert.Equal(0, data[normalOff + model.NormalAtlasPath.Length]);
+        Assert.InRange(normalOff - (diffuseOff + model.DiffuseAtlasPath.Length + 1), 0, 3);
+        Assert.InRange(extraOff - (normalOff + model.NormalAtlasPath.Length + 1), 0, 3);
+
+        // The generated EDB pointers must match the offset the block was actually placed at.
+        Assert.Equal(extraOff + 108, BitConverter.ToInt32(data, extraOff + 32));
+
+        // And the container still round-trips it.
+        var bytes = new BdfContainer
+        {
+            Platform = BdfPlatform.Pc, Data = data, OffsetTable = serialized.OffsetTable,
+            NumFiles = serialized.NumFiles, TrailingData = serialized.TrailingData
+        }.Write(DecalsBdf.Padding);
+        var parsed = DecalsBdf.Parse(BdfContainer.Read(bytes, DecalsBdf.Padding));
+        Assert.Equal(model.NormalAtlasPath, parsed.NormalAtlasPath);
+        Assert.Equal(model.Vertices.Count, parsed.Vertices.Count);
+    }
+
+    [Fact]
+    public void EmptyStub_MatchesTheVanilla64ByteLayout()
+    {
+        var serialized = DecalsBdf.Serialize(new DecalsModel());
+        Assert.Equal(64, serialized.Data.Length);
+        Assert.Equal(new[] { 3, 16, 16, -1 }, new[]
+        {
+            BitConverter.ToInt32(serialized.Data, 0), BitConverter.ToInt32(serialized.Data, 4),
+            BitConverter.ToInt32(serialized.Data, 8), BitConverter.ToInt32(serialized.Data, 12)
+        });
+        Assert.Equal(32u, BitConverter.ToUInt32(serialized.TrailingData, 4));
+        Assert.All(serialized.Data.Skip(16).Take(16), b => Assert.Equal(0, b));
     }
 
     [Fact]

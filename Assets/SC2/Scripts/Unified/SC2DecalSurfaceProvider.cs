@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using BdfIO.Formats.Terrain;
 using SC2.MapEditor.Document;
 
 /// <summary>One world-space surface path for imported MeshCollider terrain
@@ -51,12 +52,21 @@ public sealed class SC2DecalSurfaceProvider
     /// over the decorative background instead).</summary>
     public System.Func<Ray, Vector3?> LiveTerrainRaycast;
 
-    /// <summary>Paired with LiveTerrainRaycast above — same live height
-    /// source, used both to derive a surface normal at a raycast hit (via
-    /// finite difference) and to tessellate the live core terrain into real
-    /// triangles for Collect below (mirroring AddTerrain's own pattern for
-    /// Unity's native Terrain type).</summary>
+    /// <summary>Paired with LiveTerrainRaycast above - same live height
+    /// source, used to derive a surface normal at a raycast hit (via finite
+    /// difference). Only placement clicks use it; the decal geometry itself
+    /// is always clipped against real triangles (see Collect).</summary>
     public System.Func<float, float, float> LiveTerrainSampleHeight;
+
+    /// <summary>The live runtime terrain's own chunk meshes (core and
+    /// background) with their transforms - wired by SC2DecalsShell from
+    /// SC2TerrainRuntime.VisibleChunkMeshes. Decals clip against these real
+    /// triangles; a scene search for the chunk GameObjects is not needed.</summary>
+    public System.Func<IEnumerable<(Mesh Mesh, Matrix4x4 LocalToWorld)>> RuntimeSurfaceMeshes;
+
+    /// <summary>What the last Collect gathered from where - shown in the
+    /// preview rebuild log so an empty result says which source came up empty.</summary>
+    public string LastCollectSummary { get; private set; } = "";
 
     /// <summary>A decal placement click
     /// should be able to pass straight through a real water-material
@@ -129,19 +139,18 @@ public sealed class SC2DecalSurfaceProvider
         return new Vector3(hL - hR, 2f * eps, hD - hU).normalized;
     }
 
-    /// <param name="liveTerrainSampleHeight">Optional — same live-height
-    /// source as LiveTerrainRaycast/LiveTerrainSampleHeight above, passed
-    /// explicitly here (rather than always reading the instance field)
-    /// since Collect is also called from the export path
-    /// (SC2DecalsExportService), a static context with its own one-shot
-    /// height sampler built from the already-computed export hfieldModel,
-    /// not this same live-editing instance.</param>
-    public List<SC2DecalSurfaceTriangle> Collect(SC2DecalsDocument document, System.Func<float, float, float> liveTerrainSampleHeight = null)
+    /// <summary>Real triangles only, everywhere: an imported terrain.bdf
+    /// (MeshCollider), the live runtime terrain's chunk meshes (collider-less,
+    /// marked with SC2DecalProjectionSurface) and Unity's native Terrain. Water
+    /// submeshes are skipped so a decal on a lake floor does not also stick to
+    /// the water surface above it. Used by the editor preview; the export
+    /// clips against the final exported model instead (CollectFromTerrainModel).</summary>
+    public List<SC2DecalSurfaceTriangle> Collect(SC2DecalsDocument document)
     {
         var result = new List<SC2DecalSurfaceTriangle>();
         if (document == null || document.Placements.Count == 0) return result;
         // Per-placement bounds, not one combined box wrapping every
-        // placement — a map with decals spread far apart previously forced
+        // placement - a map with decals spread far apart previously forced
         // a full triangle scan of every collider whose bounds intersected
         // that whole loose combined region, even for colliders nowhere near
         // any individual decal. Checking against each placement's own
@@ -150,179 +159,69 @@ public sealed class SC2DecalSurfaceProvider
         // touches.
         var boundsList = PlacementBoundsList(document);
         if (boundsList.Count == 0) return result;
-        var combined = boundsList[0];
-        for (var i = 1; i < boundsList.Count; i++) combined.Encapsulate(boundsList[i]);
 
         EnsureSceneCache();
+        var colliderMeshes = 0;
         foreach (var collider in _cachedColliders)
         {
-            if (collider == null || collider.sharedMesh == null || !collider.enabled || !IsProjectionSurface(collider.gameObject) || !collider.bounds.Intersects(combined)) continue;
-            AddMesh(result, collider.sharedMesh, collider.transform.localToWorldMatrix, boundsList);
+            if (collider == null || collider.sharedMesh == null || !collider.enabled || !IsProjectionSurface(collider.gameObject) || !IntersectsAny(boundsList, collider.bounds)) continue;
+            var renderer = collider.GetComponent<MeshRenderer>();
+            AddMesh(result, collider.sharedMesh, collider.transform.localToWorldMatrix, boundsList, renderer != null ? renderer.sharedMaterials : null);
+            colliderMeshes++;
         }
 
-        // A no-Collider SC2DecalProjectionSurface is, today, only ever the
-        // live SC2TerrainRuntime chunk root (core or background — both add
-        // this marker with no MeshCollider, see its own class doc comment;
-        // imported terrain.bdf DOES get a MeshCollider, so it's already
-        // covered by the loop above and never reaches here). That chunk mesh
-        // is always the CURRENT, un-simplified painted geometry — Simplify
-        // is only ever applied to a separate copy built for export
-        // (SC2TerrainLayerBuilder.Build), never to this live mesh itself.
-        // AddLiveHeightGrid below is the one caller-supplied substitute for
-        // exactly this mesh (see liveTerrainSampleHeight's own doc comment),
-        // and at export time it's built from the FINAL, SIMPLIFIED exported
-        // mesh — so once it's available, adding this live mesh on top too
-        // was real, confirmed real: it duplicated the decal footprint from
-        // two disagreeing surfaces (the live pre-simplify one and the
-        // exported post-simplify one), and wherever Simplify actually moved
-        // the surface, part of the resulting decal geometry ended up sunk
-        // below the real exported terrain. Skip it whenever a substitute is
-        // available; fall back to it only when none was supplied (there is
-        // then no other way to reach this collider-less mesh at all).
-        if (liveTerrainSampleHeight == null)
-            foreach (var surface in _cachedSurfaces)
-                foreach (var filter in surface.GetComponentsInChildren<MeshFilter>(false))
-                    if (filter != null && filter.sharedMesh != null && filter.GetComponent<Collider>() == null)
-                        AddMesh(result, filter.sharedMesh, filter.transform.localToWorldMatrix, boundsList);
+        // The live runtime terrain (core + background chunks). Its chunks are
+        // separate meshes, so the ones no decal touches are skipped by their
+        // own mesh bounds instead of scanning the whole grid.
+        var runtimeMeshes = 0;
+        var covered = new HashSet<Mesh>();
+        if (RuntimeSurfaceMeshes != null)
+            foreach (var (mesh, matrix) in RuntimeSurfaceMeshes())
+            {
+                covered.Add(mesh);
+                if (!IntersectsAny(boundsList, WorldBounds(mesh.bounds, matrix))) continue;
+                AddMesh(result, mesh, matrix, boundsList, null);
+                runtimeMeshes++;
+            }
+
+        // Any other collider-less SC2DecalProjectionSurface mesh in the scene.
+        var sceneMeshes = 0;
+        foreach (var surface in _cachedSurfaces)
+        {
+            if (surface == null) continue;
+            foreach (var filter in surface.GetComponentsInChildren<MeshFilter>(false))
+            {
+                if (filter == null || filter.sharedMesh == null || filter.GetComponent<Collider>() != null || covered.Contains(filter.sharedMesh)) continue;
+                var matrix = filter.transform.localToWorldMatrix;
+                if (!IntersectsAny(boundsList, WorldBounds(filter.sharedMesh.bounds, matrix))) continue;
+                var renderer = filter.GetComponent<MeshRenderer>();
+                AddMesh(result, filter.sharedMesh, matrix, boundsList, renderer != null ? renderer.sharedMaterials : null);
+                sceneMeshes++;
+            }
+        }
+        LastCollectSummary = $"colliders={colliderMeshes}/{_cachedColliders.Length} runtimeChunks={runtimeMeshes}/{covered.Count} sceneMeshes={sceneMeshes}";
 
         foreach (var terrain in Terrain.activeTerrains)
-            if (terrain != null && terrain.terrainData != null && terrain.terrainData.bounds.Transform(terrain.transform.localToWorldMatrix).Intersects(combined))
+        {
+            var terrainBounds = terrain != null && terrain.terrainData != null
+                ? terrain.terrainData.bounds.Transform(terrain.transform.localToWorldMatrix) : default;
+            if (terrain != null && terrain.terrainData != null && IntersectsAny(boundsList, terrainBounds))
                 AddTerrain(result, terrain, document);
-        if (liveTerrainSampleHeight != null)
-            AddLiveHeightGrid(result, liveTerrainSampleHeight, document);
+        }
         return result;
     }
 
-    /// <summary>Live-core-terrain equivalent of AddTerrain above — same
-    /// per-placement tessellated-quad pattern, sampling the live analytic
-    /// height grid (SC2LiveHeightGrid, via the passed-in delegate) instead
-    /// of Unity's native Terrain API, since SC2TerrainRuntime's own chunk
-    /// meshes have no queryable collider to gather real triangles from
-    /// otherwise.</summary>
-    private const int MaxCellsPerAxis = 96;
-    private const int MinCellsPerAxis = 4;
-
-    /// <summary>Probe points per axis spread across the footprint (NOT
-    /// scaled by decal size) when estimating local terrain curvature. Cheap
-    /// even at the full 96-cell cap: a handful of extra samples against a
-    /// grid that would otherwise cost up to 9216 cells. A denser,
-    /// footprint-scaled grid (up to 25x25) was tried here while diagnosing a
-    /// decal rendering wrong on genuinely flat ground — confirmed NOT the
-    /// cause (the real bug was cross-placement triangle bleeding, fixed via
-    /// SC2DecalSurfaceTriangle.OwnerPlacementId), and the denser grid cost
-    /// enough per frame to make dragging visibly laggy for no benefit — so
-    /// this stays a fixed count.</summary>
-    private const int RoughnessProbeCount = 5;
-
-    /// <summary>Fixed world-unit offset used to measure LOCAL curvature at
-    /// each probe point (a discrete second derivative: how far the center
-    /// sample sits from the average of its two neighbors this far away in
-    /// each axis). Deliberately NOT scaled by decal size — a large flat (or
-    /// uniformly sloped) decal must score just as "flat" as a small one, so
-    /// this has to measure how much the terrain bends per unit length, not
-    /// how much height it accumulates across the whole footprint (which
-    /// grows with footprint size for ANY given noise/undulation frequency,
-    /// even genuinely gentle terrain that needs no extra tessellation at
-    /// all — the real bug an earlier version of this had: a big decal on
-    /// gently rolling "flat-looking" ground always measured enough
-    /// accumulated deviation across its own large span to trip the
-    /// full-resolution threshold, even though the ground was no bumpier
-    /// per-unit-length than under a small decal that correctly got
-    /// downgraded).</summary>
-    private const float CurvatureProbeStep = 2f;
-
-    /// <summary>Below this much local curvature (world units), the ground is
-    /// "flat enough" that MinCellsPerAxis alone already conforms to it
-    /// visually — a flat plane or a uniform slope both score exactly 0 here
-    /// (three collinear samples), whatever the footprint's overall size.</summary>
-    private const float FlatCurvatureTolerance = 0.05f;
-
-    /// <summary>At/above this much local curvature, use the full resolution
-    /// the decal's own size would normally request (MaxCellsPerAxis-capped)
-    /// — genuinely rugged ground under a decal still gets the same fidelity
-    /// as before this optimization existed.</summary>
-    private const float FullResCurvatureThreshold = 1.5f;
-
-    /// <summary>Chooses how finely to tessellate the live terrain surface
-    /// under one decal placement — full resolution only where the ground
-    /// actually bends enough, per unit length, to need it. A fixed decal-
-    /// size-based cell count (the original, only, behavior) always paid for
-    /// up to 96x96 cells even under dead-flat ground, since it had no way
-    /// to know the difference — confirmed as one of the two dominant costs
-    /// in SC2DecalsShell.EnsurePreview's own measured rebuild timing,
-    /// especially painful during a Move/Rotate/Scale drag (re-tessellating
-    /// every single frame). Deliberately shared with the export path
-    /// (SC2DecalsExportService also calls Collect, hence AddLiveHeightGrid)
-    /// — a flatter decal footprint genuinely needs fewer triangles to look
-    /// right in the exported game data too, not just in the editor
-    /// preview.</summary>
-    private static int EstimateAdaptiveCellCount(System.Func<float, float, float> sampleHeight, float originX, float originZ, float side, int requestedCells)
+    /// <summary>The export's ground: the final terrain model's own triangles
+    /// (live plane + imported terrain, after Simplify), water layers left out -
+    /// exactly what the game renders, so a decal clipped against it lies on the
+    /// real surface instead of an approximation of it.</summary>
+    public List<SC2DecalSurfaceTriangle> CollectFromTerrainModel(SC2DecalsDocument document, TerrainModel model)
     {
-        if (requestedCells <= MinCellsPerAxis) return requestedCells;
-        var maxCurvature = 0f;
-        for (var iz = 0; iz < RoughnessProbeCount; iz++)
-        for (var ix = 0; ix < RoughnessProbeCount; ix++)
-        {
-            var x = originX + side * (ix + 0.5f) / RoughnessProbeCount;
-            var z = originZ + side * (iz + 0.5f) / RoughnessProbeCount;
-            var center = sampleHeight(x, z);
-            var curveX = Mathf.Abs(sampleHeight(x - CurvatureProbeStep, z) + sampleHeight(x + CurvatureProbeStep, z) - 2f * center);
-            var curveZ = Mathf.Abs(sampleHeight(x, z - CurvatureProbeStep) + sampleHeight(x, z + CurvatureProbeStep) - 2f * center);
-            var curvature = Mathf.Max(curveX, curveZ);
-            if (curvature > maxCurvature) maxCurvature = curvature;
-        }
-        if (maxCurvature <= FlatCurvatureTolerance) return MinCellsPerAxis;
-        var t = Mathf.Clamp01((maxCurvature - FlatCurvatureTolerance) / (FullResCurvatureThreshold - FlatCurvatureTolerance));
-        return Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(MinCellsPerAxis, requestedCells, t)), MinCellsPerAxis, requestedCells);
-    }
-
-    private static void AddLiveHeightGrid(List<SC2DecalSurfaceTriangle> output, System.Func<float, float, float> sampleHeight, SC2DecalsDocument document)
-    {
-        foreach (var p in document.Placements)
-        {
-            if (p == null || !p.Enabled || p.Position == null || p.Position.Length < 3) continue;
-            var side = Mathf.Sqrt(p.Width * p.Width + p.Length * p.Length);
-            var requestedCells = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, side)), MinCellsPerAxis, MaxCellsPerAxis);
-            var origin = new Vector3(p.Position[0] - side * .5f, 0, p.Position[2] - side * .5f);
-            var cellsX = EstimateAdaptiveCellCount(sampleHeight, origin.x, origin.z, side, requestedCells);
-            var cellsZ = cellsX;
-            const float eps = 0.5f;
-            Vector3 Pt(float x, float z) => new(x, sampleHeight(x, z), z);
-            Vector3 Nm(float x, float z)
-            {
-                var hL = sampleHeight(x - eps, z); var hR = sampleHeight(x + eps, z);
-                var hD = sampleHeight(x, z - eps); var hU = sampleHeight(x, z + eps);
-                return new Vector3(hL - hR, 2f * eps, hD - hU).normalized;
-            }
-            for (var z = 0; z < cellsZ; z++) for (var x = 0; x < cellsX; x++)
-            {
-                var x0 = origin.x + side * x / cellsX; var x1 = origin.x + side * (x + 1) / cellsX;
-                var z0 = origin.z + side * z / cellsZ; var z1 = origin.z + side * (z + 1) / cellsZ;
-                var a = Pt(x0, z0); var b = Pt(x1, z0); var c = Pt(x1, z1); var d = Pt(x0, z1);
-                var na = Nm(x0, z0); var nb = Nm(x1, z0); var nc = Nm(x1, z1); var nd = Nm(x0, z1);
-                // Winding matches SC2TerrainRuntime.BuildChunkIndices' own
-                // proven quad split (i00,i01,i10)/(i10,i01,i11) — an earlier
-                // version of this used (a,b,c)/(a,c,d), the OPPOSITE winding
-                // (confirmed by signed-area comparison against that known-
-                // correct terrain code for the same quad corners). This
-                // synthesized surface only feeds SC2DecalGeometryBuilder's
-                // face-angle rejection/shading (both driven by the explicit
-                // normals above, unaffected by index order) and the output
-                // decal mesh's own triangle winding (which DOES come
-                // straight from this vertex order) — a reversed decal mesh
-                // still gets built and still references the right texture,
-                // it just backface-culls in anything that isn't rendering
-                // it double-sided, which is exactly "exports fine, invisible
-                // in the real game" with nothing else visibly wrong.
-                //
-                // Tagged with this placement's own Id — see OwnerPlacementId's own doc comment:
-                // two nearby placements can tessellate overlapping ground independently, and
-                // mixing one's synthetic quads into a DIFFERENT placement's own clip produced a
-                // visible seam right at the overlap boundary (confirmed real).
-                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); t1.OwnerPlacementId = p.Id; output.Add(t1);
-                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); t2.OwnerPlacementId = p.Id; output.Add(t2);
-            }
-        }
+        if (document == null || document.Placements.Count == 0) return new List<SC2DecalSurfaceTriangle>();
+        var wanted = new List<SC2DecalTerrainModelSurface.Box>();
+        foreach (var b in PlacementBoundsList(document))
+            wanted.Add(new SC2DecalTerrainModelSurface.Box(b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z));
+        return SC2DecalTerrainModelSurface.Collect(model, SC2HfieldProjectionService.IsWaterMaterial, wanted);
     }
 
     private static void SetNormals(ref SC2DecalSurfaceTriangle t, Vector3 na, Vector3 nb, Vector3 nc)
@@ -333,30 +232,50 @@ public sealed class SC2DecalSurfaceProvider
         t.NCX = nc.x; t.NCY = nc.y; t.NCZ = nc.z;
     }
 
-    private static void AddMesh(List<SC2DecalSurfaceTriangle> output, Mesh mesh, Matrix4x4 matrix, List<Bounds> wantedList)
+    private static void AddMesh(List<SC2DecalSurfaceTriangle> output, Mesh mesh, Matrix4x4 matrix, List<Bounds> wantedList, Material[] materials)
     {
-        var vertices = mesh.vertices; var indices = mesh.triangles;
-        // Real per-vertex normals (already smooth — averaged across every
+        var vertices = mesh.vertices;
+        // Real per-vertex normals (already smooth - averaged across every
         // face sharing that vertex, exactly what the mesh's own shading
-        // uses) — see SC2DecalGeometryBuilder.BuildPlacement's own comment
+        // uses) - see SC2DecalGeometryBuilder.BuildPlacement's own comment
         // for why passing these through (instead of letting that class fall
         // back to a flat per-triangle normal) fixes visible decal faceting
         // on any non-perfectly-flat surface. Normals transform by the
         // matrix's rotation only, never translated/scaled like a position.
         var normals = mesh.normals;
         var hasNormals = normals != null && normals.Length == vertices.Length;
-        for (var i = 0; i + 2 < indices.Length; i += 3)
+        for (var sub = 0; sub < mesh.subMeshCount; sub++)
         {
-            var ia = indices[i]; var ib = indices[i + 1]; var ic = indices[i + 2];
-            var a = matrix.MultiplyPoint3x4(vertices[ia]); var b = matrix.MultiplyPoint3x4(vertices[ib]); var c = matrix.MultiplyPoint3x4(vertices[ic]);
-            var triangleBounds = new Bounds(a, Vector3.zero);
-            triangleBounds.Encapsulate(b); triangleBounds.Encapsulate(c);
-            if (!IntersectsAny(wantedList, triangleBounds)) continue;
-            var triangle = Triangle(a, b, c);
-            if (hasNormals)
-                SetNormals(ref triangle, matrix.MultiplyVector(normals[ia]), matrix.MultiplyVector(normals[ib]), matrix.MultiplyVector(normals[ic]));
-            output.Add(triangle);
+            if (IsWaterSubMesh(materials, sub)) continue;
+            var indices = mesh.GetTriangles(sub);
+            for (var i = 0; i + 2 < indices.Length; i += 3)
+            {
+                var ia = indices[i]; var ib = indices[i + 1]; var ic = indices[i + 2];
+                var a = matrix.MultiplyPoint3x4(vertices[ia]); var b = matrix.MultiplyPoint3x4(vertices[ib]); var c = matrix.MultiplyPoint3x4(vertices[ic]);
+                var triangleBounds = new Bounds(a, Vector3.zero);
+                triangleBounds.Encapsulate(b); triangleBounds.Encapsulate(c);
+                if (!IntersectsAny(wantedList, triangleBounds)) continue;
+                var triangle = Triangle(a, b, c);
+                if (hasNormals)
+                    SetNormals(ref triangle, matrix.MultiplyVector(normals[ia]), matrix.MultiplyVector(normals[ib]), matrix.MultiplyVector(normals[ic]));
+                output.Add(triangle);
+            }
         }
+    }
+
+    private static bool IsWaterSubMesh(Material[] materials, int subMesh) =>
+        materials != null && subMesh < materials.Length && materials[subMesh] != null &&
+        materials[subMesh].shader != null && materials[subMesh].shader.name == "SC2/Water";
+
+    private static Bounds WorldBounds(Bounds local, Matrix4x4 matrix)
+    {
+        var world = new Bounds(matrix.MultiplyPoint3x4(local.center + Vector3.Scale(local.extents, new Vector3(-1, -1, -1))), Vector3.zero);
+        for (var i = 1; i < 8; i++)
+        {
+            var sign = new Vector3((i & 1) == 0 ? -1 : 1, (i & 2) == 0 ? -1 : 1, (i & 4) == 0 ? -1 : 1);
+            world.Encapsulate(matrix.MultiplyPoint3x4(local.center + Vector3.Scale(local.extents, sign)));
+        }
+        return world;
     }
 
     private static bool IntersectsAny(List<Bounds> boundsList, Bounds triangleBounds)
@@ -395,10 +314,12 @@ public sealed class SC2DecalSurfaceProvider
                 // 4 corners — see SC2DecalGeometryBuilder.BuildPlacement's
                 // comment for why a flat normal here would facet visibly.
                 var na = NormalAt(terrain, x0, z0); var nb = NormalAt(terrain, x1, z0); var nc = NormalAt(terrain, x1, z1); var nd = NormalAt(terrain, x0, z1);
-                // Same winding fix as AddLiveHeightGrid above — see that
-                // method's own comment. Same OwnerPlacementId tagging too —
-                // this also tessellates ONE placement's own footprint per
-                // call, with the same cross-placement overlap risk.
+                // Winding matches SC2TerrainRuntime.BuildChunkIndices - a
+                // reversed decal mesh backface-culls in the real game
+                // ("exports fine, invisible"). Tagged with this placement's own
+                // Id (see OwnerPlacementId): this tessellates ONE placement's
+                // own footprint per call, so two nearby placements' grids of
+                // the same ground must not be mixed into each other's clip.
                 var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); t1.OwnerPlacementId = p.Id; output.Add(t1);
                 var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); t2.OwnerPlacementId = p.Id; output.Add(t2);
             }

@@ -1328,27 +1328,10 @@ public static class SC2TerrainExporter
         var newScriptLua = SC2ObjectsExport.RegenerateScriptLua(data);
         SC2Log.Log("[SC2Exporter] _save.lua/_scenario.lua/_script.lua text built (Objects blocks regenerated).");
 
-        // Same live-height fallback SC2DecalsShell already wires for
-        // interactive placement (see SC2DecalSurfaceProvider's own doc
-        // comment) — reused here as a one-shot bilinear sampler over the
-        // hfieldModel this function already projected above, so a decal
-        // placed on the live procedural terrain (no queryable Collider)
-        // still gets real clip-target geometry at export time instead of
-        // silently exporting with none.
-        float SampleLiveHeightForDecals(float x, float z)
-        {
-            var mapX = (int)hfieldModel.MapX;
-            var mapY = (int)hfieldModel.MapY;
-            if (hfieldModel.Heightmap == null || mapX <= 0 || mapY <= 0) return 0f;
-            var gx = Mathf.Clamp(x, 0f, mapX - 1);
-            var gz = Mathf.Clamp(z, 0f, mapY - 1);
-            var x0 = Mathf.FloorToInt(gx); var z0 = Mathf.FloorToInt(gz);
-            var x1 = Mathf.Min(mapX - 1, x0 + 1); var z1 = Mathf.Min(mapY - 1, z0 + 1);
-            var tx = gx - x0; var tz = gz - z0;
-            float H(int gxi, int gzi) => hfieldModel.Heightmap[gzi * mapX + gxi] / 128f;
-            return Mathf.Lerp(Mathf.Lerp(H(x0, z0), H(x1, z0), tx), Mathf.Lerp(H(x0, z1), H(x1, z1), tx), tz);
-        }
-        var decalsBytes = SC2DecalsExportService.Build(session, mapName, out var decalDiffuseAtlasBytes, out var decalNormalAtlasBytes, SampleLiveHeightForDecals);
+        // Decals are clipped against the FINAL terrain model's own triangles - the same
+        // live plane + imported terrain (after Simplify) the game renders - so they sit
+        // exactly on the exported surface.
+        var decalsBytes = SC2DecalsExportService.Build(session, mapName, out var decalDiffuseAtlasBytes, out var decalNormalAtlasBytes, model);
 
         // Stale textures from a PREVIOUS export of this same map (e.g. a
         // material's Diffuse got replaced, or a texture got removed

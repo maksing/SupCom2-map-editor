@@ -2,21 +2,33 @@ using System;
 using System.IO;
 using BdfIO.Core;
 using BdfIO.Formats.Decals;
+using BdfIO.Formats.Terrain;
 using SC2.MapEditor.Document;
 
 public static class SC2DecalsExportService
 {
-    /// <param name="liveTerrainSampleHeight">Optional — same live-core-
-    /// terrain height source SC2DecalsShell wires for interactive placement
-    /// (SC2LiveHeightGrid, via SC2TerrainShell), passed in explicitly here
-    /// since this export path has no live shell reference of its own —
-    /// the caller (SC2TerrainExporter.BuildExportArtifacts) builds a
-    /// one-shot sampler from the hfieldModel it has already computed for
-    /// hfield.bdf. Without this, a decal placed on the live procedural
-    /// terrain (no queryable Collider — see SC2DecalSurfaceProvider's own
-    /// doc comment) would export with no clip-target geometry at all.</param>
+    /// <summary>What the most recent Build wrote - the Decals panel shows it. Vanilla maps ship
+    /// roughly 15-40 thousand triangles in decals.bdf in total.</summary>
+    public struct ExportStats
+    {
+        public int Triangles;
+        public int Vertices;
+        public int SourceTriangles;
+    }
+
+    public static ExportStats LastStats;
+
+    /// <summary>Above this many triangles the panel warns - several times a
+    /// vanilla map's total, where decals start to cost real frame time.</summary>
+    public const int WarnTriangleCount = 100000;
+
+    /// <param name="terrainModel">The final terrain model the export is about to write
+    /// (SC2TerrainExporter.BuildExportArtifacts already merged the live plane and every
+    /// imported terrain.bdf into it and applied Simplify). Decals are clipped against its
+    /// own triangles, so they lie on exactly the surface the game renders. Null (nothing
+    /// exported yet) falls back to whatever real meshes exist in the scene.</param>
     public static byte[] Build(SC2MapSession session, string mapName, out byte[] diffuseAtlas, out byte[] normalAtlas,
-        System.Func<float, float, float> liveTerrainSampleHeight = null)
+        TerrainModel terrainModel = null)
     {
         diffuseAtlas = null;
         normalAtlas = null;
@@ -56,11 +68,25 @@ public static class SC2DecalsExportService
         else if (normalAtlas != null) exportDocument.NormalAtlasPath = $"/maps/{mapName}/decals/decals_normal.dds";
         exportDocument.DiffuseAtlasPath = NormalizeAtlasPath(exportDocument.DiffuseAtlasPath);
         exportDocument.NormalAtlasPath = NormalizeAtlasPath(exportDocument.NormalAtlasPath);
-        var authored = SC2DecalGeometryBuilder.Build(exportDocument, surfaces.Collect(exportDocument, liveTerrainSampleHeight));
+        var surfaceTriangles = terrainModel != null
+            ? surfaces.CollectFromTerrainModel(exportDocument, terrainModel)
+            : surfaces.Collect(exportDocument);
+        // Only clipped-from-the-terrain-model sources carry the terrain tangent frame the game lights a
+        // decal's normal map in (see SC2DecalGeometryBuilder.Build).
+        var authored = SC2DecalGeometryBuilder.Build(exportDocument, surfaceTriangles, terrainTangentSpace: terrainModel != null);
         if (document.KeepOriginalBakedLayer && original != null)
             MergeOriginal(authored, original);
 
         DecalsSpatialBuilder.Rebuild(authored, useVanillaCandidateSplit: true);
+        LastStats = new ExportStats
+        {
+            Triangles = authored.Indices.Count / 3,
+            Vertices = authored.Vertices.Count,
+            SourceTriangles = surfaceTriangles.Count
+        };
+        SC2Log.Log($"[SC2DecalsExportService] decals.bdf: {LastStats.Triangles:N0} triangles, {LastStats.Vertices:N0} vertices " +
+                   $"(clipped from {LastStats.SourceTriangles:N0} terrain triangles under the decals).");
+
         var serialized = DecalsBdf.Serialize(authored);
         return new BdfContainer
         {

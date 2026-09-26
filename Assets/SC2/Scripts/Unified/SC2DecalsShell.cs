@@ -116,6 +116,7 @@ public sealed class SC2DecalsShell : IDisposable
         _surfaces.LiveTerrainRaycast = ray =>
             _terrainShell != null && _terrainShell.TryRaycastLiveHeightGrid(ray, out var hit) ? hit : (Vector3?)null;
         _surfaces.LiveTerrainSampleHeight = (x, z) => _terrainShell != null ? _terrainShell.SampleLiveHeightGrid(x, z) : 0f;
+        _surfaces.RuntimeSurfaceMeshes = () => RuntimeTerrainMeshes();
     }
 
     public void DrawEmbeddedGUI(float panelWidth)
@@ -195,6 +196,7 @@ public sealed class SC2DecalsShell : IDisposable
             var next = Doc.Clone(); next.KeepOriginalBakedLayer = keepOriginal;
             Commit("Change Original Decal Layer Export", next);
         }
+        DrawMeshStats(w);
         _search = GUILayout.TextField(_search ?? "", GUILayout.Width(w - 8));
 
         // No scroll view of its own any more — a capped-height inner scroll
@@ -1279,14 +1281,14 @@ public sealed class SC2DecalsShell : IDisposable
         List<SC2DecalSurfaceTriangle> surfaceTriangles;
         if (fullRebuild)
         {
-            surfaceTriangles = _surfaces.Collect(previewDocument, _surfaces.LiveTerrainSampleHeight);
+            surfaceTriangles = _surfaces.Collect(previewDocument);
         }
         else
         {
-            // A lightweight subset document — Collect()/AddLiveHeightGrid
-            // only ever READ placements, so reusing the same Entries list
-            // and placement objects (no deep clone) is safe, and keeps
-            // Collect's own per-placement tessellation work scoped to just
+            // A lightweight subset document — Collect() only ever READS
+            // placements, so reusing the same Entries list and placement
+            // objects (no deep clone) is safe, and keeps its per-placement
+            // bounds (and so the terrain triangles it gathers) scoped to just
             // the handful actually dirty instead of every placement in the
             // document.
             var scoped = new SC2DecalsDocument
@@ -1296,7 +1298,7 @@ public sealed class SC2DecalsShell : IDisposable
                 Entries = previewDocument.Entries,
                 Placements = previewDocument.Placements.Where(p => p?.Id != null && toRebuild.Contains(p.Id)).ToList()
             };
-            surfaceTriangles = _surfaces.Collect(scoped, _surfaces.LiveTerrainSampleHeight);
+            surfaceTriangles = _surfaces.Collect(scoped);
         }
         var swCollectMs = swCollect.ElapsedMilliseconds;
 
@@ -1337,7 +1339,7 @@ public sealed class SC2DecalsShell : IDisposable
             _builtEntriesSignature = entriesSignature;
         }
         var swBuildMs = swBuild.ElapsedMilliseconds;
-        SC2Log.Log($"[SC2DecalsShell] EnsurePreview rebuild: placements={previewDocument.Placements.Count}, rebuilt={rebuiltCount}, surfaceTriangles={surfaceTriangles.Count}, Collect={swCollectMs}ms, GeometryBuilder.Build={swBuildMs}ms");
+        SC2Log.Log($"[SC2DecalsShell] EnsurePreview rebuild: placements={previewDocument.Placements.Count}, rebuilt={rebuiltCount}, surfaceTriangles={surfaceTriangles.Count} ({_surfaces.LastCollectSummary}), Collect={swCollectMs}ms, GeometryBuilder.Build={swBuildMs}ms");
 
         // Update the mesh of every placement whose fragment was just rebuilt (or dropped); the
         // others keep the mesh they already have.
@@ -1643,6 +1645,37 @@ public sealed class SC2DecalsShell : IDisposable
         ResetEntryDrafts();
         ResetPlacementDraft();
         CancelTransform(false);
+    }
+
+    /// <summary>Triangle counts of the decal mesh. decals.bdf is loaded whole
+    /// by the game and a decal mesh far denser than the terrain under it costs
+    /// real frame time; vanilla maps ship roughly 15-40 thousand in total.</summary>
+    private void DrawMeshStats(float w)
+    {
+        var triangles = Doc.IndexCount / 3;
+        var tooDense = triangles > SC2DecalsExportService.WarnTriangleCount;
+        var previousColor = GUI.color;
+        if (tooDense) GUI.color = new Color(1f, 0.55f, 0.4f);
+        GUILayout.Label($"Authored decals in the preview: {triangles:N0} triangles (the export clips against the simplified terrain instead)" +
+                        (tooDense ? $" - above {SC2DecalsExportService.WarnTriangleCount / 1000}k" : ""), GUILayout.Width(w - 8));
+        GUI.color = previousColor;
+        var last = SC2DecalsExportService.LastStats;
+        if (last.Triangles <= 0) return;
+        var exportTooDense = last.Triangles > SC2DecalsExportService.WarnTriangleCount;
+        if (exportTooDense) GUI.color = new Color(1f, 0.55f, 0.4f);
+        GUILayout.Label($"Last export: {last.Triangles:N0} triangles, {last.Vertices:N0} vertices" +
+                        (exportTooDense ? $" - above {SC2DecalsExportService.WarnTriangleCount / 1000}k, vanilla maps ship about 15-40k in total" : ""),
+                        GUILayout.Width(w - 8));
+        GUI.color = previousColor;
+    }
+
+    private IEnumerable<(Mesh Mesh, Matrix4x4 LocalToWorld)> RuntimeTerrainMeshes()
+    {
+        if (_terrainShell == null) yield break;
+        if (_terrainShell.Runtime != null)
+            foreach (var chunk in _terrainShell.Runtime.VisibleChunkMeshes()) yield return chunk;
+        if (_terrainShell.BackgroundRuntime != null)
+            foreach (var chunk in _terrainShell.BackgroundRuntime.VisibleChunkMeshes()) yield return chunk;
     }
 
     private void Commit(string name, SC2DecalsDocument next)
