@@ -896,22 +896,67 @@ public sealed class SC2DecalsShell : IDisposable
             if (s.x < viewport.xMin - margin || s.x > viewport.xMax + margin || s.y < viewport.yMin - margin || s.y > viewport.yMax + margin) continue;
             s.x -= origin.x; s.y -= origin.y;
             var selected = i == _selectedPlacement;
-            // A plain 10x10 box, same size as every unselected one and only
-            // differing by color, is hard to notice as selected. A real
-            // highlight instead: bigger, plus a translucent outer ring, so
-            // it reads as "selected" at a glance instead of blending into
-            // the rest of the markers.
-            var size = selected ? 16f : 10f; var half = size * 0.5f;
-            if (selected)
-            {
-                var ringOld = GUI.color; GUI.color = new Color(1f, 1f, 0.4f, 0.5f);
-                GUI.Box(new Rect(s.x - half - 4f, s.y - half - 4f, size + 8f, size + 8f), "");
-                GUI.color = ringOld;
-            }
-            var gui = new Rect(s.x - half, s.y - half, size, size);
-            var old = GUI.color; GUI.color = selected ? Color.yellow : Color.cyan; GUI.Box(gui, ""); GUI.color = old;
+            DrawOriginMarker(s.x, s.y, selected);
         }
         GUI.EndClip();
+    }
+
+    // Soft-edged filled circle, generated once and reused for every ring of every marker below
+    // (only the draw rect's size and GUI.color's tint differ per ring) — a real texture asset
+    // instead of GUI.Box's own skin-styled background, which carried enough transparency for a
+    // plain cyan/yellow square to read as a faint smudge on a dark surface (confirmed real, first
+    // reported against a dark terrain texture) rather than a marker at all.
+    private static Texture2D _originMarkerCircle;
+    private static Texture2D OriginMarkerCircle
+    {
+        get
+        {
+            if (_originMarkerCircle != null) return _originMarkerCircle;
+            const int res = 64;
+            var tex = new Texture2D(res, res, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Bilinear };
+            var pixels = new Color32[res * res];
+            var center = (res - 1) * 0.5f;
+            for (var y = 0; y < res; y++)
+            for (var x = 0; x < res; x++)
+            {
+                var dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                // A ~1.5px feathered edge instead of a hard cutoff so the circle still looks
+                // smooth once scaled down to a small on-screen marker, not a jagged blob.
+                var alpha = Mathf.Clamp01(center - dist + 1.5f);
+                pixels[y * res + x] = new Color32(255, 255, 255, (byte)(alpha * 255f));
+            }
+            tex.SetPixels32(pixels);
+            tex.Apply(false, false);
+            return _originMarkerCircle = tex;
+        }
+    }
+
+    /// <summary>A map-pin-style badge instead of a flat colored square: dark outline (contrast
+    /// against any background) → white ring (a crisp pop of contrast even against a similarly
+    /// cyan/yellow surface) → the actual cyan/yellow fill → a small white pinpoint center (marks
+    /// the exact origin, not just "somewhere in this blob"). Selected gets a soft outer glow too,
+    /// on top of being drawn noticeably bigger, so it reads as "this one" at a glance.</summary>
+    private static void DrawOriginMarker(float x, float y, bool selected)
+    {
+        var tex = OriginMarkerCircle;
+        Rect Centered(float size) => new(x - size * 0.5f, y - size * 0.5f, size, size);
+
+        var core = selected ? 14f : 10f;
+        var prevColor = GUI.color;
+        if (selected)
+        {
+            GUI.color = new Color(1f, 0.85f, 0.3f, 0.35f);
+            GUI.DrawTexture(Centered(core + 16f), tex);
+        }
+        GUI.color = new Color(0f, 0f, 0f, 0.85f);
+        GUI.DrawTexture(Centered(core + 5f), tex);
+        GUI.color = Color.white;
+        GUI.DrawTexture(Centered(core + 2.5f), tex);
+        GUI.color = selected ? new Color(1f, 0.82f, 0.1f) : new Color(0.15f, 0.9f, 1f);
+        GUI.DrawTexture(Centered(core), tex);
+        GUI.color = Color.white;
+        GUI.DrawTexture(Centered(core * 0.32f), tex);
+        GUI.color = prevColor;
     }
 
     private bool TryPickPlacement(Camera camera, Vector2 mouse, out int index)
@@ -1067,6 +1112,31 @@ public sealed class SC2DecalsShell : IDisposable
     /// equivalent for markers — cheap/idempotent, since the body below
     /// early-returns unless the document/terrain actually changed since the
     /// last call.</summary>
+    /// <summary>Call whenever a genuinely NEW document/terrain state has just been loaded
+    /// (wired to SC2TerrainShell.DataChanged, fired from SetData/LoadFromDisk) — this shell is a
+    /// long-lived singleton reused across "Load Terrain..." within the same running session, NOT
+    /// recreated per load (see SC2GameViewEditorUI.EnsureDecalsShell), so without this its
+    /// per-placement fragment cache below survived a reload verbatim. A reloaded map's placements
+    /// are byte-for-byte identical to what was already cached, so EnsurePreview's diff-based
+    /// partial rebuild (see its own doc comment) correctly concluded "nothing changed" and never
+    /// rebuilt anything — even though the terrain GameObjects that stale geometry was actually
+    /// clipped against had just been destroyed and rebuilt fresh by that same reload. Confirmed
+    /// real: every decal rendered wrong right after a reload, until the user selected/moved one
+    /// (forcing just THAT placement's own fragment to rebuild via the transform-drag path, which
+    /// bypasses the diff entirely — "snapping" it into place, one at a time, on touch).
+    /// Clearing _fragmentSources makes EnsurePreview's next call take its "no baseline yet"
+    /// branch, which always does a real, correct full rebuild against the current scene.</summary>
+    public void InvalidatePreviewCache()
+    {
+        _fragmentSources.Clear();
+        _placementFragmentCache.Clear();
+        _builtEntriesSignature = null;
+        _dirtyPlacementIds.Clear();
+        _renderedRevision = -1;
+        _renderedTransformVersion = -1;
+        _renderedTerrainVersion = -1;
+    }
+
     public void EnsurePreview()
     {
         // Confirmed real: live terrain brush strokes (Raise/Lower/Smooth/Set
@@ -1078,6 +1148,15 @@ public sealed class SC2DecalsShell : IDisposable
         // terrain shape existed the last time this ran, even after the
         // ground under it had been reshaped.
         if (Doc == null) return;
+        // The terrain runtime (core+background chunks, and their SC2DecalProjectionSurface
+        // marker Collect() looks for — see its own doc comment) has already been torn down by
+        // SchedulePreviewBuild and isn't rebuilt yet: rebuilding decal geometry right now would
+        // clip/project against whatever's left of the OLD terrain, or nothing at all, and (since
+        // nothing else would naturally trigger another rebuild afterward) stay wrong until the
+        // user happened to select/move a decal. Bail out WITHOUT updating _renderedRevision/
+        // _renderedTransformVersion/_renderedTerrainVersion below, so the same mismatch is still
+        // there — and gets retried — the next frame once the terrain preview is actually ready.
+        if (_terrainShell != null && _terrainShell.PreviewBuildPending) { RepaintHost?.Invoke(); return; }
         var revisionChanged = _renderedRevision != _session.Document.Revision;
         var transformChanged = _renderedTransformVersion != _transformVersion;
         var terrainChanged = _renderedTerrainVersion != SC2TerrainShell.TerrainGeometryVersion;

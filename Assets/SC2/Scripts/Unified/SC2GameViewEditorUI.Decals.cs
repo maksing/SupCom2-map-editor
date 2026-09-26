@@ -27,6 +27,12 @@ public sealed partial class SC2GameViewEditorUI
         _terrainShell.HeightBrushApplied += (center, radius) => _decalsShell?.MarkPreviewDirtyInRadius(center, radius);
         // Moving an imported terrain object changes the ground under its old and new region.
         _terrainShell.ImportedTerrainMoved += bounds => _decalsShell?.ReprojectDecalsInBounds(bounds);
+        // A genuinely new document just loaded (SetData/LoadFromDisk) — see
+        // SC2DecalsShell.InvalidatePreviewCache's own doc comment for why this shell (a
+        // long-lived singleton, not recreated per load) needs to be told explicitly, or its
+        // per-placement preview cache survives the reload and every decal renders wrong until
+        // individually touched.
+        _terrainShell.DataChanged += _ => _decalsShell?.InvalidatePreviewCache();
     }
 
     private void DrawDecalsInspector()

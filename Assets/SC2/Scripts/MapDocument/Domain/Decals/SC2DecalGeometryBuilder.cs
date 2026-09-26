@@ -32,6 +32,18 @@ namespace SC2.MapEditor.Document
         public float NAX, NAY, NAZ;
         public float NBX, NBY, NBZ;
         public float NCX, NCY, NCZ;
+
+        /// <summary>Null for real, shared geometry (a collider/MeshFilter/Unity Terrain — there is
+        /// only ever one instance of that mesh, so any placement whose bounds reach it should
+        /// clip against it). Set to a placement's own Id for a synthetic quad
+        /// SC2DecalSurfaceProvider.AddLiveHeightGrid tessellated JUST for that one placement's own
+        /// footprint — two nearby placements each get their OWN independent tessellation of
+        /// what can be overlapping ground, at different grid resolutions/alignments, so mixing
+        /// one placement's synthetic quads into a DIFFERENT placement's clip produced duplicate,
+        /// inconsistent geometry (confirmed real: a visible hard seam on a decal whose footprint
+        /// overlapped a neighboring one, which only disappeared once that neighbor was excluded
+        /// from the same Collect() call — see FilterTrianglesNearPlacement's own use of this).</summary>
+        public string OwnerPlacementId;
     }
 
     /// <summary>Deterministic orthographic projector shared by imported and
@@ -135,6 +147,15 @@ namespace SC2.MapEditor.Document
             var result = new List<SC2DecalSurfaceTriangle>();
             foreach (var t in triangles)
             {
+                // A synthetic quad tessellated for a DIFFERENT placement's own footprint (see
+                // OwnerPlacementId's own doc comment) — two nearby placements' independent
+                // tessellations of the same physical ground can overlap in world space (bounding
+                // boxes intersecting) while each grid's own quad boundaries and resolution differ,
+                // so mixing them into one placement's clip produced duplicate/inconsistent
+                // geometry — a visible hard seam right at the overlap boundary. Real, shared
+                // geometry (OwnerPlacementId null — a collider/MeshFilter/Unity Terrain) is
+                // unaffected and still clips against every nearby placement as before.
+                if (!string.IsNullOrEmpty(t.OwnerPlacementId) && t.OwnerPlacementId != p.Id) continue;
                 var triMinX = Math.Min(t.AX, Math.Min(t.BX, t.CX));
                 if (triMinX > maxX) continue;
                 var triMaxX = Math.Max(t.AX, Math.Max(t.BX, t.CX));

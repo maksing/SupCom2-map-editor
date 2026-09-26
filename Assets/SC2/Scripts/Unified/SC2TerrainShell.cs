@@ -2110,6 +2110,17 @@ public class SC2TerrainShell : ScriptableObject
 
     public bool IsPairCpuDataStale => _pairCpuDataStale;
 
+    /// <summary>True from SchedulePreviewBuild (a fresh SetData/LoadFromDisk, or any edit that
+    /// touched geometry) until the queued rebuild actually runs — during that window
+    /// DestroyPreview() has already torn down _runtime, so its chunk GameObjects (and their
+    /// SC2DecalProjectionSurface marker SC2DecalSurfaceProvider.Collect looks for) don't exist at
+    /// all. SC2DecalsShell.EnsurePreview polls this so it never builds decal geometry against a
+    /// terrain that's mid-rebuild — confirmed real: a decal loaded with a map rendered wrong until
+    /// the user selected/moved it (which forces its own fragment rebuild once the terrain preview
+    /// had since finished), because EnsurePreview's very first call after a load could land inside
+    /// this exact window and never got another trigger to retry once terrain became ready.</summary>
+    public bool PreviewBuildPending => _previewBuildQueued;
+
     // ── Toolbar drawing ──────────────────────────────────────────────────────
 
     private void DrawModeToolbar()

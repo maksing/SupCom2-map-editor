@@ -205,7 +205,13 @@ public sealed class SC2DecalSurfaceProvider
     /// <summary>Probe points per axis spread across the footprint (NOT
     /// scaled by decal size) when estimating local terrain curvature. Cheap
     /// even at the full 96-cell cap: a handful of extra samples against a
-    /// grid that would otherwise cost up to 9216 cells.</summary>
+    /// grid that would otherwise cost up to 9216 cells. A denser,
+    /// footprint-scaled grid (up to 25x25) was tried here while diagnosing a
+    /// decal rendering wrong on genuinely flat ground — confirmed NOT the
+    /// cause (the real bug was cross-placement triangle bleeding, fixed via
+    /// SC2DecalSurfaceTriangle.OwnerPlacementId), and the denser grid cost
+    /// enough per frame to make dragging visibly laggy for no benefit — so
+    /// this stays a fixed count.</summary>
     private const int RoughnessProbeCount = 5;
 
     /// <summary>Fixed world-unit offset used to measure LOCAL curvature at
@@ -308,8 +314,13 @@ public sealed class SC2DecalSurfaceProvider
                 // it just backface-culls in anything that isn't rendering
                 // it double-sided, which is exactly "exports fine, invisible
                 // in the real game" with nothing else visibly wrong.
-                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); output.Add(t1);
-                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); output.Add(t2);
+                //
+                // Tagged with this placement's own Id — see OwnerPlacementId's own doc comment:
+                // two nearby placements can tessellate overlapping ground independently, and
+                // mixing one's synthetic quads into a DIFFERENT placement's own clip produced a
+                // visible seam right at the overlap boundary (confirmed real).
+                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); t1.OwnerPlacementId = p.Id; output.Add(t1);
+                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); t2.OwnerPlacementId = p.Id; output.Add(t2);
             }
         }
     }
@@ -385,9 +396,11 @@ public sealed class SC2DecalSurfaceProvider
                 // comment for why a flat normal here would facet visibly.
                 var na = NormalAt(terrain, x0, z0); var nb = NormalAt(terrain, x1, z0); var nc = NormalAt(terrain, x1, z1); var nd = NormalAt(terrain, x0, z1);
                 // Same winding fix as AddLiveHeightGrid above — see that
-                // method's own comment.
-                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); output.Add(t1);
-                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); output.Add(t2);
+                // method's own comment. Same OwnerPlacementId tagging too —
+                // this also tessellates ONE placement's own footprint per
+                // call, with the same cross-placement overlap risk.
+                var t1 = Triangle(a, c, b); SetNormals(ref t1, na, nc, nb); t1.OwnerPlacementId = p.Id; output.Add(t1);
+                var t2 = Triangle(a, d, c); SetNormals(ref t2, na, nd, nc); t2.OwnerPlacementId = p.Id; output.Add(t2);
             }
         }
     }
