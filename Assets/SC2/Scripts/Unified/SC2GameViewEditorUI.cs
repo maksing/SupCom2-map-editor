@@ -1315,9 +1315,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 #endif
     }
 
-    // Baseline for the autosave countdown — restarted by ANY save that
-    // actually wrote to disk (manual, any tab's own "Save Terrain" button,
-    // or a previous autosave), via SC2TerrainShell.LastSaveRealtimeSeconds;
+    // Baseline for the autosave countdown — restarted either by a real,
+    // explicit Save (manual, any tab's own "Save Terrain" button) via
+    // SC2TerrainShell.LastSaveRealtimeSeconds below, or directly by
+    // TickAutosave itself right before it fires (a backup-only autosave
+    // deliberately never touches LastSaveRealtimeSeconds — see
+    // SC2TerrainShell.RequestAutosaveBackup's own doc comment for why).
     // -1 means "nothing observed yet this session/terrain".
     private double _autosaveBaselineRealtime = -1;
     private double _lastObservedSaveRealtime = -1;
@@ -1356,9 +1359,14 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             return;
 
         _autosaveBaselineRealtime = now;
-        SC2Log.Log($"[Autosave] {SC2SaveSettings.AutosaveIntervalMinutes:0.#}-minute interval reached — autosaving '{_terrainShell.Data.MapName}'.");
-        if (_terrainShell.RequestSave())
-            SetStatus($"Autosaved '{_terrainShell.Data.MapName}'.");
+        SC2Log.Log($"[Autosave] {SC2SaveSettings.AutosaveIntervalMinutes:0.#}-minute interval reached — backing up '{_terrainShell.Data.MapName}'.");
+        // RequestAutosaveBackup, NOT RequestSave: autosave must only ever add a
+        // rotating backup snapshot, never overwrite the canonical save file —
+        // otherwise leaving the map open (and unsaved) for an hour would mean
+        // there's no way back to what was on disk before that hour started.
+        // See SC2TerrainShell.RequestAutosaveBackup's own doc comment.
+        if (_terrainShell.RequestAutosaveBackup())
+            SetStatus($"Autosave backup created for '{_terrainShell.Data.MapName}'.");
     }
 
 #if UNITY_EDITOR

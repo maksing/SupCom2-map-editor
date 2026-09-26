@@ -176,8 +176,36 @@ public static class SC2RuntimeTerrainPersistence
             File.Move(tempPath, finalPath);
         SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: legacy JSON written to '{finalPath}' ({sw.ElapsedMilliseconds}ms).");
 
-        SaveDocumentPackage(data, session);
+        SaveDocumentPackage(data, session, json);
         SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save finished in {sw.ElapsedMilliseconds}ms.");
+    }
+
+    /// <summary>Autosave's ONLY effect — writes a rotating backup snapshot
+    /// built from the CURRENT in-memory data, without touching any of the
+    /// canonical save files (the legacy .sc2terrain.json, manifest.json, or
+    /// the shareable package) that Save() above writes. The map's
+    /// "last saved state" on disk must only ever change via an explicit
+    /// user Save — leaving the app open for an hour without pressing Save
+    /// still lets the user recover exactly what was on disk at that last
+    /// Save; the autosave timer only adds safety-net backups alongside it,
+    /// it never becomes the thing "Save" itself silently was.</summary>
+    public static bool CreateAutosaveBackup(SC2TerrainData data, SC2MapSession session)
+    {
+        if (data == null || SC2SaveSettings.MaxBackupsPerMap <= 0) return false;
+        try
+        {
+            var json = JsonUtility.ToJson(ToDto(data));
+            var blobStore = CreateBlobStore();
+            var document = BuildDocumentSnapshot(data, session, blobStore);
+            var manifestJson = SC2MapDocumentSerializer.Serialize(document);
+            CreateBackupSnapshot(data.MapName, json, manifestJson, blobStore);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SC2Log.LogWarning($"[SC2RuntimeTerrainPersistence] Autosave backup failed: {ex}");
+            return false;
+        }
     }
 
     /// <summary>Dual-write — builds a full
@@ -190,7 +218,7 @@ public static class SC2RuntimeTerrainPersistence
     /// packages before anything depends on reading them back. A failure
     /// here must never take down the legacy save that already succeeded
     /// above, hence the blanket catch.</summary>
-    private static void SaveDocumentPackage(SC2TerrainData data, SC2MapSession session)
+    private static void SaveDocumentPackage(SC2TerrainData data, SC2MapSession session, string legacyJson)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
@@ -214,9 +242,9 @@ public static class SC2RuntimeTerrainPersistence
 
             CollectUnreferencedBlobs(blobStore);
             SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: blob GC done ({sw.ElapsedMilliseconds}ms).");
-            RefreshShareablePackage(data.MapName, manifestJson, blobStore);
+            RefreshShareablePackage(data.MapName, legacyJson, manifestJson, blobStore);
             SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: shareable package refreshed ({sw.ElapsedMilliseconds}ms).");
-            CreateBackupSnapshot(data.MapName, manifestJson, blobStore);
+            CreateBackupSnapshot(data.MapName, legacyJson, manifestJson, blobStore);
             SC2Log.Log($"[SC2RuntimeTerrainPersistence] Save: backup snapshot step done ({sw.ElapsedMilliseconds}ms).");
         }
         catch (Exception ex)
@@ -244,12 +272,12 @@ public static class SC2RuntimeTerrainPersistence
     /// in the package forever. Runs inside SaveDocumentPackage's own
     /// try/catch — this is a convenience mirror of an already-successful
     /// save, never allowed to make the save itself look like it failed.</summary>
-    private static void RefreshShareablePackage(string mapName, string manifestJson, ISC2BlobStore blobStore)
+    private static void RefreshShareablePackage(string mapName, string legacyJson, string manifestJson, ISC2BlobStore blobStore)
     {
         var shareDir = SharePackageDirectory(mapName);
         if (Directory.Exists(shareDir))
             Directory.Delete(shareDir, recursive: true);
-        WriteSelfContainedPackage(shareDir, mapName, manifestJson, blobStore);
+        WriteSelfContainedPackage(shareDir, mapName, legacyJson, manifestJson, blobStore);
         SC2Log.Log($"[SC2RuntimeTerrainPersistence] Shareable package refreshed: {shareDir}");
     }
 
@@ -266,12 +294,12 @@ public static class SC2RuntimeTerrainPersistence
     /// keep working even after the shared blob pool's own GC (see
     /// CollectUnreferencedBlobs) has long since swept whatever the CURRENT
     /// save stopped referencing.</summary>
-    private static void WriteSelfContainedPackage(string destDir, string mapName, string manifestJson, ISC2BlobStore blobStore)
+    private static void WriteSelfContainedPackage(string destDir, string mapName, string legacyJson, string manifestJson, ISC2BlobStore blobStore)
     {
         Directory.CreateDirectory(destDir);
 
         var savePath = GetSavePath(mapName);
-        File.Copy(savePath, Path.Combine(destDir, Path.GetFileName(savePath)), overwrite: true);
+        File.WriteAllText(Path.Combine(destDir, Path.GetFileName(savePath)), legacyJson, Encoding.UTF8);
 
         var manifestDir = Path.Combine(destDir, Path.GetFileName(DocumentPackageDirectory(mapName)));
         Directory.CreateDirectory(manifestDir);
@@ -305,10 +333,12 @@ public static class SC2RuntimeTerrainPersistence
     public static string BackupsDirectory(string mapName) =>
         Path.Combine(SaveDirectory, "Backups", SanitizeFileName(string.IsNullOrWhiteSpace(mapName) ? "Untitled" : mapName));
 
-    /// <summary>Called from SaveDocumentPackage's own try/catch — a backup
-    /// failure must never make an otherwise-successful Save look like it
-    /// failed, same reasoning as every other step in that method.</summary>
-    private static void CreateBackupSnapshot(string mapName, string manifestJson, ISC2BlobStore blobStore)
+    /// <summary>Called from SaveDocumentPackage's own try/catch (a real
+    /// Save) and from CreateAutosaveBackup's (the autosave timer, which
+    /// never touches the canonical save files at all) — either way a
+    /// backup failure must never make its caller look like it failed,
+    /// same reasoning as every other step in SaveDocumentPackage.</summary>
+    private static void CreateBackupSnapshot(string mapName, string legacyJson, string manifestJson, ISC2BlobStore blobStore)
     {
         if (SC2SaveSettings.MaxBackupsPerMap <= 0) return;
         try
@@ -321,7 +351,7 @@ public static class SC2RuntimeTerrainPersistence
             while (Directory.Exists(backupDir))
                 backupDir = Path.Combine(BackupsDirectory(mapName), $"{stamp}_{suffix++}");
 
-            WriteSelfContainedPackage(backupDir, mapName, manifestJson, blobStore);
+            WriteSelfContainedPackage(backupDir, mapName, legacyJson, manifestJson, blobStore);
             SC2Log.Log($"[SC2RuntimeTerrainPersistence] Backup snapshot created: {backupDir}");
             PruneOldBackups(mapName);
         }
