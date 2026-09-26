@@ -44,6 +44,37 @@ namespace UnityEditor
         private static readonly int kPopupHint = "SC2ShimPopup".GetHashCode();
         private static readonly int kColorFieldHint = "SC2ShimColorField".GetHashCode();
         private static readonly int kObjectFieldHint = "SC2ShimObjectField".GetHashCode();
+        private static readonly int kNumericFieldHint = "SC2ShimNumericField".GetHashCode();
+
+        private static string s_numericEditName;
+        private static string s_numericEditText;
+
+        /// <summary>Number text box that keeps what the user is typing while it
+        /// has focus. Redrawing the text from the number every frame (the
+        /// original behaviour) wiped any intermediate text that doesn't parse
+        /// yet - a lone "-", "-." or "" - so a negative value could never be
+        /// typed at all (the "-" vanished the instant it was entered). The
+        /// number is only re-formatted from `value` when the field is NOT
+        /// focused, so external changes (Undo, gizmo drags) still show up.</summary>
+        private static float NumericTextField(float value, params GUILayoutOption[] options)
+        {
+            var name = "SC2ShimNumeric_" + GUIUtility.GetControlID(kNumericFieldHint, FocusType.Passive);
+            var focused = GUI.GetNameOfFocusedControl() == name;
+            var shown = focused && s_numericEditName == name ? s_numericEditText : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            GUI.SetNextControlName(name);
+            var text = GUILayout.TextField(shown, options);
+            if (GUI.GetNameOfFocusedControl() == name)
+            {
+                s_numericEditName = name;
+                s_numericEditText = text;
+            }
+            else if (s_numericEditName == name)
+            {
+                s_numericEditName = null;
+                s_numericEditText = null;
+            }
+            return float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : value;
+        }
 
         public sealed class VerticalScope : IDisposable
         {
@@ -116,9 +147,9 @@ namespace UnityEditor
         {
             BeginHorizontal();
             GUILayout.Label(label, GUILayout.Width(SC2UiScale.Pxf(92f)));
-            var text = GUILayout.TextField(value.ToString("0.##"), options);
+            var result = NumericTextField(value, options);
             EndHorizontal();
-            return float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : value;
+            return result;
         }
         public static bool Toggle(string label, bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, label, options);
         public static bool Toggle(bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, GUIContent.none, options);
@@ -204,8 +235,7 @@ namespace UnityEditor
         private static float CompactAxisField(string axisLabel, float value)
         {
             GUILayout.Label(axisLabel, GUILayout.Width(SC2UiScale.Pxf(14f)));
-            var text = GUILayout.TextField(value.ToString("0.##"), GUILayout.ExpandWidth(true));
-            return float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : value;
+            return NumericTextField(value, GUILayout.ExpandWidth(true));
         }
         public static Vector2 Vector2Field(string label, Vector2 value, params GUILayoutOption[] options)
         {
