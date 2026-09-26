@@ -122,9 +122,9 @@ public static class DecalsSpatialBuilder
         if (nodes.Count == 0)
             throw new InvalidOperationException("BSP builder returned no EDB nodes for non-empty decal geometry.");
 
-        var extraStart = 16
-            + Encoding.ASCII.GetByteCount(model.DiffuseAtlasPath ?? string.Empty) + 1
-            + Encoding.ASCII.GetByteCount(model.NormalAtlasPath ?? string.Empty) + 1;
+        // Same string-pool layout DecalsBdf.Serialize writes, so the absolute pointers
+        // in this block already match the offset it ends up at.
+        DecalsBdf.StringPoolLayout(model.DiffuseAtlasPath, model.NormalAtlasPath, out _, out var extraStart);
         var rootAbsolute = checked(extraStart + EdhSize);
         var payloadLength = checked(EdhSize + nodes.Count * EdbSize);
         var padding = (32 - ((extraStart + payloadLength) & 31)) & 31;

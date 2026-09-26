@@ -26,12 +26,17 @@ namespace BdfIO.Formats.Decals
 ///
 ///   int32 Version                (=3, always)
 ///   int32 DiffuseAtlasPathOffset (=16, always — right after this header)
-///   int32 NormalAtlasPathOffset  (= DiffuseAtlasPathOffset + strlen(diffuse)+1;
-///                                   these are tightly-packed C-strings, NOT
-///                                   fixed-width slots — a common mistake to
-///                                   make from sampling only same-length paths)
+///   int32 NormalAtlasPathOffset  (= DiffuseAtlasPathOffset + strlen(diffuse)+1,
+///                                   rounded UP to a multiple of 4: the strings
+///                                   are C-strings, NOT fixed-width slots, but
+///                                   each one starts on a 4-byte boundary with
+///                                   zero fill in between - confirmed on every
+///                                   vanilla decals.bdf that has geometry, e.g.
+///                                   a 54-char path ends at 70 and the normal
+///                                   path starts at 72)
 ///   int32 ExtraDataOffset        (= NormalAtlasPathOffset + strlen(normal)+1,
-///                                   or -1 if the map has no decals at all)
+///                                   rounded up to a multiple of 4 the same
+///                                   way, or -1 if the map has no decals at all)
 ///   [DiffuseAtlasPathOffset]  NUL-terminated diffuse atlas texture path
 ///   [NormalAtlasPathOffset]   NUL-terminated normal atlas texture path
 ///   [ExtraDataOffset, geometryHeaderOffset)  EDH + EDB tree + zero alignment
@@ -114,6 +119,25 @@ public sealed class DecalsModel
 public static class DecalsBdf
 {
     public static BdfPadding Padding => BdfPadding.Align32;
+
+    /// <summary>Where the string pool puts the normal-atlas path and the spatial
+    /// (EDH/EDB) block. Shared with DecalsSpatialBuilder, whose block carries
+    /// absolute pointers and so must be built for the exact offset Serialize
+    /// will place it at.</summary>
+    public static void StringPoolLayout(string diffuseAtlasPath, string normalAtlasPath, out int normalOffset, out int extraOffset)
+    {
+        var diffuseLength = Encoding.ASCII.GetByteCount(diffuseAtlasPath ?? "");
+        var normalLength = Encoding.ASCII.GetByteCount(normalAtlasPath ?? "");
+        normalOffset = Align(HeaderSize + diffuseLength + 1, 4);
+        extraOffset = Align(normalOffset + normalLength + 1, 4);
+    }
+
+    private static void PadTo32(BdfWriter w)
+    {
+        while (w.Position % 32 != 0) w.WriteByte(0);
+    }
+
+    private static int Align(int value, int alignment) => (value + alignment - 1) / alignment * alignment;
     private const int HeaderSize = 16;
     private const int VertexStride = 76;
     private const int GeometryHeaderSize = 20;
@@ -210,11 +234,13 @@ public static class DecalsBdf
         var diffuseBytes = Encoding.ASCII.GetBytes(model.DiffuseAtlasPath ?? "");
         var normalBytes = Encoding.ASCII.GetBytes(model.NormalAtlasPath ?? "");
         var diffuseOff = HeaderSize;
-        var normalOff = diffuseOff + diffuseBytes.Length + 1;
         var hasDecals = model.HasDecals;
-        var minimumExtraOff = normalOff + normalBytes.Length + 1;
+        StringPoolLayout(model.DiffuseAtlasPath, model.NormalAtlasPath, out var normalOff, out var minimumExtraOff);
+        // A map with no decals and no atlas at all is vanilla's 64-byte stub: both
+        // path offsets point at the single terminator at 16.
+        if (!hasDecals && diffuseBytes.Length == 0 && normalBytes.Length == 0) normalOff = diffuseOff;
         var extraOff = hasDecals
-            ? Math.Max(minimumExtraOff, model.ExtraDataOriginalStart)
+            ? Align(Math.Max(minimumExtraOff, model.ExtraDataOriginalStart), 4)
             : -1;
 
         w.WriteInt32(model.Version);
@@ -223,7 +249,8 @@ public static class DecalsBdf
         offsetTable.Add((uint)w.Position); w.WriteInt32(extraOff);
 
         w.WriteBytes(diffuseBytes); w.WriteByte(0);
-        w.WriteBytes(normalBytes); w.WriteByte(0);
+        while (w.Position < normalOff) w.WriteByte(0);
+        if (w.Position == normalOff) { w.WriteBytes(normalBytes); w.WriteByte(0); }
         while (hasDecals && w.Position < extraOff) w.WriteByte(0);
 
         int h2;
@@ -234,6 +261,7 @@ public static class DecalsBdf
             foreach (var relOffset in model.ExtraDataOffsetTable)
                 offsetTable.Add((uint)(extraDataStart + relOffset));
 
+            PadTo32(w); // every vanilla file starts the geometry sub-file on a 32-byte boundary
             h2 = w.Position;
             w.WriteInt32(1); // geometry sub-file version, always 1
             w.WriteInt32(model.Vertices.Count);
@@ -256,6 +284,7 @@ public static class DecalsBdf
         }
         else
         {
+            PadTo32(w);
             h2 = w.Position;
             w.WriteInt32(1);
             w.WriteInt32(0);
@@ -264,6 +293,7 @@ public static class DecalsBdf
             offsetTable.Add((uint)w.Position); w.WriteInt32(-1);
         }
 
+        PadTo32(w); // vanilla decals.bdf data always ends on a 32-byte boundary
         var trailing = new byte[12];
         BitConverter.GetBytes(0u).CopyTo(trailing, 0);
         BitConverter.GetBytes((uint)h2).CopyTo(trailing, 4);
