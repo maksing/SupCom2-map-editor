@@ -5807,6 +5807,17 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             RecordImportedTerrainsUndo();
             mat.SetTexture(shaderProp, picked);
+            // The Mats/Pairs debug materials are built once from the textures
+            // that were assigned at that moment (cached on the entry) - now
+            // that this picker is reachable while those modes are active, a
+            // stale cache would keep showing the old texture's colour.
+            if (entry.FlatColorMaterials != null || entry.PairColorMaterials != null)
+            {
+                entry.FlatColorMaterials = null;
+                entry.PairColorMaterials = null;
+                if (_terrainShell != null)
+                    ApplyPreviewModeToImportedTerrain(entry, _terrainShell.Prev);
+            }
         }
         // A Custom- or archive-sourced browser pick resolves to an in-memory
         // Texture2D with no real project asset/GUID — Unity cannot
@@ -6193,7 +6204,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (meshRenderer != null)
         {
             entry.MaterialsExpanded = EditorGUILayout.Foldout(entry.MaterialsExpanded, "Materials", true, EditorStyles.foldout);
-            var mats = meshRenderer.sharedMaterials;
+            // The AUTHORED materials, not meshRenderer.sharedMaterials: the Mats/
+            // Pairs/Slope/Height preview modes swap the live renderer over to
+            // synthetic debug materials that have none of the _Diffuse1/_Normal1/
+            // _Mask1/... properties, so reading the live array made every texture
+            // slot (and the shader flags below) vanish in those modes.
+            var mats = entry.OriginalMaterials ?? meshRenderer.sharedMaterials;
             for (var i = 0; entry.MaterialsExpanded && i < mats.Length; i++)
             {
                 var mat = mats[i];
