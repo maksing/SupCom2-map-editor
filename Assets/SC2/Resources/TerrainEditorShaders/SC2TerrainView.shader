@@ -191,14 +191,18 @@ Shader "Hidden/SC2/TerrainView"
             // colors (unassigned checker, Mats, Pairs) — a plain fixed
             // world-space directional light leaves a slope facing away from
             // it reading almost as flat as level ground; from some camera
-            // angles the whole surface loses contrast entirely. A matcap
-            // keys off the normal in VIEW space instead (transforming world
-            // normal through UNITY_MATRIX_V), so shading tracks the camera
-            // the way it turns a mesh in Blender's own MatCap solid-shading
-            // mode — curvature and slope stay readable from any angle, with
-            // no dependency on scene lighting. Procedural — 6 selectable
-            // looks (_MatCapPreset, set from the Preview toolbar's own
-            // MatCap picker) matching 6 specific balls from Blender's own
+            // angles the whole surface loses contrast entirely. Keyed off the
+            // surface's own WORLD-space normal (not view space — a real
+            // matcap traditionally transforms the normal through
+            // UNITY_MATRIX_V so shading sweeps as the camera orbits, matching
+            // Blender's own MatCap solid-shading mode, but that read as the
+            // material itself changing while just orbiting the view; per
+            // direct instruction every preset here must look identical from
+            // any camera angle, changing only with the actual mesh normal),
+            // so curvature and slope stay readable from any angle with no
+            // dependency on scene lighting OR the camera. Procedural — 6
+            // selectable looks (_MatCapPreset, set from the Preview toolbar's
+            // own MatCap picker) matching 6 specific balls from Blender's own
             // MatCap gallery (confirmed against real reference screenshots:
             // the default "Standard" ball, plus 5 named picks — Steel, the
             // striped/zebra curvature-check ball, a tan/skin clay, a dark
@@ -241,15 +245,25 @@ Shader "Hidden/SC2/TerrainView"
             }
 
             // Preset 2 — Zebra: alternating light/dark bands that follow
-            // the surface's own view-space normal (angle + radius around
-            // the view axis) — the classic curvature-check matcap: stripes
+            // the surface's own world-space normal (angle + radius around
+            // the world Z axis) — the classic curvature-check matcap: stripes
             // bend and bunch up exactly where the surface bends, making
             // smoothness/slope changes easy to spot independent of albedo.
             half3 MatCapZebra(float3 vn)
             {
                 float angle = atan2(vn.y, vn.x);
+                // radius = length(vn.xy) is sin(tilt) — feeding THAT into the stripe frequency
+                // (the original version) compresses the whole low end: sin() itself already
+                // squashes small angles down to near-zero, so a genuinely subtle bump barely
+                // nudged the stripe phase at all before completing even one band — exactly the
+                // "can't see minor relief" report. Recovering the true tilt angle (asin, linear in
+                // degrees, not squashed near zero) and driving the stripe frequency from THAT
+                // instead makes the response predictable: ~6 degrees of tilt = one full light/dark
+                // cycle, so even a 2-3 degree bump shows a clear, visible band shift, while a
+                // genuinely steep slope still cycles fast (matches a real curvature-check matcap).
                 float radius = length(vn.xy);
-                float stripes = sin(angle * 6.0 + radius * 10.0) * 0.5 + 0.5;
+                float tilt = asin(saturate(radius));
+                float stripes = sin(angle * 6.0 + tilt * 60.0) * 0.5 + 0.5;
                 float band = smoothstep(0.45, 0.55, stripes);
                 float fresnel = pow(saturate(1.0 - vn.z), 2.0);
                 half3 tone = lerp(half3(0.25, 0.25, 0.27), half3(1.10, 1.10, 1.15), band);
@@ -289,7 +303,7 @@ Shader "Hidden/SC2/TerrainView"
                 return tone;
             }
 
-            // Preset 5 — Normal: colorizes by the view-space normal
+            // Preset 5 — Normal: colorizes by the world-space normal
             // itself, same idea as Blender's own RGB "normal" matcap — no
             // single light direction at all, just a direct view of surface
             // orientation, useful as a seam/curvature reference.
@@ -302,7 +316,14 @@ Shader "Hidden/SC2/TerrainView"
 
             half3 MatCapLit(half3 albedo, float3 worldNrm)
             {
-                float3 vn = normalize(mul((float3x3)UNITY_MATRIX_V, normalize(worldNrm)));
+                // World-space normal, NOT view space — a real matcap deliberately keys off the
+                // view-transformed normal (see this function's own history above), but that means
+                // the whole pattern sweeps across the surface as the camera orbits, which reads as
+                // the material itself changing rather than a stable curvature/slope reference.
+                // Per direct instruction: every preset here must depend only on the surface's own
+                // orientation, never on the camera, so orbiting shows the SAME shading and only
+                // actual geometry edits (sculpting, painting) change it.
+                float3 vn = normalize(worldNrm);
                 half3 tone;
                 if (_MatCapPreset == 1) tone = MatCapSteel(vn);
                 else if (_MatCapPreset == 2) tone = MatCapZebra(vn);
