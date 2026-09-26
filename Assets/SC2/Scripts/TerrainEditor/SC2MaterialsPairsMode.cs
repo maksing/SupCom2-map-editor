@@ -495,13 +495,33 @@ public class SC2PairsMode
         {
             _win.RecordUndoCheckpointFor(Data, "Remove Pair");
             // Clear pair from index array and shift higher indices down
+            var counts = new int[Data.Pairs.Count - 1];
             for (var t=0;t<Data.TrianglePairIndex.Length;t++)
             {
                 if (Data.TrianglePairIndex[t]==i) Data.TrianglePairIndex[t]=-1;
                 else if (Data.TrianglePairIndex[t]>i) Data.TrianglePairIndex[t]--;
+                if (Data.TrianglePairIndex[t]>=0) counts[Data.TrianglePairIndex[t]]++;
             }
             Data.Pairs.RemoveAt(i);
+            Data.PairTriCounts = counts;
             if (_sel >= Data.Pairs.Count) _sel = Data.Pairs.Count-1;
+            // TrianglePairIndex only shifted the CPU array above - the GPU
+            // PairMapRT that the terrain shader/paint brush actually read
+            // from (_PairMapTex) still holds the stale, pre-shift bytes at
+            // this point. Left unsynced, the terrain would keep rendering
+            // the old pair mapping until an unrelated Undo/Redo (the only
+            // other caller of RestorePairMapFromData besides load) happened
+            // to fix it, and worse, the next paint stroke's GPU->CPU
+            // readback (SyncPairMapToCPU/Async) would silently reapply
+            // those stale bytes and undo this very fix.
+            var runtime = Data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+            runtime?.RestorePairMapFromData(Data);
+            // RestorePairMapFromData only pushes the raw index texture - the
+            // Pairs-preview-mode colour RT and per-pair material/tiling setup
+            // are a separate derived cache (same distinction ApplyRestoredSnapshot's
+            // own comment calls out for Undo/Redo) and need their own refresh.
+            if (Data == _win.Data) _win.ApplyPreviewModeToChunks();
+            else _win.RefreshBackgroundRuntime();
             EditorUtility.SetDirty(Data); _win.MarkDirtyAndRepaint();
         }
         EditorGUILayout.EndHorizontal();
@@ -543,6 +563,36 @@ public class SC2PairsMode
             pair.PairColor = pairColor;
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
+        }
+        if (GUILayout.Button("Assign Unassigned Polygons to This Pair") &&
+            EditorUtility.DisplayDialog("Assign", $"Assign every currently-unassigned polygon to '{pair.Name}'?", "Yes", "Cancel"))
+        {
+            _win.RecordUndoCheckpointFor(Data, "Assign Unassigned Polygons");
+            var runtime = Data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+            var hole = runtime?.HoleTriPairIndex;
+            var idx = Data.TrianglePairIndex;
+            var counts = Data.PairTriCounts != null && Data.PairTriCounts.Length == Data.Pairs.Count
+                ? (int[])Data.PairTriCounts.Clone() : new int[Data.Pairs.Count];
+            for (var t = 0; t < idx.Length; t++)
+            {
+                if (idx[t] != -1) continue;
+                // Skip cells the background can't actually draw (covered by
+                // the core's own footprint) - same invariant SC2PaintMode's
+                // ApplyPairBytes enforces after a GPU readback, so a hole
+                // never ends up carrying a pair index that looks assigned
+                // but renders nothing.
+                if (hole != null && t < hole.Length && hole[t] < 0) continue;
+                idx[t] = (short)i;
+                counts[i]++;
+            }
+            Data.PairTriCounts = counts;
+            // Same GPU/preview resync the delete-pair button now does -
+            // TrianglePairIndex alone isn't what the shader/paint brush read
+            // from (see SC2TerrainRuntime.RestorePairMapFromData).
+            runtime?.RestorePairMapFromData(Data);
+            if (Data == _win.Data) _win.ApplyPreviewModeToChunks();
+            else _win.RefreshBackgroundRuntime();
+            EditorUtility.SetDirty(Data); _win.MarkDirtyAndRepaint();
         }
         var newRnmMaskName = EditorGUILayout.TextField("RNM Mask", pair.RnmMaskName);
         if (newRnmMaskName != pair.RnmMaskName)
