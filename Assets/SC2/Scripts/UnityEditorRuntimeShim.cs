@@ -194,6 +194,47 @@ namespace UnityEditor
             if (s_delayedTextEditName == name) { s_delayedTextEditName = null; s_delayedTextEditText = null; }
             return wasFocused ? typed : (text ?? "");
         }
+
+        private static readonly int kDelayedFloatFieldHint = "SC2ShimDelayedFloatField".GetHashCode();
+        private static string s_delayedFloatEditName;
+        private static string s_delayedFloatEditText;
+
+        /// <summary>Delayed counterpart to NumericTextField/FloatField above, same contract as
+        /// DelayedTextField just above but for a float: the box shows what the user types live,
+        /// but the RETURNED value only changes once Enter/Tab commits it or the field loses focus.
+        /// Needed for SC2GameViewEditorUI's imported-object Position/Rotation/Scale fields — each
+        /// axis used a live NumericTextField (via the Vector3Field below), so every keystroke
+        /// reported a "changed" value and the caller ran NotifyImportedTerrainChanged, which calls
+        /// SC2DecalsShell.ReprojectDecalsInBounds — a synchronous ~100-250ms live-height-grid
+        /// rebuild (SC2LiveHeightGrid.EnsureFreshImmediate) — once per character typed, reported
+        /// directly as the editor "hanging" on every keystroke.</summary>
+        public static float DelayedFloatField(float value, params GUILayoutOption[] options)
+        {
+            var name = "SC2ShimDelayedFloat_" + GUIUtility.GetControlID(kDelayedFloatFieldHint, FocusType.Passive);
+            var wasFocused = GUI.GetNameOfFocusedControl() == name;
+            var shown = wasFocused && s_delayedFloatEditName == name ? s_delayedFloatEditText : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            GUI.SetNextControlName(name);
+            var typed = GUILayout.TextField(shown, options);
+            var isFocused = GUI.GetNameOfFocusedControl() == name;
+
+            var e = Event.current;
+            if (isFocused && e != null && e.type == EventType.KeyDown &&
+                (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter || e.keyCode == KeyCode.Tab))
+            {
+                GUI.FocusControl(null);
+                isFocused = false;
+            }
+
+            if (isFocused)
+            {
+                s_delayedFloatEditName = name;
+                s_delayedFloatEditText = typed;
+                return value;
+            }
+            if (s_delayedFloatEditName == name) { s_delayedFloatEditName = null; s_delayedFloatEditText = null; }
+            if (!wasFocused) return value;
+            return float.TryParse(typed, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : value;
+        }
         public static string TextArea(string text, params GUILayoutOption[] options) => GUILayout.TextArea(text ?? "", options);
         public static string TextArea(string text, GUIStyle style, params GUILayoutOption[] options) => GUILayout.TextArea(text ?? "", style, options);
         public static float FloatField(string label, float value, params GUILayoutOption[] options)
@@ -616,6 +657,7 @@ public static class EditorGUILayout
     public static string TextField(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextField(text, options);
     public static string DelayedTextField(string label, string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.DelayedTextField(label, text, options);
     public static string DelayedTextField(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.DelayedTextField(text, options);
+    public static float DelayedFloatField(float value, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.DelayedFloatField(value, options);
     public static string TextArea(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextArea(text, options);
     public static string TextArea(string text, GUIStyle style, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextArea(text, style, options);
     public static float FloatField(string label, float value, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.FloatField(label, value, options);

@@ -12,6 +12,7 @@ public enum SC2HotkeyCategory
     Costs,
     Objects,
     Decals,
+    ImportedTerrain,
     TextureBrowser,
 }
 
@@ -84,6 +85,10 @@ public static class SC2HotkeyActions
         new SC2HotkeyAction("Decals.MoveGesture", "Start move gesture", SC2HotkeyCategory.Decals, Key(KeyCode.G)),
         new SC2HotkeyAction("Decals.RotateGesture", "Start rotate gesture", SC2HotkeyCategory.Decals, Key(KeyCode.R)),
         new SC2HotkeyAction("Decals.ScaleGesture", "Start scale gesture", SC2HotkeyCategory.Decals, Key(KeyCode.S)),
+
+        new SC2HotkeyAction("ImportedTerrain.MoveGesture", "Start move gesture", SC2HotkeyCategory.ImportedTerrain, Key(KeyCode.G)),
+        new SC2HotkeyAction("ImportedTerrain.RotateGesture", "Start rotate gesture", SC2HotkeyCategory.ImportedTerrain, Key(KeyCode.R)),
+        new SC2HotkeyAction("ImportedTerrain.ScaleGesture", "Start scale gesture", SC2HotkeyCategory.ImportedTerrain, Key(KeyCode.S)),
 
         new SC2HotkeyAction("TextureBrowser.FocusSearch", "Focus search field", SC2HotkeyCategory.TextureBrowser, Key(KeyCode.F, ctrl: true)),
     };

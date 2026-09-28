@@ -123,6 +123,7 @@ public static class SC2HotkeysPanel
     private static string CategoryLabel(SC2HotkeyCategory category) => category switch
     {
         SC2HotkeyCategory.TextureBrowser => "TEXTURE BROWSER",
+        SC2HotkeyCategory.ImportedTerrain => "IMPORTED TERRAIN",
         _ => category.ToString().ToUpperInvariant(),
     };
 

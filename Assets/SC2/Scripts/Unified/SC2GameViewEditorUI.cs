@@ -356,6 +356,35 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     }
     private readonly List<SC2ImportedTerrainEntry> _importedTerrains = new List<SC2ImportedTerrainEntry>();
     private int _selectedImportedTerrain = -1;
+
+    // ── Imported terrain.bdf G/R/S gestures ──────────────────────────────────
+    // Requested directly: Blender-style Move/Rotate/Scale gestures for the
+    // Imported subtab's currently-selected object, with X/Y/Z constraining the
+    // gesture to one world axis. Mirrors SC2ObjectsShell's Props Rotate/Scale
+    // gesture shape (press hotkey, move mouse, click/Enter confirms, Esc
+    // cancels) — see HandleImportedTerrainGameViewInput's own comment for why
+    // Move here can't just be "click-drag the object" like Props: an imported
+    // object has no viewport pick-dot of its own to grab, and a full 3-axis
+    // Position/Rotation/Scale needs an X/Y/Z constraint Props never needed.
+    private enum ImportedGestureKind { None, Move, Rotate, Scale }
+    private enum ImportedGestureAxis { Free, X, Y, Z }
+    private ImportedGestureKind _importedGestureKind = ImportedGestureKind.None;
+    private ImportedGestureAxis _importedGestureAxis = ImportedGestureAxis.Free;
+    private SC2ImportedTerrainEntry _importedGestureEntry;
+    private Vector3 _importedGestureStartPosition;
+    private Vector3 _importedGestureStartEuler;
+    private Vector3 _importedGestureStartScale;
+    private Vector3 _importedGestureStartGroundWorld;
+    private Vector2 _importedGestureAnchorScreen;
+    private Vector2 _importedGestureStartMouse;
+    private float _importedGestureStartDistance;
+    private Bounds? _importedGestureBoundsBefore;
+    // Arbitrary, tunable sensitivity constants for the mouse-delta-driven
+    // gestures that have no natural "distance from a pivot" reading — same
+    // role as SC2DecalsShell's own hardcoded "* .5f" degrees-per-pixel
+    // fallback for its Rotate gesture's degenerate (near-pivot) case.
+    private const float ImportedMoveYWorldPerPixel = 0.1f;
+    private const float ImportedRotateAxisDegreesPerPixel = 0.5f;
     /// <summary>Imported decals.bdf mesh roots (OpenDecalsBdfImport /
     /// OnMapImportComplete) — unlike imported terrain, decals have no real
     /// per-object management panel, so this list exists ONLY to let
@@ -437,13 +466,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private readonly List<SC2ImportedTerrainEntry> _importedTerrainsRemoved = new();
     private readonly Stack<ImportedTerrainsSnapshot> _importedUndoStack = new();
     private readonly Stack<ImportedTerrainsSnapshot> _importedRedoStack = new();
-    // Coalesces continuous drag gestures on a Transform field into one undo
-    // step — same reasoning as SC2TerrainShell.DrawCompactSlider's
-    // DraggingSliderKeys (EditorGUILayout.Vector3Field's sub-fields support
-    // click-drag-to-scrub, so without this a single drag would push one
-    // checkpoint per frame).
-    private readonly HashSet<string> _importedTransformDragging = new();
-
     public int ImportedTerrainsUndoCount => _importedUndoStack.Count;
     public int ImportedTerrainsRedoCount => _importedRedoStack.Count;
     // RecordImportedTerrainsUndo used to never create a
@@ -853,20 +875,47 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         ApplyImportedTerrainsSnapshot(_importedRedoStack.Pop());
     }
 
-    /// <summary>Coalesces a click-drag on one Vector3Field into a single undo
-    /// step — mirrors SC2TerrainShell.DrawCompactSlider's DraggingSliderKeys
-    /// (see that field's own doc comment for why: Vector3Field's X/Y/Z
-    /// sub-fields support drag-to-scrub and would otherwise report a changed
-    /// value on every frame of the drag).</summary>
+    /// <summary>Reported directly: typing into an Imported object's Position/
+    /// Rotation/Scale fields hung the editor on every single character. Root
+    /// cause: Vector3Field's X/Y/Z sub-fields (both the real
+    /// UnityEditor.EditorGUILayout one and this project's own standalone
+    /// shim) report a changed value on every keystroke, and the call site
+    /// below treats ANY change as a completed edit — running
+    /// NotifyImportedTerrainChanged, which calls SC2DecalsShell.
+    /// ReprojectDecalsInBounds, which forces a synchronous ~100-250ms
+    /// live-height-grid rebuild (SC2LiveHeightGrid.EnsureFreshImmediate) —
+    /// once per keystroke. DrawDelayedVector3Field's per-axis
+    /// DelayedFloatField only reports a change once, on the frame an edit
+    /// actually commits (Enter/Tab/focus-lost), so RecordImportedTerrainsUndo
+    /// and the expensive call site above now also run once per edit instead
+    /// of once per character — no extra dedup needed here, unlike the old
+    /// live-scrubbing Vector3Field this replaces.</summary>
     private Vector3 DrawUndoableVector3Field(GameObject root, string label, Vector3 value, float width)
     {
-        var key = root.GetInstanceID() + ":" + label;
-        var next = EditorGUILayout.Vector3Field(label, value, GUILayout.Width(width), GUILayout.MaxWidth(width));
-        if (next != value && _importedTransformDragging.Add(key))
+        var next = DrawDelayedVector3Field(label, value, width);
+        if (next != value)
             RecordImportedTerrainsUndo();
-        if (Event.current != null && Event.current.type == EventType.MouseUp)
-            _importedTransformDragging.Remove(key);
         return next;
+    }
+
+    /// <summary>Vector3Field composed from three DelayedFloatField axes
+    /// instead of EditorGUILayout.Vector3Field's own live-updating X/Y/Z —
+    /// see DrawUndoableVector3Field's own comment for why. Neither real
+    /// Unity nor this project's standalone shim ships a delayed Vector3
+    /// field, so this builds one from the delayed float primitive both
+    /// already have.</summary>
+    private static Vector3 DrawDelayedVector3Field(string label, Vector3 value, float width)
+    {
+        EditorGUILayout.LabelField(label, EditorStyles.miniLabel);
+        EditorGUILayout.BeginHorizontal(GUILayout.Width(width), GUILayout.MaxWidth(width));
+        GUILayout.Label("X", GUILayout.Width(14f));
+        value.x = EditorGUILayout.DelayedFloatField(value.x, GUILayout.ExpandWidth(true));
+        GUILayout.Label("Y", GUILayout.Width(14f));
+        value.y = EditorGUILayout.DelayedFloatField(value.y, GUILayout.ExpandWidth(true));
+        GUILayout.Label("Z", GUILayout.Width(14f));
+        value.z = EditorGUILayout.DelayedFloatField(value.z, GUILayout.ExpandWidth(true));
+        EditorGUILayout.EndHorizontal();
+        return value;
     }
     private SC2TerrainShell _terrainShell;
     /// <summary>Exposed for SC2InfoBdfEditorWindow — a standalone floating
@@ -1672,6 +1721,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 HandleCollision2GameViewInput();
                 HandleObjectsGameViewInput();
                 HandleDecalsGameViewInput();
+                HandleImportedTerrainGameViewInput();
                 HandleHotkeys();
 
                 // Consume navigation events when mouse is over the GameView UI.
@@ -3822,6 +3872,272 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             SC2Log.LogException(ex);
             SetStatus("Objects tab viewport error (see log): " + ex.Message);
         }
+    }
+
+    /// <summary>Blender-style G/R/S gestures for the Imported subtab's
+    /// currently-selected imported terrain.bdf object (requested directly
+    /// alongside the Position/Rotation/Scale hang fix — see
+    /// DrawUndoableVector3Field's own comment for that half). Unlike Props
+    /// (SC2ObjectsShell), an imported object has no per-frame viewport
+    /// pick-dot of its own and no click-drag-to-move today, so Move is a
+    /// gesture here too (Decals already has exactly this G/R/S shape, see
+    /// SC2DecalsShell.HandleEditHotkey/TickTransform) rather than reusing
+    /// Props' "G removed, drag whatever's already selected" convention — that
+    /// convention assumes a pickable in-viewport handle, which doesn't exist
+    /// here. Gated on the Imported subtab being the active one (not just
+    /// Terrain being the active main tab) so G/R/S don't fire while looking
+    /// at Geometry/Materials/etc.</summary>
+    private void HandleImportedTerrainGameViewInput()
+    {
+        var importedTabActive = _mainTab == 0 && _subTab >= 0 && _subTab < SC2EditorTabs.TerrainTabs.Length
+            && SC2EditorTabs.TerrainTabs[_subTab] == "Imported";
+        if (!importedTabActive)
+        {
+            if (_importedGestureKind != ImportedGestureKind.None)
+                CancelImportedGesture();
+            return;
+        }
+        if (_selectedImportedTerrain < 0 || _selectedImportedTerrain >= _importedTerrains.Count)
+            return;
+        var entry = _importedTerrains[_selectedImportedTerrain];
+        if (entry?.Root == null)
+            return;
+
+        var camera = ResolveCamera();
+        if (camera == null)
+            return;
+
+        var e = Event.current;
+        var mousePos = e != null ? e.mousePosition : new Vector2(-1f, -1f);
+
+        try
+        {
+            if (_importedGestureKind != ImportedGestureKind.None)
+            {
+                // The gesture already owns entry from when it started —
+                // re-fetching by _selectedImportedTerrain here would silently
+                // retarget a Move/Rotate/Scale in progress onto a different
+                // object if the user changed the panel's selection mid-drag.
+                TickImportedGesture(camera, mousePos);
+                return;
+            }
+
+            var allowInput = e != null && !IsMouseOverUi(mousePos) && !AnyMenuOpen();
+            if (!allowInput || e.type != EventType.KeyDown)
+                return;
+
+            ImportedGestureKind kind;
+            if (SC2Hotkeys.Matches("ImportedTerrain.MoveGesture", e)) kind = ImportedGestureKind.Move;
+            else if (SC2Hotkeys.Matches("ImportedTerrain.RotateGesture", e)) kind = ImportedGestureKind.Rotate;
+            else if (SC2Hotkeys.Matches("ImportedTerrain.ScaleGesture", e)) kind = ImportedGestureKind.Scale;
+            else return;
+
+            var anchorPixel = SC2TopViewMirror.WorldToGui(camera, entry.Root.transform.position);
+            if (anchorPixel.z <= 0f)
+                return;
+
+            _importedGestureKind = kind;
+            _importedGestureAxis = ImportedGestureAxis.Free;
+            _importedGestureEntry = entry;
+            _importedGestureStartPosition = entry.Root.transform.position;
+            _importedGestureStartEuler = entry.Root.transform.eulerAngles;
+            _importedGestureStartScale = entry.Root.transform.localScale;
+            _importedGestureAnchorScreen = new Vector2(anchorPixel.x, anchorPixel.y);
+            _importedGestureStartMouse = mousePos;
+            _importedGestureStartDistance = Mathf.Max(1f, Vector2.Distance(_importedGestureAnchorScreen, mousePos));
+            _importedGestureBoundsBefore = ImportedEntryBounds(entry);
+            if (!TryGetImportedGestureGroundPoint(camera, mousePos, _importedGestureStartPosition.y, out _importedGestureStartGroundWorld))
+                _importedGestureStartGroundWorld = _importedGestureStartPosition;
+            RecordImportedTerrainsUndo();
+            SetStatus($"{kind}: move mouse (X/Y/Z constrains an axis), click/Enter to confirm, Esc to cancel.");
+            e.Use();
+        }
+        catch (System.Exception ex)
+        {
+            // Same contain-the-exception reasoning as HandleObjectsGameViewInput
+            // just above — a bug here shouldn't blank the rest of the GameView
+            // UI, and shouldn't leave a gesture stuck active forever either.
+            SC2Log.LogException(ex);
+            SetStatus("Imported terrain gesture error (see log): " + ex.Message);
+            CancelImportedGesture();
+        }
+    }
+
+    private bool TryGetImportedGestureGroundPoint(Camera camera, Vector2 mousePosition, float planeY, out Vector3 hit)
+    {
+        var ray = SC2TerrainShell.GameGuiPointToRay(camera, _viewportRect, mousePosition);
+        var plane = new Plane(Vector3.up, new Vector3(0f, planeY, 0f));
+        if (plane.Raycast(ray, out var enter))
+        {
+            hit = ray.GetPoint(enter);
+            return true;
+        }
+        hit = default;
+        return false;
+    }
+
+    private void TickImportedGesture(Camera camera, Vector2 mousePosition)
+    {
+        var e = Event.current;
+        var entry = _importedGestureEntry;
+        if (entry?.Root == null) { EndImportedGesture(false); return; }
+        var t = entry.Root.transform;
+
+        if (e != null && e.type == EventType.KeyDown &&
+            (e.keyCode == KeyCode.X || e.keyCode == KeyCode.Y || e.keyCode == KeyCode.Z))
+        {
+            _importedGestureAxis = e.keyCode switch
+            {
+                KeyCode.X => ImportedGestureAxis.X,
+                KeyCode.Y => ImportedGestureAxis.Y,
+                _ => ImportedGestureAxis.Z,
+            };
+            // Re-anchor the ground-plane reference point for Move so
+            // switching axis mid-drag doesn't jump the object by whatever
+            // delta had already accumulated on the axis just left.
+            if (_importedGestureKind == ImportedGestureKind.Move &&
+                !TryGetImportedGestureGroundPoint(camera, mousePosition, _importedGestureStartPosition.y, out _importedGestureStartGroundWorld))
+                _importedGestureStartGroundWorld = _importedGestureStartPosition;
+            _importedGestureStartMouse = mousePosition;
+            e.Use();
+            return;
+        }
+
+        if (e != null && e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
+        {
+            t.position = _importedGestureStartPosition;
+            t.eulerAngles = _importedGestureStartEuler;
+            t.localScale = _importedGestureStartScale;
+            EndImportedGesture(false);
+            e.Use();
+            return;
+        }
+
+        if (e != null && ((e.type == EventType.MouseDown && e.button == 0) ||
+            (e.type == EventType.KeyDown && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))))
+        {
+            EndImportedGesture(true);
+            e.Use();
+            return;
+        }
+
+        switch (_importedGestureKind)
+        {
+            case ImportedGestureKind.Move: TickImportedMove(camera, entry, mousePosition); break;
+            case ImportedGestureKind.Rotate: TickImportedRotate(entry, mousePosition); break;
+            case ImportedGestureKind.Scale: TickImportedScale(entry, mousePosition); break;
+        }
+        RepaintGameView();
+    }
+
+    private void TickImportedMove(Camera camera, SC2ImportedTerrainEntry entry, Vector2 mousePosition)
+    {
+        var t = entry.Root.transform;
+        if (_importedGestureAxis == ImportedGestureAxis.Y)
+        {
+            // No ground-plane hit means anything for a pure height drag from
+            // a top-down camera — vertical screen delta maps straight to
+            // world Y instead, same "pixels * arbitrary sensitivity" idea as
+            // ImportedRotateAxisDegreesPerPixel below.
+            var worldDelta = (_importedGestureStartMouse.y - mousePosition.y) * ImportedMoveYWorldPerPixel;
+            t.position = new Vector3(_importedGestureStartPosition.x, _importedGestureStartPosition.y + worldDelta, _importedGestureStartPosition.z);
+            SetStatus($"Move Y: {worldDelta:0.##} — click/Enter to confirm, Esc to cancel.");
+            return;
+        }
+
+        if (!TryGetImportedGestureGroundPoint(camera, mousePosition, _importedGestureStartPosition.y, out var currentGround))
+            return;
+        var delta = currentGround - _importedGestureStartGroundWorld;
+        if (_importedGestureAxis == ImportedGestureAxis.X) delta.z = 0f;
+        else if (_importedGestureAxis == ImportedGestureAxis.Z) delta.x = 0f;
+        t.position = _importedGestureStartPosition + new Vector3(delta.x, 0f, delta.z);
+        SetStatus($"Move: {new Vector2(delta.x, delta.z).magnitude:0.##} — click/Enter to confirm, Esc to cancel.");
+    }
+
+    private void TickImportedRotate(SC2ImportedTerrainEntry entry, Vector2 mousePosition)
+    {
+        var t = entry.Root.transform;
+        if (_importedGestureAxis == ImportedGestureAxis.X || _importedGestureAxis == ImportedGestureAxis.Z)
+        {
+            var deltaDegrees = (mousePosition.x - _importedGestureStartMouse.x) * ImportedRotateAxisDegreesPerPixel;
+            var euler = _importedGestureStartEuler;
+            if (_importedGestureAxis == ImportedGestureAxis.X) euler.x += deltaDegrees; else euler.z += deltaDegrees;
+            t.eulerAngles = euler;
+            SetStatus($"Rotate {_importedGestureAxis}: {deltaDegrees:0.#}° — click/Enter to confirm, Esc to cancel.");
+            return;
+        }
+
+        // Default / Y axis: arc angle around the object's own on-screen
+        // position, same convention SC2ObjectsShell's Props Rotate gesture
+        // already uses for its (also Y-only) rotation.
+        var start = _importedGestureStartMouse - _importedGestureAnchorScreen;
+        var current = mousePosition - _importedGestureAnchorScreen;
+        if (start.sqrMagnitude <= 4f || current.sqrMagnitude <= 4f) return;
+        var deltaY = -(Mathf.Atan2(current.y, current.x) - Mathf.Atan2(start.y, start.x)) * Mathf.Rad2Deg;
+        var eulerY = _importedGestureStartEuler;
+        eulerY.y += deltaY;
+        t.eulerAngles = eulerY;
+        SetStatus($"Rotate: {deltaY:0.#}° — click/Enter to confirm, Esc to cancel.");
+    }
+
+    private void TickImportedScale(SC2ImportedTerrainEntry entry, Vector2 mousePosition)
+    {
+        var t = entry.Root.transform;
+        var factor = Mathf.Max(1f, Vector2.Distance(_importedGestureAnchorScreen, mousePosition)) / _importedGestureStartDistance;
+        var scale = _importedGestureStartScale;
+        switch (_importedGestureAxis)
+        {
+            case ImportedGestureAxis.X: scale.x = Mathf.Max(0.01f, _importedGestureStartScale.x * factor); break;
+            case ImportedGestureAxis.Y: scale.y = Mathf.Max(0.01f, _importedGestureStartScale.y * factor); break;
+            case ImportedGestureAxis.Z: scale.z = Mathf.Max(0.01f, _importedGestureStartScale.z * factor); break;
+            default:
+                scale = _importedGestureStartScale * factor;
+                scale = Vector3.Max(scale, new Vector3(0.01f, 0.01f, 0.01f));
+                break;
+        }
+        t.localScale = scale;
+        var axisLabel = _importedGestureAxis == ImportedGestureAxis.Free ? "" : " " + _importedGestureAxis;
+        SetStatus($"Scale{axisLabel}: {factor:0.00}x — click/Enter to confirm, Esc to cancel.");
+    }
+
+    private void CancelImportedGesture()
+    {
+        var entry = _importedGestureEntry;
+        if (entry?.Root != null)
+        {
+            entry.Root.transform.position = _importedGestureStartPosition;
+            entry.Root.transform.eulerAngles = _importedGestureStartEuler;
+            entry.Root.transform.localScale = _importedGestureStartScale;
+        }
+        EndImportedGesture(false);
+    }
+
+    private void EndImportedGesture(bool commit)
+    {
+        var entry = _importedGestureEntry;
+        var kind = _importedGestureKind;
+        var boundsBefore = _importedGestureBoundsBefore;
+        _importedGestureKind = ImportedGestureKind.None;
+        _importedGestureAxis = ImportedGestureAxis.Free;
+        _importedGestureEntry = null;
+        _importedGestureBoundsBefore = null;
+
+        if (commit && entry?.Root != null)
+        {
+            // Deferred to exactly once per completed gesture, not once per
+            // tick — see DrawUndoableVector3Field's own comment for why
+            // doing this per-frame during a live drag would reintroduce the
+            // same class of hang this session already fixed for the
+            // Position/Rotation/Scale text fields.
+            _terrainShell?.InvalidateLiveHeightGrid();
+            NotifyImportedTerrainChanged(boundsBefore, ImportedEntryBounds(entry));
+            SetStatus($"{kind} applied.");
+        }
+        else
+        {
+            SetStatus("Cancelled.");
+        }
+        RepaintGameView();
     }
 
     private void DrawDiagnosticsInspector()
