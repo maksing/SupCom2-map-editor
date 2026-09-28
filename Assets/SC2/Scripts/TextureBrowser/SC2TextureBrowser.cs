@@ -569,14 +569,17 @@ public static class SC2TextureBrowser
         GUI.Label(new Rect(rect.x + 12f, rect.y + 12f, 170f, 20f), _results.Count + " textures", CenterDim());
         var previousEnabled = GUI.enabled;
         if (GUI.Button(new Rect(rect.x + 180f, rect.y + 7f, 112f, 28f), "Import...")) ImportCustom();
-        var messageX = rect.x + 300f;
+        var selected = SC2TextureCatalog.Instance.Find(_selectedId);
+        GUI.enabled = previousEnabled && selected != null;
+        if (GUI.Button(new Rect(rect.x + 298f, rect.y + 7f, 104f, 28f), "Download...")) DownloadSelected(selected);
+        GUI.enabled = previousEnabled;
+        var messageX = rect.x + 408f;
         // Only an IMPORTED texture (the editor's own TextureLibrary) can be
         // deleted — vanilla/community archive entries are read-only.
-        var selected = SC2TextureCatalog.Instance.Find(_selectedId);
         if (selected != null && selected.Source == SC2TextureSource.Custom)
         {
-            if (GUI.Button(new Rect(rect.x + 300f, rect.y + 7f, 84f, 28f), "Delete")) RequestDeleteImported(selected);
-            messageX = rect.x + 392f;
+            if (GUI.Button(new Rect(rect.x + 408f, rect.y + 7f, 84f, 28f), "Delete")) RequestDeleteImported(selected);
+            messageX = rect.x + 500f;
         }
         if (!string.IsNullOrEmpty(_message)) GUI.Label(new Rect(messageX, rect.y + 10f, rect.xMax - 260f - messageX, 22f), _message, CenterDim());
         if (GUI.Button(new Rect(rect.xMax - 238f, rect.y + 7f, 72f, 28f), "None")) Accept(null);
@@ -639,6 +642,124 @@ public static class SC2TextureBrowser
         _selectedId = result.Entry.Id;
         _message = "Imported " + result.Entry.Name + " as " + result.Entry.Encoding;
         InvalidateQuery();
+    }
+
+    /// <summary>Saves a copy of the selected texture's real file to disk — the
+    /// original bytes whenever there's a real one to copy (GamePath, a loose
+    /// file; ArchiveEntryPath, inside a .scd), so a vanilla/community texture
+    /// downloads byte-for-byte identical to what ships in the game, not a
+    /// re-encoded/re-compressed copy. Only entries with neither (a catalog
+    /// baked straight into a Resources asset, with no independently
+    /// resolvable original left — see SC2TextureCatalogEntry.ResourcePath's
+    /// own doc comment) fall back to re-encoding the resolved texture as
+    /// PNG, which also covers a Cubemap/Texture3D entry (IsCubemap/IsVolume)
+    /// no differently, since raw-byte copying never touches the decoded
+    /// Unity object at all — the PNG fallback simply can't help one whose
+    /// only source is baked-only, since EncodeToPNG needs a flat, readable
+    /// Texture2D.</summary>
+    private static void DownloadSelected(SC2TextureCatalogEntry entry)
+    {
+        if (entry == null) return;
+        byte[] bytes; string extension;
+        if (TryGetRawBytes(entry, out bytes, out extension))
+        {
+            SaveDownload(entry, bytes, extension);
+            return;
+        }
+        var texture = ResolveRealAsset(entry) as Texture2D;
+        if (texture == null) { _message = "This texture has no downloadable file."; return; }
+        Texture2D readable = null;
+        try
+        {
+            // Full resolution (not the default 160px thumbnail size), and via a GPU blit+readback
+            // rather than the source texture's own bytes — sidesteps both the "Read/Write Enabled"
+            // import restriction EncodeToPNG would otherwise need and this fallback's own square-
+            // size limitation only matters for a non-square source, which none of this game's real
+            // terrain textures are.
+            var size = Mathf.Max(1, Mathf.Max(texture.width, texture.height));
+            readable = SC2CustomTextureImporter.BuildFilteredPreview(texture, size, linear: false);
+            bytes = ImageConversion.EncodeToPNG(readable != null ? readable : texture);
+        }
+        catch (Exception ex)
+        {
+            _message = "Download failed: " + ex.Message;
+            return;
+        }
+        finally
+        {
+            // A fresh instance BuildFilteredPreview built just for this download — never the real
+            // resolved `texture` itself, which other live code may still be holding a reference to.
+            if (readable != null) UnityEngine.Object.Destroy(readable);
+        }
+        if (bytes == null || bytes.Length == 0) { _message = "This texture has no downloadable file."; return; }
+        SaveDownload(entry, bytes, "png");
+    }
+
+    /// <summary>The real, original file bytes behind `entry` — a byte-exact copy of whatever ships
+    /// on disk or inside a .scd, never a re-encode. False when neither a loose file nor an archive
+    /// entry exists for it (see DownloadSelected's own doc comment on the PNG fallback for that
+    /// case).</summary>
+    private static bool TryGetRawBytes(SC2TextureCatalogEntry entry, out byte[] bytes, out string extension)
+    {
+        bytes = null;
+        extension = "dds";
+        if (!string.IsNullOrEmpty(entry.GamePath) && File.Exists(entry.GamePath))
+        {
+            try
+            {
+                bytes = File.ReadAllBytes(entry.GamePath);
+                var fromPath = Path.GetExtension(entry.GamePath).TrimStart('.');
+                if (!string.IsNullOrEmpty(fromPath)) extension = fromPath.ToLowerInvariant();
+                return true;
+            }
+            catch { /* fall through to the archive path below */ }
+        }
+        if (!string.IsNullOrEmpty(entry.ArchiveEntryPath) && SC2GameArchiveRegistry.TryGetReader(out var reader))
+        {
+            try
+            {
+                using var stream = reader.OpenEntry(entry.ArchiveEntryPath);
+                if (stream == null) return false;
+                using var memory = new MemoryStream();
+                stream.CopyTo(memory);
+                bytes = memory.ToArray();
+                var fromPath = Path.GetExtension(entry.ArchiveEntryPath).TrimStart('.');
+                if (!string.IsNullOrEmpty(fromPath)) extension = fromPath.ToLowerInvariant();
+                return true;
+            }
+            catch { return false; }
+        }
+        return false;
+    }
+
+    private static void SaveDownload(SC2TextureCatalogEntry entry, byte[] bytes, string extension)
+    {
+        var defaultName = SanitizeFileName(entry.Name);
+#if UNITY_EDITOR
+        var path = EditorUtility.SaveFilePanel("Download Texture", "", defaultName, extension);
+#else
+        var filterLabel = extension.ToUpperInvariant() + " (*." + extension + ")";
+        var path = SC2RuntimeFileDialog.SaveFile("Download Texture", filterLabel, extension);
+#endif
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            File.WriteAllBytes(path, bytes);
+            _message = "Downloaded " + Path.GetFileName(path);
+        }
+        catch (Exception ex)
+        {
+            _message = "Download failed: " + ex.Message;
+        }
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "texture";
+        var sanitized = name;
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+            sanitized = sanitized.Replace(invalid, '_');
+        return sanitized;
     }
 
     private static void Accept(SC2TextureCatalogEntry entry)
