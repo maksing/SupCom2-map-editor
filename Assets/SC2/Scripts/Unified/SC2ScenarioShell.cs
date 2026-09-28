@@ -216,7 +216,7 @@ public sealed class SC2ScenarioShell
                 _minimapThumbSource = data.CustomMinimapPng is { Length: > 0 } ? data.CustomMinimapPng : null;
                 terrainShell.MarkDirtyAndRepaint();
                 _minimapPreviewStatus = tex != null ? "Preview rendered." : "Render failed — no camera found.";
-            });
+            }, terrainShell);
         }
         GUI.enabled = guiEnabledBeforeMinimap;
         if (!string.IsNullOrEmpty(_minimapPreviewStatus))

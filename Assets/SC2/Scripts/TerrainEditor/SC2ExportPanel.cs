@@ -316,7 +316,7 @@ public sealed class SC2ExportPanel
             }
             _lastExportResult = SC2TerrainExporter.ExportCorrect(data, exportDir, importedTerrains, debugSaveCostsImages, session, exportAsArchives, minimapDds);
             onFinished?.Invoke(_lastExportResult);
-        });
+        }, _win);
         return true;
     }
 

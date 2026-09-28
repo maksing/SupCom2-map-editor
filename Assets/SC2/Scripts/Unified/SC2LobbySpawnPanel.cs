@@ -112,7 +112,7 @@ public sealed class SC2LobbySpawnPanel
             _minimap = tex;
             _minimapStatus = tex != null ? "" : "Minimap render failed — no camera found.";
             RepaintHost?.Invoke();
-        });
+        }, _getTerrainShell?.Invoke());
         RepaintHost?.Invoke();
     }
 

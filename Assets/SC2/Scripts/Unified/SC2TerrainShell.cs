@@ -4604,6 +4604,46 @@ public class SC2TerrainShell : ScriptableObject
     // after toggling/changing it, same as every other call site here.
     internal void ApplyPreviewModeToChunks() => ApplyPreviewModeToChunksFor(_runtime, _data);
 
+    /// <summary>Temporarily forces pure RNM terrain display, with the Grid/Wireframe/Hfield
+    /// overlays off, for the duration of <paramref name="render"/> (SC2MapPreviewCapture's minimap/
+    /// preview captures) — regardless of whatever preview mode (Mats/Pairs/Slope/Height/plain
+    /// Textured) or overlay the user actually has active right now — then restores exactly what
+    /// the interactive viewport was showing. All of this is shared runtime/material state, not
+    /// per-camera, so a capture camera alone can't select a different view than the interactive
+    /// one; this actually flips the state, renders, then flips it back, applying immediately
+    /// (not just on the next Update() tick — PushHeightGridOverlay/PushWireframeOverlay normally
+    /// only run from there) since a capture runs synchronously inside ProcessPendingCapture.</summary>
+    public void RenderTerrainOnlyForCapture(Action render)
+    {
+        var previousMode = _prev;
+        var previousGrid = _heightGridOverlayVisible;
+        var previousWireframe = _wireframeOverlayVisible;
+        var previousForceHfield = _forceHfieldOverlay;
+
+        void Apply()
+        {
+            ApplyPreviewModeToChunks();
+            if (_bgRuntime != null) ApplyPreviewModeToChunksFor(_bgRuntime, _data?.BackgroundTerrainData);
+            PushHeightGridOverlay();
+            PushWireframeOverlay();
+        }
+
+        _prev = PreviewMode.TexturedRNM;
+        _heightGridOverlayVisible = false;
+        _wireframeOverlayVisible = false;
+        _forceHfieldOverlay = false;
+        Apply();
+        try { render(); }
+        finally
+        {
+            _prev = previousMode;
+            _heightGridOverlayVisible = previousGrid;
+            _wireframeOverlayVisible = previousWireframe;
+            _forceHfieldOverlay = previousForceHfield;
+            Apply();
+        }
+    }
+
     /// <summary>Parameterized so the background's own SC2TerrainRuntime can
     /// share this exact same Textured/RNM/Mats/Pairs/Slope logic instead of
     /// a second copy — the shell-level preview-mode state (_prev,

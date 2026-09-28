@@ -8,8 +8,12 @@ using UnityEngine;
 /// SC2TerrainExporter.BuildExportArtifacts) and &lt;MapName&gt;_PC_mapshot.dds
 /// (captured once by the user via the Export tab's "Capture Preview" button,
 /// stored on SC2TerrainData.MapShotBgraPixels, re-used at every export until
-/// re-captured). Both render terrain + props/units only — no markers, pick-
-/// dots, brush cursors or other editor-only overlays.
+/// re-captured). Both render terrain + props only — no markers, pick-dots,
+/// brush cursors or other editor-only overlays; the minimap additionally
+/// forces the terrain into pure RNM display (regardless of whatever preview
+/// mode/overlay is actually on screen) and excludes units, real or reference
+/// (see CaptureMinimap/RenderTerrainOnlyForCapture) — the _PC_mapshot preview
+/// is a free-framed screenshot and keeps showing units.
 ///
 /// Capture is deliberately deferred to the very start of the NEXT
 /// SC2GameViewEditorUI.LateUpdate (ProcessPendingCapture, called there
@@ -54,10 +58,14 @@ public static class SC2MapPreviewCapture
 
     /// <summary>Queues a top-down minimap capture; onCaptured runs next
     /// frame with the result (null if no camera could be resolved).</summary>
-    public static void RequestMinimapCapture(SC2TerrainData data, Action<Texture2D> onCaptured)
+    /// <param name="terrainShell">Forces the render into pure RNM terrain display for the
+    /// duration of the capture, regardless of whatever preview mode/overlay the user actually has
+    /// active (see SC2TerrainShell.RenderTerrainOnlyForCapture) — optional only because some call
+    /// sites predate this; a minimap captured without it renders whatever mode is on screen.</param>
+    public static void RequestMinimapCapture(SC2TerrainData data, Action<Texture2D> onCaptured, SC2TerrainShell terrainShell = null)
     {
         // An imported custom picture replaces the render everywhere a minimap is used.
-        _pendingWork = () => onCaptured?.Invoke(DecodeCustomMinimap(data) ?? CaptureMinimap(data));
+        _pendingWork = () => onCaptured?.Invoke(DecodeCustomMinimap(data) ?? CaptureMinimap(data, terrainShell));
     }
 
     /// <summary>The imported custom minimap as an RGBA32 texture in Unity's natural orientation (the
@@ -102,7 +110,7 @@ public static class SC2MapPreviewCapture
         return UnityEngine.Object.FindFirstObjectByType<Camera>();
     }
 
-    private static Texture2D CaptureMinimap(SC2TerrainData data)
+    private static Texture2D CaptureMinimap(SC2TerrainData data, SC2TerrainShell terrainShell)
     {
         var sourceCamera = ResolveSourceCamera();
         if (sourceCamera == null || data == null) return null;
@@ -124,14 +132,26 @@ public static class SC2MapPreviewCapture
         // them) need exactly that ONE flip, not a second one stacked on
         // top — a second content-level mirror here would cancel it back
         // out to an unflipped (wrong) result.
-        return RenderOffscreen(sourceCamera, MinimapSize, MinimapSize, tempCam =>
+        Texture2D Render() => RenderOffscreen(sourceCamera, MinimapSize, MinimapSize, tempCam =>
         {
             tempCam.orthographic = true;
             tempCam.orthographicSize = Mathf.Max(worldWidth, worldHeight) * 0.5f;
             tempCam.nearClipPlane = 1f;
             tempCam.farClipPlane = 8000f;
             tempCam.transform.SetPositionAndRotation(eye, Quaternion.Euler(90f, 0f, 0f));
-        });
+        }, hideUnits: true);
+
+        // Real vanilla minimap.win.dds files are the terrain's own diffuse/RNM lighting
+        // colors plus decorative props (rocks, trees) — never whatever debug preview mode
+        // (Mats/Pairs/Slope/Height, or a plain unlit Textured view) the mapmaker happens to be
+        // looking at, and never reference buildings/real units (SC2GameAssetScenePreview has no
+        // separate flag for "reference" vs "real" units — see RenderOffscreen's own hideUnits
+        // param — so both are excluded together). terrainShell is only null for call sites that
+        // predate this; without it the capture falls back to whatever mode is on screen.
+        Texture2D result = null;
+        if (terrainShell != null) terrainShell.RenderTerrainOnlyForCapture(() => result = Render());
+        else result = Render();
+        return result;
     }
 
     private static Texture2D CapturePreviewFromCurrentView()
@@ -160,7 +180,11 @@ public static class SC2MapPreviewCapture
     /// back into a plain RGBA32 Texture2D (Unity's own bottom-row-0
     /// orientation — callers writing this out to DDS must flip rows first,
     /// see ToBgraBytes/ToRgbBytes).</summary>
-    private static Texture2D RenderOffscreen(Camera sourceCamera, int width, int height, Action<Camera> configure)
+    /// <param name="hideUnits">true for the minimap (real units and reference units — which
+    /// share the same SC2GameAssetScenePreview category, see HideUnits' own field comment —
+    /// must never appear baked into the exported minimap texture); false for the free-framed
+    /// _PC_mapshot preview, which is meant to look like an actual screenshot of the map.</param>
+    private static Texture2D RenderOffscreen(Camera sourceCamera, int width, int height, Action<Camera> configure, bool hideUnits = false)
     {
         var go = new GameObject("SC2MapPreviewCaptureCamera") { hideFlags = HideFlags.HideAndDontSave };
         var cam = go.AddComponent<Camera>();
@@ -171,17 +195,17 @@ public static class SC2MapPreviewCapture
         cam.targetTexture = rt;
         configure(cam);
 
-        // Always shown here regardless of the user's current Visibility >
-        // Props/Units toggle state, per the "props visible, nothing else"
-        // requirement — SC2GameViewEditorUI's own LateUpdate (running right
-        // after this whole capture, in the same call) unconditionally
-        // re-derives HideProps/HideUnits from those toggles again for the
-        // main camera's own subsequent draws, so this temporary override
-        // never leaks into the interactive view.
+        // Props always shown here regardless of the user's current Visibility > Props toggle
+        // state, per the "props visible, nothing else real-time" requirement — units (which
+        // includes reference units, see hideUnits' own param comment) follow the caller's
+        // choice instead. SC2GameViewEditorUI's own LateUpdate (running right after this whole
+        // capture, in the same call) unconditionally re-derives HideProps/HideUnits from the
+        // live Visibility toggles again for the main camera's own subsequent draws, so this
+        // temporary override never leaks into the interactive view.
         var previousHideProps = SC2GameAssetScenePreview.HideProps;
         var previousHideUnits = SC2GameAssetScenePreview.HideUnits;
         SC2GameAssetScenePreview.HideProps = false;
-        SC2GameAssetScenePreview.HideUnits = false;
+        SC2GameAssetScenePreview.HideUnits = hideUnits;
 
         Texture2D tex = null;
         try
