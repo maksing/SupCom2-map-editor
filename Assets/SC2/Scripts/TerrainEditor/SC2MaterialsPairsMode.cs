@@ -69,7 +69,13 @@ public class SC2MaterialsMode
         }
         var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
         EditorGUI.DrawRect(swatch, mat.Color);
-        var newMaterialName = EditorGUILayout.TextField(mat.Name, GUILayout.MinWidth(44), GUILayout.ExpandWidth(true));
+        // DelayedTextField, not TextField: this branch executes a real document command AND
+        // MarkDirtyAndRepaint (which SC2DecalsShell.EnsurePreview reads as "terrain geometry
+        // changed" and reacts to with a full decal rebuild) — a plain TextField fires this on
+        // every keystroke, confirmed to make renaming lag hard on a map with many placed decals.
+        // DelayedTextField only returns the new value once Enter/Tab commits it or the field
+        // loses focus, so this now runs once per rename instead of once per character.
+        var newMaterialName = EditorGUILayout.DelayedTextField(mat.Name, GUILayout.MinWidth(44), GUILayout.ExpandWidth(true));
         if (newMaterialName != mat.Name)
         {
             // Rename had no undo checkpoint at all before this (unlike Color,
@@ -539,7 +545,10 @@ public class SC2PairsMode
     private void DrawDetails(int i)
     {
         var pair = Data.Pairs[i];
-        var newPairName = EditorGUILayout.TextField("Name", pair.Name);
+        // DelayedTextField, not TextField — same reasoning as the Material rename field's own
+        // comment: this branch's ExecuteCommand+MarkDirtyAndRepaint must run once per rename, not
+        // once per keystroke (confirmed to trigger a full SC2DecalsShell decal rebuild each time).
+        var newPairName = EditorGUILayout.DelayedTextField("Name", pair.Name);
         if (newPairName != pair.Name)
         {
             // Same gap as Material rename — Pair rename had no undo

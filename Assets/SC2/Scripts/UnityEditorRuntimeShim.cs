@@ -141,6 +141,59 @@ namespace UnityEditor
             return result;
         }
         public static string TextField(string text, params GUILayoutOption[] options) => GUILayout.TextField(text ?? "", options);
+
+        public static string DelayedTextField(string label, string text, params GUILayoutOption[] options)
+        {
+            BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(SC2UiScale.Pxf(92f)));
+            var result = DelayedTextField(text, options);
+            EndHorizontal();
+            return result;
+        }
+
+        private static readonly int kDelayedTextFieldHint = "SC2ShimDelayedTextField".GetHashCode();
+        private static string s_delayedTextEditName;
+        private static string s_delayedTextEditText;
+
+        /// <summary>Real UnityEditor.EditorGUILayout.DelayedTextField (used automatically in the
+        /// Editor — this class only compiles outside it) has no standalone-build equivalent; this
+        /// reimplements its exact contract: the box shows what the user is typing live, but the
+        /// RETURNED string only changes once Enter/Tab commits it or the field loses focus —
+        /// unlike TextField above, which returns a new value on every keystroke.
+        /// Load-bearing, not cosmetic: a caller whose "changed" branch does real work (executing a
+        /// document command, marking the terrain dirty) needs that work to run once per edit, not
+        /// once per character. Confirmed real: SC2MaterialsPairsMode's material/pair rename fields
+        /// used a plain TextField, so renaming ran MarkDirtyAndRepaint (bumps
+        /// SC2TerrainShell.TerrainGeometryVersion) and ExecuteCommand (bumps
+        /// Session.Document.Revision) together on every keystroke — exactly
+        /// SC2DecalsShell.EnsurePreview's fullRebuild trigger condition, so typing a single letter
+        /// rebuilt every placed decal's geometry from scratch.</summary>
+        public static string DelayedTextField(string text, params GUILayoutOption[] options)
+        {
+            var name = "SC2ShimDelayedText_" + GUIUtility.GetControlID(kDelayedTextFieldHint, FocusType.Passive);
+            var wasFocused = GUI.GetNameOfFocusedControl() == name;
+            var shown = wasFocused && s_delayedTextEditName == name ? s_delayedTextEditText : (text ?? "");
+            GUI.SetNextControlName(name);
+            var typed = GUILayout.TextField(shown, options);
+            var isFocused = GUI.GetNameOfFocusedControl() == name;
+
+            var e = Event.current;
+            if (isFocused && e != null && e.type == EventType.KeyDown &&
+                (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter || e.keyCode == KeyCode.Tab))
+            {
+                GUI.FocusControl(null);
+                isFocused = false;
+            }
+
+            if (isFocused)
+            {
+                s_delayedTextEditName = name;
+                s_delayedTextEditText = typed;
+                return text ?? "";
+            }
+            if (s_delayedTextEditName == name) { s_delayedTextEditName = null; s_delayedTextEditText = null; }
+            return wasFocused ? typed : (text ?? "");
+        }
         public static string TextArea(string text, params GUILayoutOption[] options) => GUILayout.TextArea(text ?? "", options);
         public static string TextArea(string text, GUIStyle style, params GUILayoutOption[] options) => GUILayout.TextArea(text ?? "", style, options);
         public static float FloatField(string label, float value, params GUILayoutOption[] options)
@@ -561,6 +614,8 @@ public static class EditorGUILayout
     public static void LabelField(string label, string label2, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.LabelField(label, label2, options);
     public static string TextField(string label, string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextField(label, text, options);
     public static string TextField(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextField(text, options);
+    public static string DelayedTextField(string label, string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.DelayedTextField(label, text, options);
+    public static string DelayedTextField(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.DelayedTextField(text, options);
     public static string TextArea(string text, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextArea(text, options);
     public static string TextArea(string text, GUIStyle style, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.TextArea(text, style, options);
     public static float FloatField(string label, float value, params GUILayoutOption[] options) => UnityEditor.EditorGUILayout.FloatField(label, value, options);
