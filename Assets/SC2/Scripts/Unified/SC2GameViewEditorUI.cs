@@ -2066,7 +2066,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         DrawMenuButton("Visibility", ref _showVisibilityMenu, ref _visibilityMenuRect, 78);
         DrawMenuButton("Symmetry", ref _showSymmetryMenu, ref _symmetryMenuRect, 76);
         DrawMenuButton("Tools", ref _showToolsMenu, ref _toolsMenuRect, 48);
-        DrawMenuButton("Autosave", ref _showAutosaveMenu, ref _autosaveMenuRect, 68);
+        DrawMenuButton("Backup", ref _showAutosaveMenu, ref _autosaveMenuRect, 56);
         DrawMenuButton("Customize", ref _showCustomizationMenu, ref _customizationMenuRect, 78);
         GUILayout.FlexibleSpace();
 
@@ -2161,7 +2161,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (label != "Visibility") _showVisibilityMenu = false;
         if (label != "Symmetry") _showSymmetryMenu = false;
         if (label != "Tools") _showToolsMenu = false;
-        if (label != "Autosave") _showAutosaveMenu = false;
+        if (label != "Backup") _showAutosaveMenu = false;
         if (label != "Customize") _showCustomizationMenu = false;
     }
 
@@ -2283,7 +2283,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Measure Tool / Map Frame / Reference Image moved out entirely — they
         // already live in the Reference Panel (DrawReferencePanel), and having
         // them here too was a second, easy-to-miss copy of the same controls.
-        // Autosave moved to its own top-level "Autosave" menu (DrawAutosaveMenu);
+        // Autosave moved to its own top-level "Backup" menu (DrawAutosaveMenu);
         // this one only ever needed to show/hide FROM the View menu, not live
         // permanently alongside window-chrome toggles.
         //
@@ -2358,7 +2358,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// <summary>Split out of the View menu (which had grown a permanent
     /// "AUTOSAVE" section alongside window-chrome toggles) into its own
     /// top-level menu, matching Autosave's own weight as a save-behavior
-    /// setting rather than a view preference.</summary>
+    /// setting rather than a view preference. Labeled "Backup" (not
+    /// "Autosave") since it covers both the autosave timer and how many
+    /// backup snapshots it keeps, not just the timer itself.</summary>
     private void DrawAutosaveMenu()
     {
         var contentHeight = 1 * MenuItemHeight + 70f * SC2UiScale.Scale;
@@ -2368,7 +2370,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 #endif
         DrawMenuPanel(_autosaveMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
-            GUILayout.Label("AUTOSAVE", _dropdownSectionLabelStyle);
+            GUILayout.Label("BACKUP", _dropdownSectionLabelStyle);
             var autosaveEnabled = GUILayout.Toggle(SC2SaveSettings.AutosaveEnabled, "Autosave enabled", _dropdownToggleStyle);
             if (autosaveEnabled != SC2SaveSettings.AutosaveEnabled) SC2SaveSettings.AutosaveEnabled = autosaveEnabled;
             GUILayout.Label($"Every {SC2SaveSettings.AutosaveIntervalMinutes:0} min", _miniTextStyle);
