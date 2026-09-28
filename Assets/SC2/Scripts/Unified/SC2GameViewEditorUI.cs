@@ -273,6 +273,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private bool _showVisibilityMenu;
     private bool _showSymmetryMenu;
     private bool _showToolsMenu;
+    private bool _showAutosaveMenu;
+    private bool _showCustomizationMenu;
     private bool _stylesReady;
     private float _stylesLastScale = -1f;
     private bool _menuOverlayBlocksInput;
@@ -979,6 +981,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private Rect _visibilityMenuRect;
     private Rect _symmetryMenuRect;
     private Rect _toolsMenuRect;
+    private Rect _autosaveMenuRect;
+    private Rect _customizationMenuRect;
     private Rect _statusRect;
     private Rect _viewportRect;
     private Rect _navigationGizmoRect;
@@ -2061,6 +2065,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         DrawMenuButton("Visibility", ref _showVisibilityMenu, ref _visibilityMenuRect, 78);
         DrawMenuButton("Symmetry", ref _showSymmetryMenu, ref _symmetryMenuRect, 76);
         DrawMenuButton("Tools", ref _showToolsMenu, ref _toolsMenuRect, 48);
+        DrawMenuButton("Autosave", ref _showAutosaveMenu, ref _autosaveMenuRect, 68);
+        DrawMenuButton("Customize", ref _showCustomizationMenu, ref _customizationMenuRect, 78);
         GUILayout.FlexibleSpace();
 
         // Drop the least-critical labels first on narrow windows (small Build &
@@ -2154,6 +2160,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (label != "Visibility") _showVisibilityMenu = false;
         if (label != "Symmetry") _showSymmetryMenu = false;
         if (label != "Tools") _showToolsMenu = false;
+        if (label != "Autosave") _showAutosaveMenu = false;
+        if (label != "Customize") _showCustomizationMenu = false;
     }
 
     private void DrawOpenMenus()
@@ -2171,13 +2179,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_showVisibilityMenu) DrawVisibilityMenu();
         if (_showSymmetryMenu) DrawSymmetryMenu();
         if (_showToolsMenu) DrawToolsMenu();
+        if (_showAutosaveMenu) DrawAutosaveMenu();
+        if (_showCustomizationMenu) DrawCustomizationMenu();
 
         GUI.depth = previousDepth;
     }
 
     private bool AnyMenuOpen()
     {
-        return _showFileMenu || _showEditMenu || _showViewMenu || _showVisibilityMenu || _showSymmetryMenu || _showToolsMenu;
+        return _showFileMenu || _showEditMenu || _showViewMenu || _showVisibilityMenu || _showSymmetryMenu || _showToolsMenu
+            || _showAutosaveMenu || _showCustomizationMenu;
     }
 
     private void DrawMenuClickCatcher()
@@ -2203,6 +2214,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _showVisibilityMenu = false;
         _showSymmetryMenu = false;
         _showToolsMenu = false;
+        _showAutosaveMenu = false;
+        _showCustomizationMenu = false;
         _openMenuRect = Rect.zero;
     }
 
@@ -2266,63 +2279,29 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // ghost-button background — which reads as plain unclickable text
         // next to the solid toggles right beside it.
         //
-        // 6 MenuItemHeight-based rows (2 Panels toggles + Hotkeys toggle +
-        // Edit Hotkeys button + Reset View button + Autosave enabled toggle)
-        // + a fixed per-scale budget for everything else whose real height
-        // isn't MenuItemHeight-based (section labels, divider blocks, hint
-        // lines, the three slider rows: Reference Opacity, Autosave
-        // interval, Zoom Speed) — scaled by Scale too so it keeps pace with
-        // how big those rows actually render now; see MenuItemHeight's own
-        // doc comment for why this class of bug exists at all. Deliberately
-        // generous (this only sizes the background card + hit-test rect,
-        // never clips GUILayout content) rather than exactly tuned.
-        var contentHeight = 10 * MenuItemHeight + 400f * SC2UiScale.Scale;
-#if !UNITY_EDITOR
-        // + the Build-only "Backups to keep" field (see AUTOSAVE section).
-        contentHeight += 16f * SC2UiScale.Scale + MenuItemHeight;
-#endif
+        // Measure Tool / Map Frame / Reference Image moved out entirely — they
+        // already live in the Reference Panel (DrawReferencePanel), and having
+        // them here too was a second, easy-to-miss copy of the same controls.
+        // Autosave moved to its own top-level "Autosave" menu (DrawAutosaveMenu);
+        // this one only ever needed to show/hide FROM the View menu, not live
+        // permanently alongside window-chrome toggles.
+        //
+        // 4 MenuItemHeight-based rows (3 Panels toggles + Hotkeys toggle) + a
+        // fixed per-scale budget for everything else whose real height isn't
+        // MenuItemHeight-based (section labels, divider blocks, hint lines,
+        // the Edit Hotkeys/Reset View buttons, the Zoom Speed/UI Scale slider
+        // rows) — scaled by Scale too so it keeps pace with how big those rows
+        // actually render now; see MenuItemHeight's own doc comment for why
+        // this class of bug exists at all. Deliberately generous (this only
+        // sizes the background card + hit-test rect, never clips GUILayout
+        // content) rather than exactly tuned.
+        var contentHeight = 4 * MenuItemHeight + 260f * SC2UiScale.Scale;
         DrawMenuPanel(_viewMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
             GUILayout.Label("PANELS", _dropdownSectionLabelStyle);
             ShowPanel = GUILayout.Toggle(ShowPanel, "Inspector Panel", _dropdownToggleStyle);
             ShowReferencePanel = GUILayout.Toggle(ShowReferencePanel, "Reference Panel", _dropdownToggleStyle);
             EnableGameViewNavigation = GUILayout.Toggle(EnableGameViewNavigation, "Game Navigation", _dropdownToggleStyle);
-
-            GUILayout.Space(6);
-            SC2EditorStylesDivider_Horizontal();
-            GUILayout.Space(4);
-
-            GUILayout.Label("TOOLS", _dropdownSectionLabelStyle);
-            // A real Toggle (not a plain button) so its own pressed/
-            // unpressed state IS the "is Measure active" indicator — matches
-            // how every other on/off setting in this menu (Inspector Panel,
-            // Game Navigation, Hotkeys enabled) already shows its state.
-            var measureActive = GUILayout.Toggle(_tool == "Measure", "Measure Tool (M)", _dropdownToggleStyle);
-            if (measureActive != (_tool == "Measure")) ToggleMeasureTool();
-
-            GUILayout.Space(6);
-            SC2EditorStylesDivider_Horizontal();
-            GUILayout.Space(4);
-
-            GUILayout.Label("MAP FRAME", _dropdownSectionLabelStyle);
-            _showMapFrame = GUILayout.Toggle(_showMapFrame, "Show Map Border", _dropdownToggleStyle);
-            _mapFrameWidth = Mathf.Max(0.01f, SC2EnvFieldGui.FloatField("Width", _mapFrameWidth, "MapFrameWidth"));
-            _mapFrameHeight = Mathf.Max(0.01f, SC2EnvFieldGui.FloatField("Height", _mapFrameHeight, "MapFrameHeight"));
-
-            GUILayout.Space(6);
-            SC2EditorStylesDivider_Horizontal();
-            GUILayout.Space(4);
-
-            GUILayout.Label("REFERENCE IMAGE", _dropdownSectionLabelStyle);
-            if (GUILayout.Button(_referenceOverlayTex != null ? "Change Reference Image..." : "Load Reference Image...", GUILayout.Height(SC2UiScale.Pxf(26f))))
-                LoadReferenceImage();
-            var nextShowReference = GUILayout.Toggle(_showReferenceOverlay, "Show Reference on map", _dropdownToggleStyle);
-            if (nextShowReference != _showReferenceOverlay)
-            {
-                _showReferenceOverlay = nextShowReference;
-                ApplyReferenceOverlayState();
-            }
-            DrawReferenceOpacitySlider("ReferenceOpacityMenu");
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -2336,23 +2315,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // this is a "go do a thing now" action, not a list row, and needs
             // to visibly read as clickable next to the toggle above it.
             if (GUILayout.Button("Edit Hotkeys…", GUILayout.Height(SC2UiScale.Pxf(26f)))) { SC2HotkeysPanel.Open(); _showViewMenu = false; }
-
-            GUILayout.Space(6);
-            SC2EditorStylesDivider_Horizontal();
-            GUILayout.Space(4);
-
-            GUILayout.Label("AUTOSAVE", _dropdownSectionLabelStyle);
-            var autosaveEnabled = GUILayout.Toggle(SC2SaveSettings.AutosaveEnabled, "Autosave enabled", _dropdownToggleStyle);
-            if (autosaveEnabled != SC2SaveSettings.AutosaveEnabled) SC2SaveSettings.AutosaveEnabled = autosaveEnabled;
-            GUILayout.Label($"Every {SC2SaveSettings.AutosaveIntervalMinutes:0} min", _miniTextStyle);
-            var nextAutosaveMinutes = Mathf.Round(GUILayout.HorizontalSlider(SC2SaveSettings.AutosaveIntervalMinutes, 1f, 60f));
-            if (!Mathf.Approximately(nextAutosaveMinutes, SC2SaveSettings.AutosaveIntervalMinutes)) SC2SaveSettings.AutosaveIntervalMinutes = nextAutosaveMinutes;
-#if !UNITY_EDITOR
-            // Backups only exist against the real disk persistence layer
-            // (SC2RuntimeTerrainPersistence) — same Build-only scope as
-            // Load/Delete Saved Terrain in the File menu.
-            SC2SaveSettings.MaxBackupsPerMap = Mathf.Max(0, SC2EnvFieldGui.IntField("Backups to keep", SC2SaveSettings.MaxBackupsPerMap, "MaxBackupsPerMap"));
-#endif
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -2389,6 +2351,52 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // numbers, not a GUI.matrix transform.
             GUILayout.Label($"UI Scale: {SC2UiScale.Scale:0.00}x", _miniTextStyle);
             SC2UiScale.Scale = GUILayout.HorizontalSlider(SC2UiScale.Scale, SC2UiScale.Min, SC2UiScale.Max);
+        });
+    }
+
+    /// <summary>Split out of the View menu (which had grown a permanent
+    /// "AUTOSAVE" section alongside window-chrome toggles) into its own
+    /// top-level menu, matching Autosave's own weight as a save-behavior
+    /// setting rather than a view preference.</summary>
+    private void DrawAutosaveMenu()
+    {
+        var contentHeight = 1 * MenuItemHeight + 70f * SC2UiScale.Scale;
+#if !UNITY_EDITOR
+        // + the Build-only "Backups to keep" field.
+        contentHeight += 16f * SC2UiScale.Scale + MenuItemHeight;
+#endif
+        DrawMenuPanel(_autosaveMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
+        {
+            GUILayout.Label("AUTOSAVE", _dropdownSectionLabelStyle);
+            var autosaveEnabled = GUILayout.Toggle(SC2SaveSettings.AutosaveEnabled, "Autosave enabled", _dropdownToggleStyle);
+            if (autosaveEnabled != SC2SaveSettings.AutosaveEnabled) SC2SaveSettings.AutosaveEnabled = autosaveEnabled;
+            GUILayout.Label($"Every {SC2SaveSettings.AutosaveIntervalMinutes:0} min", _miniTextStyle);
+            var nextAutosaveMinutes = Mathf.Round(GUILayout.HorizontalSlider(SC2SaveSettings.AutosaveIntervalMinutes, 1f, 60f));
+            if (!Mathf.Approximately(nextAutosaveMinutes, SC2SaveSettings.AutosaveIntervalMinutes)) SC2SaveSettings.AutosaveIntervalMinutes = nextAutosaveMinutes;
+#if !UNITY_EDITOR
+            // Backups only exist against the real disk persistence layer
+            // (SC2RuntimeTerrainPersistence) — same Build-only scope as
+            // Load/Delete Saved Terrain in the File menu.
+            SC2SaveSettings.MaxBackupsPerMap = Mathf.Max(0, SC2EnvFieldGui.IntField("Backups to keep", SC2SaveSettings.MaxBackupsPerMap, "MaxBackupsPerMap"));
+#endif
+        });
+    }
+
+    /// <summary>User-level appearance settings that are NOT part of the map
+    /// document — persisted per-install (SC2CustomizationSettings, the same
+    /// PlayerPrefs-backed pattern SC2SaveSettings already uses), so picking a
+    /// decal marker color here follows the mapmaker across every map they
+    /// open, instead of being baked into the .sc2terrain file itself.</summary>
+    private void DrawCustomizationMenu()
+    {
+        var contentHeight = 1 * MenuItemHeight + 60f * SC2UiScale.Scale;
+        DrawMenuPanel(_customizationMenuRect.x, TitleBarHeight, 210, contentHeight, () =>
+        {
+            GUILayout.Label("DECALS", _dropdownSectionLabelStyle);
+            var nextColor = EditorGUILayout.ColorField("Marker Color", SC2CustomizationSettings.DecalMarkerColor);
+            if (nextColor != SC2CustomizationSettings.DecalMarkerColor) SC2CustomizationSettings.DecalMarkerColor = nextColor;
+            if (GUILayout.Button("Reset to Default", GUILayout.Height(SC2UiScale.Pxf(22f))))
+                SC2CustomizationSettings.DecalMarkerColor = SC2CustomizationSettings.DefaultDecalMarkerColor;
         });
     }
 
@@ -2904,6 +2912,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             var contentWidth = ReferencePanelContentWidth;
             var measureOn = GUILayout.Toggle(_tool == "Measure", "Measure", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
             if (measureOn != (_tool == "Measure")) ToggleMeasureTool();
+
+            GUILayout.Space(6);
+            SC2EditorStylesDivider_Horizontal();
+            GUILayout.Space(4);
+
+            GUILayout.Label("MAP FRAME", _dropdownSectionLabelStyle, GUILayout.MaxWidth(contentWidth));
+            _showMapFrame = GUILayout.Toggle(_showMapFrame, "Show Border", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));
+            _mapFrameWidth = Mathf.Max(0.01f, SC2EnvFieldGui.FloatField("Width", _mapFrameWidth, "MapFrameWidth"));
+            _mapFrameHeight = Mathf.Max(0.01f, SC2EnvFieldGui.FloatField("Height", _mapFrameHeight, "MapFrameHeight"));
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();

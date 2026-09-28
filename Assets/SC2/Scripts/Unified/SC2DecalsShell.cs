@@ -935,9 +935,13 @@ public sealed class SC2DecalsShell : IDisposable
 
     /// <summary>A map-pin-style badge instead of a flat colored square: dark outline (contrast
     /// against any background) → white ring (a crisp pop of contrast even against a similarly
-    /// cyan/yellow surface) → the actual cyan/yellow fill → a small white pinpoint center (marks
-    /// the exact origin, not just "somewhere in this blob"). Selected gets a soft outer glow too,
-    /// on top of being drawn noticeably bigger, so it reads as "this one" at a glance.</summary>
+    /// colored surface) → the actual fill (SC2CustomizationSettings.DecalMarkerColor — a user
+    /// preference, not map data, so it follows the mapmaker across every map they open) → a small
+    /// white pinpoint center (marks the exact origin, not just "somewhere in this blob"). Selected
+    /// always uses a fixed gold, regardless of the customized color, so it stays visually distinct
+    /// from an unselected marker even if the user happens to pick gold as their own marker color —
+    /// gets a soft outer glow too, on top of being drawn noticeably bigger, so it reads as "this
+    /// one" at a glance.</summary>
     private static void DrawOriginMarker(float x, float y, bool selected)
     {
         var tex = OriginMarkerCircle;
@@ -954,7 +958,7 @@ public sealed class SC2DecalsShell : IDisposable
         GUI.DrawTexture(Centered(core + 5f), tex);
         GUI.color = Color.white;
         GUI.DrawTexture(Centered(core + 2.5f), tex);
-        GUI.color = selected ? new Color(1f, 0.82f, 0.1f) : new Color(0.15f, 0.9f, 1f);
+        GUI.color = selected ? new Color(1f, 0.82f, 0.1f) : SC2CustomizationSettings.DecalMarkerColor;
         GUI.DrawTexture(Centered(core), tex);
         GUI.color = Color.white;
         GUI.DrawTexture(Centered(core * 0.32f), tex);
