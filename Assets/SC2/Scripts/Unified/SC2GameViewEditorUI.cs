@@ -4463,7 +4463,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         const int segmentsPerEdge = 24;
         var color = new Color(1f, 0.2f, 0.85f, 0.95f);
-        Vector2? previousGui = null;
+        // Vector3, not Vector2: .z is SC2TopViewMirror.WorldToGui's own camera-space depth
+        // (positive = in front of the camera) — see the skip check below for why this is
+        // load-bearing, not just carried along for no reason.
+        Vector3? previousGui = null;
         for (var edge = 0; edge < 4; edge++)
         {
             var a = corners[edge];
@@ -4475,16 +4478,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 var worldX = Mathf.Lerp(a.x, b.x, t);
                 var worldZ = Mathf.Lerp(a.y, b.y, t);
                 var worldY = _terrainShell.SampleLiveRuntimeHeight(worldX, worldZ);
-                var guiPoint = SC2TerrainShell.WorldToGameGui(camera, _viewportRect, new Vector3(worldX, worldY, worldZ));
-                // The camera renders behind the whole GameView UI, so an
-                // edge that falls near/above the map's own horizon (a
-                // shallow camera angle, or a large map frame) still
-                // projects to a valid but off-limits GUI point above the
-                // real viewport — e.g. up through the tab bar/title bar.
-                // Same shared clip every other world-space GUI overlay in
-                // this project already uses (DrawTerrainHuggingRing, the
-                // Measure tool) instead of drawing straight over the UI.
-                if (previousGui.HasValue &&
+                var guiPoint = SC2TopViewMirror.WorldToGui(camera, new Vector3(worldX, worldY, worldZ));
+                // A point BEHIND the camera (guiPoint.z <= 0) still projects to a valid-looking
+                // on-screen X/Y — Camera.WorldToScreenPoint mirrors it to roughly the opposite
+                // side of the screen rather than returning something ClipSegmentToViewport's
+                // plain 2D rect test could reject. With a rectangle this large (the whole map),
+                // a steep-enough camera angle puts one or more corners behind the camera, and
+                // the segment to/from that corner then draws as a long diagonal line straight
+                // across the screen instead of being clipped away — confirmed real (reported
+                // screenshot: an X of magenta lines crossing the whole Game View). Skipping any
+                // segment with a behind-camera endpoint avoids the mirrored point entirely,
+                // rather than trying to clip a line that is only valid in front of the camera.
+                if (previousGui.HasValue && previousGui.Value.z > 0f && guiPoint.z > 0f &&
                     SC2TerrainShell.ClipSegmentToViewport(_viewportRect, previousGui.Value, guiPoint, out var clippedA, out var clippedB))
                     SC2TerrainShell.DrawGuiLineSegment(clippedA, clippedB, color, 3f);
                 previousGui = guiPoint;
