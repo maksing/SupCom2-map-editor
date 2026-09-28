@@ -33,6 +33,10 @@ public sealed partial class SC2GameViewEditorUI
         // per-placement preview cache survives the reload and every decal renders wrong until
         // individually touched.
         _terrainShell.DataChanged += _ => _decalsShell?.InvalidatePreviewCache();
+        // See SC2TerrainShell.RenderTerrainOnlyForCapture's own doc comment — lets a minimap
+        // capture force decals visible regardless of the live Visibility > Decals toggle.
+        _terrainShell.GetDecalsOverlayVisible = () => _decalsShell?.OverlayVisible ?? true;
+        _terrainShell.SetDecalsOverlayVisible = visible => _decalsShell?.SetOverlayVisible(visible);
     }
 
     private void DrawDecalsInspector()

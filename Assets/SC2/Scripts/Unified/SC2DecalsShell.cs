@@ -28,6 +28,7 @@ public sealed class SC2DecalsShell : IDisposable
     // 2D origin markers) is untouched — this only hides the rendered 3D mesh in the game view,
     // same as Terrain/Water's own cross-tab overlay toggles.
     private bool _overlayVisible = true;
+    public bool OverlayVisible => _overlayVisible;
     public void SetOverlayVisible(bool visible)
     {
         if (_overlayVisible == visible) return;

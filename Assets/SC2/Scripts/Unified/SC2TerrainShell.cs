@@ -488,6 +488,16 @@ public class SC2TerrainShell : ScriptableObject
     /// </summary>
     public System.Func<System.Collections.Generic.List<SC2ImportedTerrainExportData>> GetImportedTerrainsForExport { get; set; }
 
+    /// <summary>Host callback pair (same reasoning as GetImportedTerrainsForExport — the real
+    /// decals shell lives on SC2GameViewEditorUI, not here), wired to SC2DecalsShell.
+    /// OverlayVisible/SetOverlayVisible. Lets RenderTerrainOnlyForCapture force decals visible
+    /// during a minimap capture regardless of the live Visibility &gt; Decals toggle — decals are
+    /// baked terrain decoration, so a real vanilla minimap always shows them, the same "always
+    /// show real content, never a debug/off state" reasoning SC2MapPreviewCapture already applies
+    /// to Props.</summary>
+    public System.Func<bool> GetDecalsOverlayVisible { get; set; }
+    public System.Action<bool> SetDecalsOverlayVisible { get; set; }
+
     /// <summary>Lighting Bake &gt; Imported Objects: the imported terrain.bdf
     /// objects with their layers and each layer's target RNM mask (host
     /// callback, same reasoning as GetImportedTerrainsForExport).</summary>
@@ -4605,20 +4615,22 @@ public class SC2TerrainShell : ScriptableObject
     internal void ApplyPreviewModeToChunks() => ApplyPreviewModeToChunksFor(_runtime, _data);
 
     /// <summary>Temporarily forces pure RNM terrain display, with the Grid/Wireframe/Hfield
-    /// overlays off, for the duration of <paramref name="render"/> (SC2MapPreviewCapture's minimap/
-    /// preview captures) — regardless of whatever preview mode (Mats/Pairs/Slope/Height/plain
-    /// Textured) or overlay the user actually has active right now — then restores exactly what
-    /// the interactive viewport was showing. All of this is shared runtime/material state, not
-    /// per-camera, so a capture camera alone can't select a different view than the interactive
-    /// one; this actually flips the state, renders, then flips it back, applying immediately
-    /// (not just on the next Update() tick — PushHeightGridOverlay/PushWireframeOverlay normally
-    /// only run from there) since a capture runs synchronously inside ProcessPendingCapture.</summary>
+    /// overlays off and decals forced visible, for the duration of <paramref name="render"/>
+    /// (SC2MapPreviewCapture's minimap/preview captures) — regardless of whatever preview mode
+    /// (Mats/Pairs/Slope/Height/plain Textured) or overlay the user actually has active right now
+    /// — then restores exactly what the interactive viewport was showing. All of this is shared
+    /// runtime/material state, not per-camera, so a capture camera alone can't select a different
+    /// view than the interactive one; this actually flips the state, renders, then flips it back,
+    /// applying immediately (not just on the next Update() tick — PushHeightGridOverlay/
+    /// PushWireframeOverlay normally only run from there) since a capture runs synchronously
+    /// inside ProcessPendingCapture.</summary>
     public void RenderTerrainOnlyForCapture(Action render)
     {
         var previousMode = _prev;
         var previousGrid = _heightGridOverlayVisible;
         var previousWireframe = _wireframeOverlayVisible;
         var previousForceHfield = _forceHfieldOverlay;
+        var previousDecalsVisible = GetDecalsOverlayVisible?.Invoke();
 
         void Apply()
         {
@@ -4633,6 +4645,7 @@ public class SC2TerrainShell : ScriptableObject
         _wireframeOverlayVisible = false;
         _forceHfieldOverlay = false;
         Apply();
+        SetDecalsOverlayVisible?.Invoke(true);
         try { render(); }
         finally
         {
@@ -4641,6 +4654,7 @@ public class SC2TerrainShell : ScriptableObject
             _wireframeOverlayVisible = previousWireframe;
             _forceHfieldOverlay = previousForceHfield;
             Apply();
+            if (previousDecalsVisible.HasValue) SetDecalsOverlayVisible?.Invoke(previousDecalsVisible.Value);
         }
     }
 
