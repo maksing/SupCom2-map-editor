@@ -36,6 +36,18 @@ Shader "Hidden/SC2/PaintBrush"
             // stroke (mouse-down), not per drag frame, and holds it fixed
             // for the frag call the whole time the mouse is down.
             float     _BrushRotation;
+            // 2026-09-28, requested directly ("одна из этих полосок должна
+            // отзеркалиться"): a symmetric copy of a stroke on a REFLECTING
+            // symmetry slot (X/Y/diagonal mirrors — see
+            // SC2SymmetryMath.SlotMirror) must show the mirror image of the
+            // stamp, not an identical copy — a plain rotation (_BrushRotation
+            // above) can never reproduce a reflection (opposite handedness).
+            // (1,1)/false for slot 0 and every ROTATION-only symmetric copy
+            // (radial, the 180-degree slot of XY/DiagonalBoth), which keeps
+            // today's unmirrored behavior there — only reported wrong for
+            // reflecting slots.
+            float2    _BrushMirror;
+            float     _BrushSwapAxes;
 
             float4 frag(v2f_img i) : SV_Target
             {
@@ -56,14 +68,23 @@ Shader "Hidden/SC2/PaintBrush"
                     if (length(offset) >= 1.0)
                         return src;
 
+                    // Mirror the sample offset (world-space, BEFORE the
+                    // per-stroke rotation below) for a reflecting symmetric
+                    // copy, so its content turns the opposite way from slot
+                    // 0's — the same relationship SlotReflects/TurnsOpposite
+                    // already describe for every other domain's own object
+                    // rotation.
+                    float2 mirrored = _BrushSwapAxes > 0.5 ? offset.yx : offset;
+                    mirrored *= _BrushMirror;
+
                     // Rotate the sample offset about the brush centre before
                     // mapping to the stamp UV, so the stamp's CONTENT rotates
                     // (the circular clip above stays fixed).
-                    float2 rotOffset = offset;
+                    float2 rotOffset = mirrored;
                     if (abs(_BrushRotation) > 0.0001)
                     {
                         float s = sin(_BrushRotation), c = cos(_BrushRotation);
-                        rotOffset = float2(offset.x * c - offset.y * s, offset.x * s + offset.y * c);
+                        rotOffset = float2(mirrored.x * c - mirrored.y * s, mirrored.x * s + mirrored.y * c);
                     }
                     if (abs(rotOffset.x) > 1.0 || abs(rotOffset.y) > 1.0)
                         return src;

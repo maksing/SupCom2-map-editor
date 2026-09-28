@@ -1014,8 +1014,10 @@ public class SC2TerrainRuntime : IDisposable
         RenderTexture.ReleaseTemporary(tmp);
     }
 
-    public void PaintBlend(Vector3 worldPos, float radius, float strength, float blendValue, bool erase=false, Texture customBrush=null, float rotationRadians=0f)
+    public void PaintBlend(Vector3 worldPos, float radius, float strength, float blendValue, bool erase=false, Texture customBrush=null, float rotationRadians=0f,
+        Vector2 brushMirror = default, bool brushSwapAxes = false)
     {
+        if (brushMirror == default) brushMirror = Vector2.one;
         if (!EnsureShaders()) return;
         var uvX = worldPos.x / (GridWidth  * CellSize);
         var uvZ = worldPos.z / (GridHeight * CellSize);
@@ -1034,6 +1036,12 @@ public class SC2TerrainRuntime : IDisposable
         // SC2PaintMode at mouse-down and passed unchanged for the whole
         // stroke — harmless when useCustom is false (branch never runs).
         _paintBrushMat.SetFloat  ("_BrushRotation", rotationRadians);
+        // Mirrors the stamp's content for a REFLECTED symmetric copy (X/Y/diagonal mirror slots) —
+        // see SC2SymmetryMath.GetSlotMirror, whose caller (SC2PaintMode.HandleRnm) computes this
+        // per symmetric position. (1,1)/false for slot 0 and every rotation-only copy, which keeps
+        // the stamp unmirrored there, same as before this parameter existed.
+        _paintBrushMat.SetVector ("_BrushMirror",   brushMirror);
+        _paintBrushMat.SetFloat  ("_BrushSwapAxes", brushSwapAxes ? 1f : 0f);
         var tmp = RenderTexture.GetTemporary(BlendRT.descriptor);
         var prevActive = RenderTexture.active;
         Graphics.Blit(BlendRT, tmp, _paintBrushMat);

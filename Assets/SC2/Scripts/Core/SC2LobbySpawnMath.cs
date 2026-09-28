@@ -36,6 +36,33 @@ public static class SC2SymmetryMath
     public static bool TurnsOpposite(SymmetryMode mode, int from, int to) =>
         SlotReflects(mode, from) != SlotReflects(mode, to);
 
+    /// <summary>The reflection <paramref name="slot"/> applies to GetSlots' own (relX, relZ), as a
+    /// flip per axis (each ±1) plus whether the two axes are swapped first — exactly the linear
+    /// part of the position formula that slot uses there, with Y dropped. false (identity: flip
+    /// (1,1), no swap) when SlotReflects says this slot is a rotation of slot 0, not a reflection
+    /// of it — e.g. a custom paint brush's stamp needs mirroring for a REFLECTED symmetric copy
+    /// (its content should turn the opposite way, same as SlotReflects/TurnsOpposite already say
+    /// for other domains) but not for a rotated one, which only moves.</summary>
+    public static bool GetSlotMirror(SymmetryMode mode, int slot, out Vector2 flip, out bool swapAxes)
+    {
+        flip = Vector2.one;
+        swapAxes = false;
+        if (!SlotReflects(mode, slot)) return false;
+        switch (mode)
+        {
+            case SymmetryMode.X: flip = new Vector2(-1f, 1f); break;
+            case SymmetryMode.Y: flip = new Vector2(1f, -1f); break;
+            case SymmetryMode.XY: flip = slot == 1 ? new Vector2(-1f, 1f) : new Vector2(1f, -1f); break;
+            case SymmetryMode.DiagonalTLBR: swapAxes = true; break;
+            case SymmetryMode.DiagonalTRBL: flip = new Vector2(-1f, -1f); swapAxes = true; break;
+            case SymmetryMode.DiagonalBoth:
+                swapAxes = true;
+                if (slot == 2) flip = new Vector2(-1f, -1f);
+                break;
+        }
+        return true;
+    }
+
     public static List<Vector3> GetSlots(SymmetryMode mode, Vector3 center, int radialCount, Vector3 pos)
     {
         var c = center; var rel = pos - c;

@@ -740,8 +740,16 @@ public class SC2PaintMode
         // paints while Ctrl is held.
         var erasing = _rnmErase || e.control;
         var customBrush = _win.Data.UseCustomBrush ? _customBrushCache : null;
-        foreach (var worldPos in _win.Data.GetSymmetricPositions(_brushPos))
-            _win.ActiveRuntime.PaintBlend(worldPos - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad);
+        var symmetricPositions = _win.Data.GetSymmetricPositions(_brushPos);
+        for (var slot = 0; slot < symmetricPositions.Count; slot++)
+        {
+            // A reflected symmetric copy (X/Y/diagonal mirror) needs its stamp mirrored too, or it
+            // paints an identical (not mirrored) copy of the stroke — reported directly ("одна из
+            // этих полосок должна отзеркалиться"). A rotation-only copy (radial, the 180-degree
+            // slot of XY/DiagonalBoth) is left as before: same stamp, just moved.
+            SC2SymmetryMath.GetSlotMirror(_win.Data.Symmetry, slot, out var mirror, out var swapAxes);
+            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad, mirror, swapAxes);
+        }
 #if UNITY_EDITOR
         SceneView.RepaintAll();
 #endif
