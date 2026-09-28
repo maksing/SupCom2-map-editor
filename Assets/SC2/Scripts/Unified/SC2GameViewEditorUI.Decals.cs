@@ -55,6 +55,10 @@ public sealed partial class SC2GameViewEditorUI
         var camera = ResolveCamera();
         if (_decalsShell == null || camera == null)
             return;
+        // Visibility menu's "Decals" toggle — applied every frame regardless of tab, same as
+        // OverlayTerrain/OverlayWater (SyncTerrainOverlayFlags), so it stays in effect after a
+        // tab switch instead of only until the next preview rebuild.
+        _decalsShell.SetOverlayVisible(OverlayDecals);
         if (_mainTab != 4)
         {
             _decalsShell.EnsurePreview();

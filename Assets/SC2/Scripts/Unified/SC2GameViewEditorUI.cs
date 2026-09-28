@@ -143,6 +143,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     public bool OverlayGraphAmphibious = true;
     public bool OverlayChains = true;
     public bool OverlayAreas = true;
+    public bool OverlayDecals = true;
     // Still not wired to any real rendering (task #136's one open gap):
     // showing real water requires SC2WaterMaterialFactory.Create(model, env),
     // which needs a live SC2Environment MonoBehaviour — that component only
@@ -2418,7 +2419,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // input/overlap hit-testing, contributing to clicks near the bottom
         // of this now much-taller (11->15) menu reaching whatever panel
         // content sat underneath instead of this dropdown's own toggles.
-        var itemCount = 15 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units/ReferenceUnits (4) + Land/Air (2) + Chains/Areas/Water/RNM/Grid (5) [+ Naval/Amphibious]
+        // FIXED: was "15 + ..." — undercounted by 1 even before Decals was added below (Wireframe
+        // was never included in the count), the same hit-test-rect-too-short bug class as the
+        // "was 11 + ..." fix above.
+        var itemCount = 17 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units/ReferenceUnits (4) + Land/Air (2) + Chains/Areas/Decals/Water/RNM/Grid/Wireframe (7) [+ Naval/Amphibious]
 
         DrawMenuPanel(_visibilityMenuRect.x, TitleBarHeight, 210, itemCount, () =>
         {
@@ -2439,6 +2443,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             }
             DrawToggle("Chains", ref OverlayChains);
             DrawToggle("Areas", ref OverlayAreas);
+            DrawToggle("Decals", ref OverlayDecals);
             DrawToggle("Water", ref OverlayWater);
             DrawToggle("RNM", ref OverlayRNM);
             DrawToggle("Grid", ref OverlayGrid);
@@ -7164,6 +7169,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
          || OverlayGraphAmphibious != SharedContext.OverlayGraphAmphibious
          || OverlayChains != SharedContext.OverlayChains
          || OverlayAreas != SharedContext.OverlayAreas
+         || OverlayDecals != SharedContext.OverlayDecals
          || OverlayWater != SharedContext.OverlayWater
          || OverlayRNM != SharedContext.OverlayRNM
          || OverlayGrid != SharedContext.OverlayGrid
@@ -7183,6 +7189,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             OverlayGraphAmphibious = SharedContext.OverlayGraphAmphibious;
             OverlayChains = SharedContext.OverlayChains;
             OverlayAreas = SharedContext.OverlayAreas;
+            OverlayDecals = SharedContext.OverlayDecals;
             OverlayWater = SharedContext.OverlayWater;
             OverlayRNM = SharedContext.OverlayRNM;
             OverlayGrid = SharedContext.OverlayGrid;
@@ -7199,6 +7206,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             OverlayTerrain, OverlayHfield, OverlayCosts, OverlayCollision2,
             OverlayProps, OverlayMarkers, OverlayUnits, OverlayReferenceUnits,
             OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
-            OverlayChains, OverlayAreas, OverlayWater, OverlayRNM, OverlayGrid, OverlayWireframe);
+            OverlayChains, OverlayAreas, OverlayDecals, OverlayWater, OverlayRNM, OverlayGrid, OverlayWireframe);
     }
 }

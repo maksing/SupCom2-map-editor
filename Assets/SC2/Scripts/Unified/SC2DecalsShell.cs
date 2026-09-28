@@ -21,6 +21,19 @@ public sealed class SC2DecalsShell : IDisposable
     private Texture2D _diffuseAtlas;
     private Texture2D _normalAtlas;
     private GameObject _previewRoot;
+    // Visibility menu's "Decals" toggle — applied to _previewRoot the moment it exists (it's
+    // built lazily by EnsurePreview, which runs every frame regardless of active tab, so decals
+    // stay hidden across tab switches/reloads instead of only until the next rebuild) and again
+    // whenever the toggle itself changes. The Decals tab's own pick/edit UI (placement rows,
+    // 2D origin markers) is untouched — this only hides the rendered 3D mesh in the game view,
+    // same as Terrain/Water's own cross-tab overlay toggles.
+    private bool _overlayVisible = true;
+    public void SetOverlayVisible(bool visible)
+    {
+        if (_overlayVisible == visible) return;
+        _overlayVisible = visible;
+        if (_previewRoot != null) _previewRoot.SetActive(visible);
+    }
     // One mesh object per placement (children of _previewRoot): an edit rebuilds the meshes of
     // the placements it changed instead of merging every placement's vertices into one mesh
     // and re-uploading it, which took most of a second on a map with many decals.
@@ -1352,6 +1365,7 @@ public sealed class SC2DecalsShell : IDisposable
         {
             _previewRoot = new GameObject("SC2_Decals_AuthoredPreview") { hideFlags = HideFlags.DontSave };
             _previewRoot.AddComponent<SC2DecalAuthoredPreviewMarker>();
+            _previewRoot.SetActive(_overlayVisible);
         }
         EnsureMaterial();
         var touchedIds = new List<string>();

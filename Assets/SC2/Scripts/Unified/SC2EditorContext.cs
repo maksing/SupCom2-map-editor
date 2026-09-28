@@ -30,6 +30,7 @@ public sealed class SC2EditorContext
     public bool OverlayGraphAmphibious = true;
     public bool OverlayChains = true;
     public bool OverlayAreas = true;
+    public bool OverlayDecals = true;
     public bool OverlayWater = true;
     public bool OverlayRNM;
     public bool OverlayGrid;
@@ -122,6 +123,7 @@ public sealed class SC2EditorContext
         if (OverlayGraphAmphibious) enabled.Add("Path:Amphibious");
         if (OverlayChains) enabled.Add("Chains");
         if (OverlayAreas) enabled.Add("Areas");
+        if (OverlayDecals) enabled.Add("Decals");
         if (OverlayWater) enabled.Add("Water");
         if (OverlayRNM) enabled.Add("RNM");
         if (OverlayGrid) enabled.Add("Grid");
@@ -137,7 +139,7 @@ public sealed class SC2EditorContext
     public void ApplyOverlayState(bool terrain, bool hfield, bool costs, bool collision2,
         bool props, bool markers, bool units, bool referenceUnits,
         bool graphLand, bool graphAir, bool graphNaval, bool graphAmphibious,
-        bool chains, bool areas, bool water, bool rnm, bool grid, bool wireframe)
+        bool chains, bool areas, bool decals, bool water, bool rnm, bool grid, bool wireframe)
     {
         OverlayTerrain = terrain;
         OverlayHfield = hfield;
@@ -153,6 +155,7 @@ public sealed class SC2EditorContext
         OverlayGraphAmphibious = graphAmphibious;
         OverlayChains = chains;
         OverlayAreas = areas;
+        OverlayDecals = decals;
         OverlayWater = water;
         OverlayRNM = rnm;
         OverlayGrid = grid;
