@@ -191,8 +191,7 @@ namespace UnityEditor
                 s_delayedTextEditText = typed;
                 return text ?? "";
             }
-            // Reported directly ("переименование откатывается к старому имени"): reached either
-            // via the Enter/Tab branch above (wasFocused is still true THIS frame, from before we
+            // Reached either via the Enter/Tab branch above (wasFocused is still true THIS frame, from before we
             // manually cleared focus) or, one frame later, from a plain click elsewhere — Unity only
             // reassigns keyboardControl to the NEW target once THAT control's own GUI call processes
             // the click, which runs after this one in the same OnGUI pass, so this control still

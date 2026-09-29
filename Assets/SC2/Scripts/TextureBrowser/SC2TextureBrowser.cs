@@ -27,12 +27,11 @@ public static class SC2TextureBrowser
     /// one session, never hundreds.</summary>
     private static readonly Dictionary<Texture2D, Texture2D> _livePreviewCache = new();
     private const int LivePreviewCacheCapacity = 64;
-    // 2026-08-26, reported directly with a screenshot: info.bdf's Cubemap/
-    // Texture3D fields (EnvironmentMap/SkyMap/ColorCorrectionCube/
-    // FogOfWarCorrectionCube) resolved correctly once
-    // SC2TerrainMaterialFactory.TryLoadCubeOrVolumeFromGameArchive was added,
-    // but the picker's own preview box stayed blank — the texture browser's
-    // GRID could show them fine (it draws catalog-entry thumbnails), but
+    // info.bdf's Cubemap/Texture3D fields (EnvironmentMap/SkyMap/
+    // ColorCorrectionCube/FogOfWarCorrectionCube) resolve correctly via
+    // SC2TerrainMaterialFactory.TryLoadCubeOrVolumeFromGameArchive, but the
+    // picker's own preview box stays blank without this cache — the texture
+    // browser's GRID can show them fine (it draws catalog-entry thumbnails), but
     // DrawPreview below only knows how to find a thumbnail via a
     // SC2TextureCatalogEntry, and a texture resolved this new way has none —
     // that's exactly the case the archive bypass exists for (the catalog
@@ -798,11 +797,9 @@ public static class SC2TextureBrowser
     /// fresh call to Unity's own Resources system, never registered in
     /// Cache's eviction dictionary, unlike Cache.Get/GetFull's return value).
     ///
-    /// 2026-08-29 fix, reported directly ("assigning one material's Diffuse
-    /// resets a DIFFERENT material's Diffuse — only when picking with Usage
-    /// filter 'Any', not a specific usage"): the previous version shortcut
-    /// flat (non-cubemap/non-volume) entries straight to Cache.GetFull(entry)
-    /// — the SAME Texture2D instance SC2TextureThumbnailCache manages
+    /// Flat (non-cubemap/non-volume) entries must NOT shortcut straight to
+    /// Cache.GetFull(entry) — that returns the SAME Texture2D instance
+    /// SC2TextureThumbnailCache manages
     /// internally for grid/details PREVIEW drawing, capped at 96 entries
     /// (SC2TextureThumbnailCache's own capacity) and evicted+Destroy()'d by
     /// Trim() whenever that cap is exceeded. A material's Diffuse/Normal/

@@ -22,30 +22,27 @@ Shader "Hidden/SC2/PaintBrush"
             float4 _PaintColor;     // target value to write
             int    _PaintMode;      // 0=paint(hard) 1=erase 2=soft(RNM blend)
 
-            // 2026-08-26, requested directly: an optional custom stamp for
-            // Soft-blend (RNM) painting only — Pair assign/erase (modes 0/1)
-            // always keep the built-in round brush below, untouched.
-            // _BrushTex's own alpha channel supplies the per-pixel stamp
-            // strength (a round brush is just a PNG with a circular alpha to
-            // begin with, so this generalizes the existing shape rather than
-            // replacing it).
+            // Optional custom stamp for Soft-blend (RNM) painting only — Pair
+            // assign/erase (modes 0/1) always keep the built-in round brush
+            // below, untouched. _BrushTex's own alpha channel supplies the
+            // per-pixel stamp strength (a round brush is just a PNG with a
+            // circular alpha to begin with, so this generalizes the existing
+            // shape rather than replacing it).
             sampler2D _BrushTex;
             float     _UseCustomBrush; // 0 = procedural round brush, 1 = sample _BrushTex
-            // 2026-08-30, requested directly: per-stroke randomized stamp
-            // rotation (radians) — SC2PaintMode rolls a fresh angle once per
-            // stroke (mouse-down), not per drag frame, and holds it fixed
-            // for the frag call the whole time the mouse is down.
+            // Per-stroke randomized stamp rotation (radians) — SC2PaintMode
+            // rolls a fresh angle once per stroke (mouse-down), not per drag
+            // frame, and holds it fixed for the frag call the whole time the
+            // mouse is down.
             float     _BrushRotation;
-            // 2026-09-28, requested directly ("одна из этих полосок должна
-            // отзеркалиться"): a symmetric copy of a stroke on a REFLECTING
-            // symmetry slot (X/Y/diagonal mirrors — see
-            // SC2SymmetryMath.SlotMirror) must show the mirror image of the
-            // stamp, not an identical copy — a plain rotation (_BrushRotation
-            // above) can never reproduce a reflection (opposite handedness).
-            // (1,1)/false for slot 0 and every ROTATION-only symmetric copy
-            // (radial, the 180-degree slot of XY/DiagonalBoth), which keeps
-            // today's unmirrored behavior there — only reported wrong for
-            // reflecting slots.
+            // A symmetric copy of a stroke on a REFLECTING symmetry slot (X/Y/
+            // diagonal mirrors — see SC2SymmetryMath.GetSlotMirror) must show
+            // the mirror image of the stamp, not an identical copy — a plain
+            // rotation (_BrushRotation above) can never reproduce a reflection
+            // (opposite handedness). (1,1)/false for slot 0 and every
+            // ROTATION-only symmetric copy (radial, the 180-degree slot of
+            // XY/DiagonalBoth), which keeps the stamp unmirrored there —
+            // GetSlotRotationDegrees handles turning those instead.
             float2    _BrushMirror;
             float     _BrushSwapAxes;
 
@@ -56,12 +53,10 @@ Shader "Hidden/SC2/PaintBrush"
 
                 if (_PaintMode == 2 && _UseCustomBrush > 0.5)
                 {
-                    // 2026-08-30, reported directly ("выходит за границу" —
-                    // paints beyond the round brush-radius indicator shown
-                    // in the viewport): the stamp's own square footprint
-                    // reaches its corners at sqrt(2)*radius, visibly outside
-                    // the circular radius ring every other brush respects.
-                    // Clip to the SAME circle first, on the unrotated offset
+                    // The stamp's own square footprint reaches its corners at
+                    // sqrt(2)*radius, visibly outside the circular radius ring
+                    // every other brush respects, so it must be clipped to
+                    // that SAME circle first, on the unrotated offset
                     // (the boundary itself must not rotate with the stamp
                     // content) — the square-then-luminance sampling below
                     // only shapes the pattern WITHIN that circle now.
@@ -89,16 +84,14 @@ Shader "Hidden/SC2/PaintBrush"
                     if (abs(rotOffset.x) > 1.0 || abs(rotOffset.y) > 1.0)
                         return src;
                     float2 stampUv = rotOffset * 0.5 + 0.5;
-                    // 2026-08-30, reported directly ("produces just a square
-                    // shape"): a plain grayscale stamp image (no real alpha
-                    // channel — the common World Machine/Gaea mask export
-                    // convention, and what both of the user's reference
-                    // images actually are) decodes with alpha=1 UNIFORMLY,
-                    // its real shape data sitting in RGB instead — sampling
-                    // alpha alone read a flat, fully-opaque square. Luminance
-                    // covers that case correctly; multiplying by alpha too
-                    // keeps a genuine alpha-transparency brush (solid paint
-                    // on a cut-out alpha shape) working exactly as before.
+                    // A plain grayscale stamp image (no real alpha channel —
+                    // the common World Machine/Gaea mask export convention)
+                    // decodes with alpha=1 UNIFORMLY, its real shape data
+                    // sitting in RGB instead — sampling alpha alone reads a
+                    // flat, fully-opaque square. Luminance covers that case
+                    // correctly; multiplying by alpha too keeps a genuine
+                    // alpha-transparency brush (solid paint on a cut-out
+                    // alpha shape) working exactly as before.
                     float4 stampSample = tex2D(_BrushTex, stampUv);
                     float  luminance   = dot(stampSample.rgb, float3(0.299, 0.587, 0.114));
                     float  amt         = luminance * stampSample.a * _BrushStrength;

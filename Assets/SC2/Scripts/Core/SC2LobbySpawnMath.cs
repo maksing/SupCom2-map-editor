@@ -66,12 +66,12 @@ public static class SC2SymmetryMath
     /// <summary>The world-space rotation (degrees) GetSlots applies to reach <paramref name="slot"/>
     /// when that slot is a pure ROTATION of slot 0 rather than a reflection (GetSlotMirror covers
     /// the reflecting slots; SlotReflects false here selects everything GetSlotMirror returns false
-    /// for). Reported directly for Radial symmetry: a custom brush stamp painted identically
-    /// (unrotated) at every radial copy instead of turning to match each copy's own angle around
-    /// the symmetry center — because unlike a reflection, a rotation-only copy's content also needs
-    /// rotating, or the copy looks carried over without being turned. 0 for slot 0, for every
-    /// reflecting slot (GetSlotMirror's job, not this), and for a slot past RotationAngleSteps'
-    /// count (SlotReflects/GetSlots already treat those the same way). The caller must NEGATE this
+    /// for) — a custom brush stamp otherwise paints identically (unrotated) at every radial copy
+    /// instead of turning to match each copy's own angle around the symmetry center, because unlike
+    /// a reflection, a rotation-only copy's content also needs rotating, or the copy looks carried
+    /// over without being turned. 0 for slot 0, for every reflecting slot (GetSlotMirror's job, not
+    /// this), and for a slot past RotationAngleSteps' count (SlotReflects/GetSlots already treat
+    /// those the same way). The caller must NEGATE this
     /// before feeding it to SC2PaintBrush.shader's own _BrushRotation: the shader rotates the pixel
     /// OFFSET used to sample the stamp, which is the INVERSE of the CONTENT rotation this returns —
     /// harmless for GetSlotMirror's flips (a reflection is its own inverse) but not for a rotation,

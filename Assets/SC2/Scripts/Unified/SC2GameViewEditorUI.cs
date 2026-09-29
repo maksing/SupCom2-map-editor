@@ -3875,9 +3875,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     }
 
     /// <summary>Blender-style G/R/S gestures for the Imported subtab's
-    /// currently-selected imported terrain.bdf object (requested directly
-    /// alongside the Position/Rotation/Scale hang fix — see
-    /// DrawUndoableVector3Field's own comment for that half). Unlike Props
+    /// currently-selected imported terrain.bdf object — see
+    /// DrawUndoableVector3Field's own comment for the companion
+    /// Position/Rotation/Scale hang fix. Unlike Props
     /// (SC2ObjectsShell), an imported object has no per-frame viewport
     /// pick-dot of its own and no click-drag-to-move today, so Move is a
     /// gesture here too (Decals already has exactly this G/R/S shape, see

@@ -916,8 +916,7 @@ public class SC2TerrainShell : ScriptableObject
         // RecordUndoCheckpointFor's core branch), so without this fallthrough,
         // painting background even once after painting core would make
         // Ctrl+Z permanently unable to reach the core's own CombinedUndo
-        // history the moment _bgUndoStack ran dry — reported directly:
-        // "Ctrl+Z doesn't work on core" after painting core then background.
+        // history the moment _bgUndoStack ran dry.
         if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
             && _bgUndoStack.Undo(_data.BackgroundTerrainData))
         {
