@@ -83,7 +83,12 @@ Shader "Hidden/SC2/PaintBrush"
                     }
                     if (abs(rotOffset.x) > 1.0 || abs(rotOffset.y) > 1.0)
                         return src;
-                    float2 stampUv = rotOffset * 0.5 + 0.5;
+                    // The stamp texture's row order runs opposite the brush's own world-space Z
+                    // (north/+Z is the bottom row, not the top), so the V axis is flipped here,
+                    // once, after every other transform — same fix in SC2TerrainRuntime.
+                    // SampleBrushMask (the sculpt tools' CPU-side stamp sampler) for the identical
+                    // reason.
+                    float2 stampUv = float2(rotOffset.x, -rotOffset.y) * 0.5 + 0.5;
                     // A plain grayscale stamp image (no real alpha channel —
                     // the common World Machine/Gaea mask export convention)
                     // decodes with alpha=1 UNIFORMLY, its real shape data

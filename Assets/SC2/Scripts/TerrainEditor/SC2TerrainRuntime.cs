@@ -801,8 +801,9 @@ public class SC2TerrainRuntime : IDisposable
     public void SculptBrush(Vector3 worldPos, float radius, float strength, float hardness,
                              int mode,
                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
-                             float brushRotationRad = 0f)
+                             float brushRotationRad = 0f, Vector2 brushMirror = default, bool brushSwapAxes = false)
     {
+        if (brushMirror == default) brushMirror = Vector2.one;
         var r2 = radius * radius;
         // 2x the effect the raw Strength value produces (i.e. at Strength's
         // max of 1, the brush now moves twice as much height per tick as
@@ -826,7 +827,7 @@ public class SC2TerrainRuntime : IDisposable
             // again regardless of whether a mask is active.
             if (d2 > r2) continue;
             var falloff = brushMask != null
-                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad)
+                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad, brushMirror, brushSwapAxes)
                 : HardnessFalloff(Mathf.Sqrt(d2) / radius, hardness);
             if (falloff <= 0f) continue;
             var amt     = falloff * dt;
@@ -852,15 +853,17 @@ public class SC2TerrainRuntime : IDisposable
     public void SculptFlatten(Vector3 worldPos, float radius, float strength, float hardness,
                               ref SC2FlattenPlane lockedPlane, bool lockPlane,
                               Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
-                              float brushRotationRad = 0f, bool rebuildChunks = true)
+                              float brushRotationRad = 0f, bool rebuildChunks = true,
+                              Vector2 brushMirror = default, bool brushSwapAxes = false)
     {
+        if (brushMirror == default) brushMirror = Vector2.one;
         var r2 = radius * radius;
         float Weight(float dx, float dz)
         {
             var d2 = dx * dx + dz * dz;
             if (d2 > r2) return 0f;
             return brushMask != null
-                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad)
+                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad, brushMirror, brushSwapAxes)
                 : SC2FlattenMath.SmoothFalloff(Mathf.Sqrt(d2) / radius, hardness);
         }
 
@@ -893,8 +896,9 @@ public class SC2TerrainRuntime : IDisposable
     /// </summary>
     public void SculptSetHeight(Vector3 worldPos, float radius, float strength, float hardness, float targetH,
                                  Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
-                                 float brushRotationRad = 0f)
+                                 float brushRotationRad = 0f, Vector2 brushMirror = default, bool brushSwapAxes = false)
     {
+        if (brushMirror == default) brushMirror = Vector2.one;
         var r2 = radius * radius;
         var x0 = Mathf.Max(0,          Mathf.FloorToInt((worldPos.x - radius) / CellSize));
         var x1 = Mathf.Min(GridWidth,  Mathf.CeilToInt ((worldPos.x + radius) / CellSize));
@@ -912,7 +916,7 @@ public class SC2TerrainRuntime : IDisposable
             // circle internally).
             if (d2 > r2) continue;
             var falloff = brushMask != null
-                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad)
+                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad, brushMirror, brushSwapAxes)
                 : HardnessFalloff(Mathf.Sqrt(d2) / radius, hardness);
             var blend = Mathf.Clamp01(falloff * Mathf.Max(0.01f, strength));
             var idx   = gz * _stride + gx;
@@ -925,24 +929,40 @@ public class SC2TerrainRuntime : IDisposable
     /// clips to the same circular radius boundary every other brush respects
     /// (the square stamp footprint's corners
     /// reach sqrt(2)*radius, visibly outside the round brush-radius
-    /// indicator, before this clip was added), then rotates (dx,dz)/radius
-    /// by rotationRad and bilinear-samples mask's luminance*alpha at the
+    /// indicator, before this clip was added), then mirrors/rotates
+    /// (dx,dz)/radius and bilinear-samples mask's luminance*alpha at the
     /// resulting stamp UV. Returns 0 outside the circle (equivalent to "no
-    /// effect on this vertex").</summary>
-    private static float SampleBrushMask(Color32[] mask, int w, int h, float dx, float dz, float radius, float rotationRad)
+    /// effect on this vertex"). brushMirror/brushSwapAxes mirror a REFLECTED
+    /// symmetric copy's stamp the same way SC2PaintBrush.shader's own
+    /// _BrushMirror/_BrushSwapAxes do for RNM painting — see
+    /// SC2SymmetryMath.GetSlotMirror — since a caller sculpting with symmetry
+    /// and a custom brush needs the SAME per-copy mirroring/rotation a custom
+    /// RNM stroke already gets, or a mirrored copy sculpts an identical,
+    /// unmirrored bump instead of one facing the other way.</summary>
+    private static float SampleBrushMask(Color32[] mask, int w, int h, float dx, float dz, float radius, float rotationRad,
+        Vector2 brushMirror, bool brushSwapAxes)
     {
         var ox = dx / radius; var oz = dz / radius;
         // Circular clip on the UNROTATED offset — the boundary itself must
         // not rotate with the stamp content.
         if (ox * ox + oz * oz > 1f) return 0f;
+
+        var mx = brushSwapAxes ? oz : ox;
+        var mz = brushSwapAxes ? ox : oz;
+        mx *= brushMirror.x; mz *= brushMirror.y;
+
         if (Mathf.Abs(rotationRad) > 0.0001f)
         {
             var s = Mathf.Sin(rotationRad); var c = Mathf.Cos(rotationRad);
-            var rx = ox * c - oz * s; var rz = ox * s + oz * c;
-            ox = rx; oz = rz;
+            var rx = mx * c - mz * s; var rz = mx * s + mz * c;
+            mx = rx; mz = rz;
         }
+        ox = mx; oz = mz;
         if (Mathf.Abs(ox) > 1f || Mathf.Abs(oz) > 1f) return 0f;
-        var u = ox * 0.5f + 0.5f; var v = oz * 0.5f + 0.5f;
+        // The stamp texture's row order runs opposite the brush's own world-space Z (north/+Z is
+        // the bottom row, not the top), so V is flipped here, once, after every other transform —
+        // same fix in SC2PaintBrush.shader's matching stampUv line, for the identical reason.
+        var u = ox * 0.5f + 0.5f; var v = -oz * 0.5f + 0.5f;
         var fx = u * (w - 1); var fy = v * (h - 1);
         var x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, w - 1);
         var y0 = Mathf.Clamp(Mathf.FloorToInt(fy), 0, h - 1);

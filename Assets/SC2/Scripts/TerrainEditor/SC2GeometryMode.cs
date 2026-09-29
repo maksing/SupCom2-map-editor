@@ -849,10 +849,13 @@ public class SC2GeometryMode
             // comment — and ActiveRuntime works in LOCAL space, so each
             // world-space symmetric position is translated by
             // ActiveWorldOffset before applying and back before notifying.
-            foreach (var pos in _win.Data.GetSymmetricPositions(_brushPos))
+            var setHeightPositions = _win.Data.GetSymmetricPositions(_brushPos);
+            for (var slot = 0; slot < setHeightPositions.Count; slot++)
             {
+                var pos = setHeightPositions[slot];
+                GetSymmetricStampTransform(slot, out var mirror, out var swapAxes, out var rotationRad);
                 _win.ActiveRuntime.SculptSetHeight(pos - offset, _radius, _strength, _hardness, _setHeight,
-                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
+                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
         }
@@ -879,9 +882,13 @@ public class SC2GeometryMode
                     var positions = _win.Data.GetSymmetricPositions(dab);
                     if (_flattenPlanes.Length != positions.Count) _flattenPlanes = new SC2FlattenPlane[positions.Count];
                     for (var i = 0; i < positions.Count; i++)
+                    {
+                        GetSymmetricStampTransform(i, out var mirror, out var swapAxes, out var rotationRad);
                         _win.ActiveRuntime.SculptFlatten(positions[i] - offset, _radius, _strength, _hardness,
                             ref _flattenPlanes[i], _flattenLockPlane,
-                            brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad, rebuildChunks: false);
+                            brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, rebuildChunks: false,
+                            brushMirror: mirror, brushSwapAxes: swapAxes);
+                    }
                 }
                 // One mesh rebuild and one Objects/Decals notification for the whole swept area.
                 var middle = (dabs[0] + dabs[dabs.Count - 1]) * 0.5f;
@@ -901,10 +908,13 @@ public class SC2GeometryMode
             var effectiveStrength = appliesRadiusCompensation
                 ? _strength * (_radius / StrengthRadiusReference)
                 : _strength;
-            foreach (var pos in _win.Data.GetSymmetricPositions(_brushPos))
+            var sculptPositions = _win.Data.GetSymmetricPositions(_brushPos);
+            for (var slot = 0; slot < sculptPositions.Count; slot++)
             {
+                var pos = sculptPositions[slot];
+                GetSymmetricStampTransform(slot, out var mirror, out var swapAxes, out var rotationRad);
                 _win.ActiveRuntime.SculptBrush(pos - offset, _radius, effectiveStrength, _hardness, mode,
-                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, _geoBrushRotationRad);
+                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
         }
@@ -914,6 +924,18 @@ public class SC2GeometryMode
         SceneView.RepaintAll();
 #endif
         _win.Repaint();
+    }
+
+    /// <summary>Same per-copy stamp mirror/rotation SC2PaintMode.HandleRnm applies for a custom RNM
+    /// brush, generalized to the sculpt tools' own custom brush mask — without it a symmetric copy
+    /// on a REFLECTING slot (X/Y/diagonal) sculpts an identical, unmirrored bump instead of one
+    /// facing the other way, and a ROTATION-only copy (Radial, or the 180-degree slot of
+    /// XY/DiagonalBoth) sculpts unrotated instead of turning to match its own moved position. See
+    /// SC2SymmetryMath.GetSlotMirror/GetSlotRotationDegrees for the underlying math.</summary>
+    private void GetSymmetricStampTransform(int slot, out Vector2 mirror, out bool swapAxes, out float rotationRad)
+    {
+        SC2SymmetryMath.GetSlotMirror(_win.Data.Symmetry, slot, out mirror, out swapAxes);
+        rotationRad = _geoBrushRotationRad - SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
     }
 
     // ── Gradient overlay ──────────────────────────────────────────────────────
