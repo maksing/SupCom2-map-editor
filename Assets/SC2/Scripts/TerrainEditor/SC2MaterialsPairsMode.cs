@@ -99,7 +99,19 @@ public class SC2MaterialsMode
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
         }
-        var materialColor = EditorGUILayout.ColorField(new GUIContent("", $"material-color-{i}"), mat.Color, false, false, false, GUILayout.Width(SC2UiScale.Pxf(42f)), GUILayout.Height(SC2UiScale.Pxf(20f)));
+        // Reported directly (standalone build): the Color swatch did nothing for the Core panel's
+        // first two materials whenever Background Terrain is enabled. Root cause: this key used to
+        // be "material-color-{i}" — a plain LOOP INDEX — and DrawPanel's own caller
+        // (SC2TerrainShell) draws the Core AND Background SC2MaterialsMode instances in the SAME
+        // frame when BackgroundTerrainEnabled (see its "Core"/"Background" section labels), so
+        // Core material 0 and Background material 0 shared the exact same
+        // SC2RuntimeColorPalette field key — the Background swatch's own UpdateAnchor call (which
+        // also runs every Repaint while that key IsOpen) kept overwriting the popup's anchor with
+        // the BACKGROUND panel's screen position, corrupting or relocating the Core popup. Only
+        // materials 0/1 broke because this map's Background terrain has exactly two materials.
+        // mat.Id (a GUID, EnsureStableIds) is unique across BOTH Core and Background data, unlike
+        // the shared loop index.
+        var materialColor = EditorGUILayout.ColorField(new GUIContent("", $"material-color-{mat.Id}"), mat.Color, false, false, false, GUILayout.Width(SC2UiScale.Pxf(42f)), GUILayout.Height(SC2UiScale.Pxf(20f)));
         if (materialColor != mat.Color)
         {
             _win.RecordUndoCheckpointFor(Data, "Change Material Color");
@@ -565,7 +577,11 @@ public class SC2PairsMode
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
         }
-        var pairColor = EditorGUILayout.ColorField(new GUIContent("Pair Color", $"pair-color-{i}"), pair.PairColor, false, false, false, GUILayout.Height(SC2UiScale.Pxf(24f)));
+        // Same latent Core/Background field-key collision as the Material color swatch's own
+        // comment describes (SC2MaterialsMode.DrawMaterialBlock) — pair.Id (unique across both
+        // Core and Background data) instead of the shared loop index i, so this doesn't break the
+        // moment a Background terrain's own Pairs happen to reach the same count.
+        var pairColor = EditorGUILayout.ColorField(new GUIContent("Pair Color", $"pair-color-{pair.Id}"), pair.PairColor, false, false, false, GUILayout.Height(SC2UiScale.Pxf(24f)));
         if (pairColor != pair.PairColor)
         {
             _win.RecordUndoCheckpointFor(Data, "Change Pair Color");
