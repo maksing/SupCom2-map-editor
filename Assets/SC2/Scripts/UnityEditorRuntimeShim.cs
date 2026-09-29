@@ -191,7 +191,23 @@ namespace UnityEditor
                 s_delayedTextEditText = typed;
                 return text ?? "";
             }
-            if (s_delayedTextEditName == name) { s_delayedTextEditName = null; s_delayedTextEditText = null; }
+            // Reported directly ("переименование откатывается к старому имени"): reached either
+            // via the Enter/Tab branch above (wasFocused is still true THIS frame, from before we
+            // manually cleared focus) or, one frame later, from a plain click elsewhere — Unity only
+            // reassigns keyboardControl to the NEW target once THAT control's own GUI call processes
+            // the click, which runs after this one in the same OnGUI pass, so this control still
+            // reads itself as focused for the rest of that frame; the loss only becomes visible here
+            // on the NEXT frame's wasFocused, by which point `typed` is just a fresh, unedited read of
+            // `text` again. Checking s_delayedTextEditText (still holding last frame's typed text)
+            // instead of `typed` on that first "already blurred" frame is what actually delivers a
+            // click-away commit — without this, it was silently discarded every time.
+            if (s_delayedTextEditName == name)
+            {
+                var committed = s_delayedTextEditText;
+                s_delayedTextEditName = null;
+                s_delayedTextEditText = null;
+                return committed ?? (text ?? "");
+            }
             return wasFocused ? typed : (text ?? "");
         }
 
@@ -231,7 +247,16 @@ namespace UnityEditor
                 s_delayedFloatEditText = typed;
                 return value;
             }
-            if (s_delayedFloatEditName == name) { s_delayedFloatEditName = null; s_delayedFloatEditText = null; }
+            // Same click-away case DelayedTextField's own comment explains — without this branch a
+            // click-away commit reads `typed` (already back to a fresh, unedited `value` by the time
+            // wasFocused shows false) instead of the actually-typed text captured last frame.
+            if (s_delayedFloatEditName == name)
+            {
+                var committedText = s_delayedFloatEditText;
+                s_delayedFloatEditName = null;
+                s_delayedFloatEditText = null;
+                return float.TryParse(committedText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedCommit) ? parsedCommit : value;
+            }
             if (!wasFocused) return value;
             return float.TryParse(typed, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : value;
         }
