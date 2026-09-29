@@ -2443,6 +2443,49 @@ public class SC2TerrainShell : ScriptableObject
     /// seconds — and silently evict real edits from the fixed-depth stack.</summary>
     private static readonly System.Collections.Generic.HashSet<string> DraggingSliderKeys = new();
 
+    // ── Focus-rect tracking for "click elsewhere clears the caret" ──────────
+    private static string _focusedFieldName;
+    private static Rect _focusedFieldScreenRect;
+
+    /// <summary>Every text/numeric field this project defines calls this right after drawing
+    /// itself, unconditionally — it no-ops unless that exact field currently holds keyboard focus.
+    /// Records the field's own on-screen rect in SCREEN space (via GUIUtility.GUIToScreenPoint), not
+    /// local GUI space, so it stays comparable from ClearFocusIfClickMissedField below regardless of
+    /// which BeginArea/scroll offset either call happens to run inside. GUIUtility.keyboardControl
+    /// alone can tell "some field is focused" but not "did THIS click land inside it" — needed to
+    /// tell a click back into the same field (reposition the caret, keep editing) apart from a click
+    /// on something else entirely (clear the caret).</summary>
+    public static void RegisterFocusedFieldRect(string controlName, Rect guiRect)
+    {
+        if (GUI.GetNameOfFocusedControl() != controlName) return;
+        var topLeft = GUIUtility.GUIToScreenPoint(new Vector2(guiRect.x, guiRect.y));
+        _focusedFieldName = controlName;
+        _focusedFieldScreenRect = new Rect(topLeft.x, topLeft.y, guiRect.width, guiRect.height);
+    }
+
+    /// <summary>Enter and a viewport click both correctly clear a stuck caret, but a click on a
+    /// DIFFERENT part of the same left panel (another button, another field's label, empty space
+    /// between controls) still left it blinking. Unity never automatically clears
+    /// GUIUtility.keyboardControl just because the click landed somewhere
+    /// that isn't a keyboard-focus-requesting control — the field's own focus simply never gets
+    /// reassigned. Generalizes the previous viewport-only special case (a raw viewport click is
+    /// never inside any field's own rect either, so it was really the same check with a narrower
+    /// gate) to any MouseDown anywhere: clears focus only when the click falls outside the
+    /// CURRENTLY focused field's own last-registered rect, so clicking back into the same field
+    /// to reposition the caret is unaffected — a click that lands on a DIFFERENT field already
+    /// reassigns keyboardControl (and re-registers that field's own rect) during that field's own
+    /// draw call, earlier in the same OnGUI pass, before this ever runs.</summary>
+    public static void ClearFocusIfClickMissedField()
+    {
+        var e = Event.current;
+        if (e == null || e.type != EventType.MouseDown || !EditorGUIUtility.editingTextField) return;
+        var focused = GUI.GetNameOfFocusedControl();
+        if (string.IsNullOrEmpty(focused) || focused != _focusedFieldName) return;
+        var screenMouse = GUIUtility.GUIToScreenPoint(e.mousePosition);
+        if (!_focusedFieldScreenRect.Contains(screenMouse))
+            GUI.FocusControl(null);
+    }
+
     public static float DrawCompactSlider(string label, float value, float min, float max, string keySuffix = null, System.Action onValueChangeStart = null)
     {
         value = Round2(Mathf.Clamp(value, min, max));
@@ -2498,9 +2541,14 @@ public class SC2TerrainShell : ScriptableObject
         fieldStyle.fontSize = SC2UiScale.F(10);
         var nextText = GUI.TextField(fieldRect, text, fieldStyle);
         NumericFieldText[key] = nextText;
+        RegisterFocusedFieldRect(controlName, fieldRect);
         var focused = GUI.GetNameOfFocusedControl() == controlName;
 
-        if (focused && e != null && e.type == EventType.KeyDown)
+        // GUI.TextField itself consumes Return/Escape internally (marks the event Used) before this
+        // code ever sees it as EventType.KeyDown — confirmed via Player.log ("event type=Used
+        // keyCode=Return"), so checking for KeyDown alone never fires. e.keyCode still survives past
+        // that internal Use(), so EventType.Used with a matching keyCode is accepted too.
+        if (focused && e != null && (e.type == EventType.KeyDown || e.type == EventType.Used))
         {
             if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
             {

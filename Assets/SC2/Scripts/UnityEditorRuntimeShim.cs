@@ -63,6 +63,19 @@ namespace UnityEditor
             var shown = focused && s_numericEditName == name ? s_numericEditText : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
             GUI.SetNextControlName(name);
             var text = GUILayout.TextField(shown, options);
+            SC2TerrainShell.RegisterFocusedFieldRect(name, GUILayoutUtility.GetLastRect());
+            // Plain GUILayout.TextField never loses focus on its own — Enter/Tab left the caret
+            // blinking here indefinitely (DelayedTextField/DelayedFloatField already clear focus the
+            // same way; this field had no such handling at all). GUILayout.TextField itself consumes
+            // Return internally (marks the event Used) before this code would ever see it as
+            // EventType.KeyDown — confirmed via Player.log against the same pattern in
+            // SC2TerrainShell.DrawCompactSlider — so EventType.Used with a matching keyCode (still
+            // populated past that internal Use()) is accepted too, alongside plain KeyDown for Tab.
+            var e = Event.current;
+            if (GUI.GetNameOfFocusedControl() == name && e != null &&
+                (e.type == EventType.KeyDown || e.type == EventType.Used) &&
+                (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter || e.keyCode == KeyCode.Tab))
+                GUI.FocusControl(null);
             if (GUI.GetNameOfFocusedControl() == name)
             {
                 s_numericEditName = name;
@@ -175,10 +188,17 @@ namespace UnityEditor
             var shown = wasFocused && s_delayedTextEditName == name ? s_delayedTextEditText : (text ?? "");
             GUI.SetNextControlName(name);
             var typed = GUILayout.TextField(shown, options);
+            SC2TerrainShell.RegisterFocusedFieldRect(name, GUILayoutUtility.GetLastRect());
             var isFocused = GUI.GetNameOfFocusedControl() == name;
 
+            // GUILayout.TextField itself consumes Return internally (marks the event Used) before
+            // this code would ever see it as EventType.KeyDown — confirmed via Player.log against
+            // the same pattern in SC2TerrainShell.DrawCompactSlider, meaning this branch never fired
+            // for Return at all until now (every "Enter commits it" case actually went through the
+            // click-away path below instead). e.keyCode still survives past that internal Use(), so
+            // EventType.Used with a matching keyCode is accepted too, alongside plain KeyDown for Tab.
             var e = Event.current;
-            if (isFocused && e != null && e.type == EventType.KeyDown &&
+            if (isFocused && e != null && (e.type == EventType.KeyDown || e.type == EventType.Used) &&
                 (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter || e.keyCode == KeyCode.Tab))
             {
                 GUI.FocusControl(null);
@@ -221,8 +241,8 @@ namespace UnityEditor
         /// axis used a live NumericTextField (via the Vector3Field below), so every keystroke
         /// reported a "changed" value and the caller ran NotifyImportedTerrainChanged, which calls
         /// SC2DecalsShell.ReprojectDecalsInBounds — a synchronous ~100-250ms live-height-grid
-        /// rebuild (SC2LiveHeightGrid.EnsureFreshImmediate) — once per character typed, reported
-        /// directly as the editor "hanging" on every keystroke.</summary>
+        /// rebuild (SC2LiveHeightGrid.EnsureFreshImmediate) — once per character typed, which made
+        /// the editor hang on every keystroke.</summary>
         public static float DelayedFloatField(float value, params GUILayoutOption[] options)
         {
             var name = "SC2ShimDelayedFloat_" + GUIUtility.GetControlID(kDelayedFloatFieldHint, FocusType.Passive);
@@ -230,10 +250,14 @@ namespace UnityEditor
             var shown = wasFocused && s_delayedFloatEditName == name ? s_delayedFloatEditText : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
             GUI.SetNextControlName(name);
             var typed = GUILayout.TextField(shown, options);
+            SC2TerrainShell.RegisterFocusedFieldRect(name, GUILayoutUtility.GetLastRect());
             var isFocused = GUI.GetNameOfFocusedControl() == name;
 
+            // GUILayout.TextField itself consumes Return internally (marks the event Used) before
+            // this code would ever see it as EventType.KeyDown — see DelayedTextField's own comment;
+            // EventType.Used with a matching keyCode is accepted too, alongside plain KeyDown for Tab.
             var e = Event.current;
-            if (isFocused && e != null && e.type == EventType.KeyDown &&
+            if (isFocused && e != null && (e.type == EventType.KeyDown || e.type == EventType.Used) &&
                 (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter || e.keyCode == KeyCode.Tab))
             {
                 GUI.FocusControl(null);

@@ -6949,24 +6949,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
     }
 
-    /// <summary>A numeric field (SC2Numeric_-named) can keep IMGUI keyboard
-    /// focus indefinitely once clicked into — Unity never clears
-    /// GUIUtility.keyboardControl just because the user switched tabs or
-    /// clicked elsewhere, and a raw viewport click isn't a GUI control that
-    /// could naturally steal it either. Left unhandled, HandleHotkeys()'s own
-    /// stuck-focus guard (needed so typing into that same field doesn't also
-    /// fire a tool hotkey) stays tripped forever after the FIRST numeric
-    /// field anyone ever clicks this session, silently killing M/F/Tab. A
-    /// genuine click into the viewport always means "done with that field."</summary>
-    private void ReleaseStuckNumericFocusOnViewportClick()
-    {
-        var e = Event.current;
-        if (e == null || e.type != EventType.MouseDown || IsMouseOverUi(e.mousePosition))
-            return;
-        var focusedControl = GUI.GetNameOfFocusedControl();
-        if (!string.IsNullOrEmpty(focusedControl) && focusedControl.StartsWith("SC2Numeric_"))
-            GUI.FocusControl(null);
-    }
+    /// <summary>Any text/numeric field can keep IMGUI keyboard focus (and its blinking caret)
+    /// indefinitely once clicked into — Unity never clears GUIUtility.keyboardControl just because
+    /// the user clicked somewhere that isn't itself a keyboard-focus-requesting control (a raw
+    /// viewport click, a button, empty space between panel controls). Left unhandled,
+    /// HandleHotkeys()'s own stuck-focus guard (needed so typing into that same field doesn't also
+    /// fire a tool hotkey) stays tripped forever after the FIRST field anyone ever clicks this
+    /// session, silently killing M/F/Tab, on top of the caret itself staying visible with nothing
+    /// left to edit. Delegates to SC2TerrainShell.ClearFocusIfClickMissedField, which every
+    /// text/numeric field in this project registers its own on-screen rect with while focused —
+    /// covers a click ANYWHERE (viewport or elsewhere in the same panel), not just the viewport,
+    /// while a click back into the SAME field (to reposition the caret) is unaffected.</summary>
+    private void ReleaseStuckNumericFocusOnViewportClick() => SC2TerrainShell.ClearFocusIfClickMissedField();
 
     private bool IsMouseOverUi(Vector2 mouse)
     {
