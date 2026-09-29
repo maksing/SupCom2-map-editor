@@ -63,6 +63,41 @@ public static class SC2SymmetryMath
         return true;
     }
 
+    /// <summary>The world-space rotation (degrees) GetSlots applies to reach <paramref name="slot"/>
+    /// when that slot is a pure ROTATION of slot 0 rather than a reflection (GetSlotMirror covers
+    /// the reflecting slots; SlotReflects false here selects everything GetSlotMirror returns false
+    /// for). Reported directly for Radial symmetry: a custom brush stamp painted identically
+    /// (unrotated) at every radial copy instead of turning to match each copy's own angle around
+    /// the symmetry center — because unlike a reflection, a rotation-only copy's content also needs
+    /// rotating, or the copy looks carried over without being turned. 0 for slot 0, for every
+    /// reflecting slot (GetSlotMirror's job, not this), and for a slot past RotationAngleSteps'
+    /// count (SlotReflects/GetSlots already treat those the same way). The caller must NEGATE this
+    /// before feeding it to SC2PaintBrush.shader's own _BrushRotation: the shader rotates the pixel
+    /// OFFSET used to sample the stamp, which is the INVERSE of the CONTENT rotation this returns —
+    /// harmless for GetSlotMirror's flips (a reflection is its own inverse) but not for a rotation,
+    /// where "rotate the content by +90" and "rotate the sample offset by +90" are opposite
+    /// operations. See SymmetryRotationTests for the derivation this keeps in lockstep with.</summary>
+    public static float GetSlotRotationDegrees(SymmetryMode mode, int radialCount, int slot)
+    {
+        if (slot <= 0 || SlotReflects(mode, slot)) return 0f;
+        switch (mode)
+        {
+            case SymmetryMode.XY:
+            case SymmetryMode.DiagonalBoth:
+                return slot == 3 ? 180f : 0f;
+            case SymmetryMode.Radial:
+                var i = 1;
+                foreach (var deg in SC2RadialSymmetryMath.RotationAngleSteps(radialCount))
+                {
+                    if (i == slot) return deg;
+                    i++;
+                }
+                return 0f;
+            default:
+                return 0f;
+        }
+    }
+
     public static List<Vector3> GetSlots(SymmetryMode mode, Vector3 center, int radialCount, Vector3 pos)
     {
         var c = center; var rel = pos - c;

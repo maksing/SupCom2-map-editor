@@ -745,10 +745,15 @@ public class SC2PaintMode
         {
             // A reflected symmetric copy (X/Y/diagonal mirror) needs its stamp mirrored too, or it
             // paints an identical (not mirrored) copy of the stroke — reported directly ("одна из
-            // этих полосок должна отзеркалиться"). A rotation-only copy (radial, the 180-degree
-            // slot of XY/DiagonalBoth) is left as before: same stamp, just moved.
+            // этих полосок должна отзеркалиться").
             SC2SymmetryMath.GetSlotMirror(_win.Data.Symmetry, slot, out var mirror, out var swapAxes);
-            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad, mirror, swapAxes);
+            // A rotation-only copy (Radial, or the 180-degree slot of XY/DiagonalBoth) instead needs
+            // its stamp turned to match, or it paints an unrotated copy — reported directly for
+            // Radial symmetry (two identical, unrotated blobs). GetSlotRotationDegrees returns the
+            // CONTENT rotation; negated here because _BrushRotation rotates the sample offset, the
+            // inverse operation (see that method's own doc comment).
+            var extraRotationRad = -SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
+            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes);
         }
 #if UNITY_EDITOR
         SceneView.RepaintAll();
