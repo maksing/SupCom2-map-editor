@@ -4993,6 +4993,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
     }
 
+    /// <summary>No confirmation dialog — unlike Delete, this can't destroy anything.</summary>
+    private void RequestDuplicateTerrainName(string mapName)
+    {
+        var newName = GetUniqueDuplicateName(mapName);
+        if (SC2TerrainShell.DuplicateOnDisk(mapName, newName))
+            SetStatus($"Duplicated terrain: {mapName} -> {newName}");
+        else
+            SetStatus("Failed to duplicate terrain: " + mapName);
+    }
+
     /// <summary>backupId doubles as its own label — see
     /// SC2RuntimeTerrainPersistence.BackupStampFormat's own doc comment.</summary>
     private void RequestRestoreBackup(string backupId)

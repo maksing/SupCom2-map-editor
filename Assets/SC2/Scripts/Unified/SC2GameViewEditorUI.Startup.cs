@@ -39,6 +39,7 @@ public sealed partial class SC2GameViewEditorUI
     private bool _startupArchivesScanned;
     private List<SC2ScenarioCandidate> _startupArchiveCandidates;
     private string _startupNewMapName = "New Map";
+    private string _startupNewMapNameError;
     private float _startupNewMapSizeWu = 1024f;
     private Vector2 _startupScroll;
 
@@ -303,11 +304,14 @@ public sealed partial class SC2GameViewEditorUI
             foreach (var asset in customAssets)
             {
                 GUILayout.BeginHorizontal(GUI.skin.box);
+                GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
                 GUILayout.Label(CustomMapDisplayName(asset), GUILayout.ExpandWidth(true));
-                if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-                    OpenExistingTerrainAsset(asset);
-                if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(70f))))
-                    RequestDeleteTerrainAsset(asset);
+                DrawMapDatesLabel(AssetDatabase.GetAssetPath(asset));
+                GUILayout.EndVertical();
+                DrawMapRowActionButtons(
+                    () => OpenExistingTerrainAsset(asset),
+                    () => RequestDuplicateTerrainAsset(asset),
+                    () => RequestDeleteTerrainAsset(asset));
                 GUILayout.EndHorizontal();
             }
         }
@@ -323,11 +327,14 @@ public sealed partial class SC2GameViewEditorUI
             foreach (var mapName in saved)
             {
                 GUILayout.BeginHorizontal(GUI.skin.box);
+                GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
                 GUILayout.Label(mapName, GUILayout.ExpandWidth(true));
-                if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-                    OpenSavedTerrainByName(mapName);
-                if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(70f))))
-                    RequestDeleteTerrainName(mapName);
+                DrawMapDatesLabel(SC2RuntimeTerrainPersistence.GetSavePath(mapName));
+                GUILayout.EndVertical();
+                DrawMapRowActionButtons(
+                    () => OpenSavedTerrainByName(mapName),
+                    () => RequestDuplicateTerrainName(mapName),
+                    () => RequestDeleteTerrainName(mapName));
                 GUILayout.EndHorizontal();
             }
         }
@@ -379,7 +386,9 @@ public sealed partial class SC2GameViewEditorUI
         SC2EnvFieldGui.SectionLabel("Create new map");
         GUILayout.BeginHorizontal();
         GUILayout.Label("Name", GUILayout.Width(SC2UiScale.Pxf(50f)));
-        _startupNewMapName = GUILayout.TextField(_startupNewMapName ?? "New Map", GUILayout.ExpandWidth(true));
+        var newMapName = GUILayout.TextField(_startupNewMapName ?? "New Map", GUILayout.ExpandWidth(true));
+        if (newMapName != _startupNewMapName) _startupNewMapNameError = null;
+        _startupNewMapName = newMapName;
         GUILayout.EndHorizontal();
         GUILayout.BeginHorizontal();
         GUILayout.Label("Size", GUILayout.Width(SC2UiScale.Pxf(50f)));
@@ -388,13 +397,91 @@ public sealed partial class SC2GameViewEditorUI
         StartupSizeButton(2048);
         GUILayout.EndHorizontal();
         if (GUILayout.Button("Create New Map", GUILayout.Height(SC2UiScale.Pxf(28f))))
-            CreateAndOpenNewMap(_startupNewMapName, _startupNewMapSizeWu);
+        {
+            if (MapNameAlreadyExists(_startupNewMapName))
+                _startupNewMapNameError = $"A map named '{_startupNewMapName.Trim()}' already exists — choose a different name.";
+            else
+            {
+                _startupNewMapNameError = null;
+                CreateAndOpenNewMap(_startupNewMapName, _startupNewMapSizeWu);
+            }
+        }
+        if (!string.IsNullOrEmpty(_startupNewMapNameError))
+        {
+            var prevContentColor = GUI.contentColor;
+            GUI.contentColor = new Color(0.9f, 0.4f, 0.4f);
+            GUILayout.Label(_startupNewMapNameError, StartupWrapLabelStyle());
+            GUI.contentColor = prevContentColor;
+        }
         GUILayout.Space(14);
+    }
+
+    /// <summary>Checked against the same "Your custom maps" list this screen already shows
+    /// (Editor: SC2TerrainData assets by MapName/name; Build: on-disk saves) — a from-scratch
+    /// map created with a name that collides silently overwrote that existing save the first
+    /// time it was persisted, since Save()/AssetDatabase.CreateAsset have no such guard
+    /// themselves.</summary>
+    private bool MapNameAlreadyExists(string mapName)
+    {
+        if (string.IsNullOrWhiteSpace(mapName)) return false;
+        var trimmed = mapName.Trim();
+#if UNITY_EDITOR
+        foreach (var guid in AssetDatabase.FindAssets("t:SC2TerrainData"))
+        {
+            var asset = AssetDatabase.LoadAssetAtPath<SC2TerrainData>(AssetDatabase.GUIDToAssetPath(guid));
+            if (asset != null && string.Equals(CustomMapDisplayName(asset), trimmed, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+#else
+        foreach (var saved in SC2TerrainShell.ListSavedTerrains())
+            if (string.Equals(saved, trimmed, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+#endif
+    }
+
+    /// <summary>"<name> Copy", then "<name> Copy 2", "<name> Copy 3", ... until one doesn't
+    /// collide — used so Duplicate never needs its own naming prompt.</summary>
+    private string GetUniqueDuplicateName(string baseName)
+    {
+        var candidate = baseName + " Copy";
+        var suffix = 2;
+        while (MapNameAlreadyExists(candidate))
+            candidate = $"{baseName} Copy {suffix++}";
+        return candidate;
     }
 
 #if UNITY_EDITOR
     private static string CustomMapDisplayName(SC2TerrainData asset) =>
         string.IsNullOrEmpty(asset.MapName) ? asset.name : asset.MapName;
+
+    /// <summary>Copies the .asset file (AssetDatabase.CopyAsset keeps every texture/material
+    /// reference pointed at the same shared assets — only the new asset itself is a distinct
+    /// object) and gives the copy its own unique MapName, so it doesn't collide with the
+    /// original the next time either one is saved.</summary>
+    private void RequestDuplicateTerrainAsset(SC2TerrainData asset)
+    {
+        if (asset == null) return;
+        var sourceName = CustomMapDisplayName(asset);
+        var newName = GetUniqueDuplicateName(sourceName);
+        var sourcePath = AssetDatabase.GetAssetPath(asset);
+        var destPath = AssetDatabase.GenerateUniqueAssetPath(
+            Path.Combine(Path.GetDirectoryName(sourcePath), SanitizeAssetFileName(newName) + ".asset").Replace('\\', '/'));
+        if (!AssetDatabase.CopyAsset(sourcePath, destPath))
+        {
+            SetStatus("Failed to duplicate terrain: " + sourceName);
+            return;
+        }
+        var newAsset = AssetDatabase.LoadAssetAtPath<SC2TerrainData>(destPath);
+        if (newAsset != null)
+        {
+            newAsset.MapName = newName;
+            EditorUtility.SetDirty(newAsset);
+        }
+        AssetDatabase.SaveAssets();
+        SetStatus($"Duplicated terrain: {sourceName} -> {newName}");
+    }
 
     /// <summary>Editor counterpart to SC2GameViewEditorUI's own Build-only
     /// RequestDeleteTerrainName/ApplyDeleteTerrainName (File menu > Delete
@@ -521,6 +608,31 @@ public sealed partial class SC2GameViewEditorUI
             return created ? File.GetCreationTime(path) : File.GetLastWriteTime(path);
         }
         catch { return DateTime.MinValue; }
+    }
+
+    /// <summary>Same underlying OS timestamps the sort-by-date modes already read (see
+    /// SortCustomMaps's own doc comment) — the .asset file in the Editor, the
+    /// .sc2terrain.json save file in a Build.</summary>
+    private static void DrawMapDatesLabel(string path)
+    {
+        var created = GetFileTimeSafe(path, created: true);
+        var modified = GetFileTimeSafe(path, created: false);
+        if (created == DateTime.MinValue && modified == DateTime.MinValue) return;
+        GUILayout.Label($"Created {created:yyyy-MM-dd}    Modified {modified:yyyy-MM-dd}", StartupDimLabelStyle());
+    }
+
+    private static void DrawMapRowActionButtons(Action onOpen, Action onDuplicate, Action onDelete)
+    {
+        if (GUILayout.Button("Duplicate", GUILayout.Width(SC2UiScale.Pxf(80f))))
+            onDuplicate();
+        if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(70f))))
+            onDelete();
+
+        var prevBg = GUI.backgroundColor;
+        GUI.backgroundColor = new Color(0.42f, 0.78f, 0.5f);
+        if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
+            onOpen();
+        GUI.backgroundColor = prevBg;
     }
 
     private void ScanStartupArchiveCandidates()

@@ -628,6 +628,57 @@ public static class SC2RuntimeTerrainPersistence
         return true;
     }
 
+    /// <summary>Duplicates a saved map's legacy JSON and, if present, its document package under
+    /// a new name. Blob-backed data (heights, textures, baked lighting) is content-addressed and
+    /// shared as-is — the copy's manifest references the same blob hashes, nothing under Blobs/
+    /// needs copying (see PutBlobBytes's own doc comment) — only the small identity fields that
+    /// key a save to its name are rewritten (the legacy Dto's MapName, and the document package's
+    /// Identity.MapStem, which ApplyToLegacy/ReconstructMapName prefers over the legacy JSON
+    /// whenever a document package exists — leaving it stale would make the duplicate load back
+    /// under the OLD name instead of the new one). Returns false if the source doesn't exist or a
+    /// save already exists at newMapName.</summary>
+    public static bool Duplicate(string sourceMapName, string newMapName)
+    {
+        var sourcePath = GetSavePath(sourceMapName);
+        if (!File.Exists(sourcePath))
+            return false;
+        var destPath = GetSavePath(newMapName);
+        if (File.Exists(destPath))
+            return false;
+
+        var json = File.ReadAllText(sourcePath, Encoding.UTF8);
+        var dto = JsonUtility.FromJson<Dto>(json);
+        if (dto == null)
+            return false;
+        dto.MapName = newMapName;
+        File.WriteAllText(destPath, JsonUtility.ToJson(dto), Encoding.UTF8);
+
+        var sourceManifestPath = Path.Combine(DocumentPackageDirectory(sourceMapName), "manifest.json");
+        if (File.Exists(sourceManifestPath))
+        {
+            try
+            {
+                var document = SC2MapDocumentSerializer.Deserialize(File.ReadAllText(sourceManifestPath, Encoding.UTF8));
+                if (document.Identity == null)
+                    document.Identity = new SC2MapIdentity();
+                document.Identity.MapStem = newMapName;
+                document.Identity.MapId = Guid.NewGuid().ToString("N");
+                document.Identity.CreatedUtc = DateTime.UtcNow;
+                document.Identity.ModifiedUtc = DateTime.UtcNow;
+                var destDocDir = DocumentPackageDirectory(newMapName);
+                Directory.CreateDirectory(destDocDir);
+                File.WriteAllText(Path.Combine(destDocDir, "manifest.json"), SC2MapDocumentSerializer.Serialize(document), Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                SC2Log.LogWarning($"[SC2RuntimeTerrainPersistence] Duplicate: document package copy failed for " +
+                                   $"'{sourceMapName}' -> '{newMapName}', duplicate keeps legacy data only: {ex}");
+            }
+        }
+
+        return true;
+    }
+
     // `document` is populated only when the document-package path succeeded
     // (null on the legacy-JSON fallback, which predates SC2MapDocument
     // entirely) — confirmed real via the MapDocument audit: the deserialized

@@ -4566,6 +4566,17 @@ public class SC2TerrainShell : ScriptableObject
 #endif
     }
 
+    /// <summary>Duplicates a saved terrain on disk under a new name (standalone builds only) —
+    /// does not touch whatever's currently loaded in this shell.</summary>
+    public static bool DuplicateOnDisk(string sourceMapName, string newMapName)
+    {
+#if !UNITY_EDITOR
+        return SC2RuntimeTerrainPersistence.Duplicate(sourceMapName, newMapName);
+#else
+        return false;
+#endif
+    }
+
     /// <summary>
     /// Discards the current terrain (in-memory only — does not touch any saved
     /// file) and drops back to the "select or create a terrain" panel, letting
