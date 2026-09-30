@@ -778,6 +778,7 @@ public sealed partial class SC2GameViewEditorUI
         EnsureTerrainShell();
         RuntimeTerrainData = asset;
         _terrainShell.SetData(asset, RuntimeFieldTerrainSourceLabel(asset));
+        ResetView(instant: true); // same reasoning as AdoptNewlyCreatedTerrainData's own call
         RecordLastOpenedMap(asset);
         StartupComplete = true;
         SetStatus("Opened: " + (string.IsNullOrEmpty(asset.MapName) ? asset.name : asset.MapName));
@@ -851,6 +852,10 @@ public sealed partial class SC2GameViewEditorUI
         RuntimeTerrainData = data;
 #endif
         _terrainShell.SetData(data, "Created: " + data.MapName);
+        // The camera's one-shot initial-view snap (_pendingInitialTopView) already fired at
+        // OnEnable, before any map existed, landing on DefaultMapCenter — a from-scratch map at
+        // a size other than 1024 needs its own snap to its actual (correctly sized) center.
+        ResetView(instant: true);
     }
 
     /// <summary>Writes a real backing .asset (Editor) / named JSON save

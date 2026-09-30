@@ -4961,6 +4961,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             RuntimeTerrainData = _terrainShell.Data;
             RestoreImportedTerrainsFromDocument(loadedDocument?.Terrain?.ImportedEntries);
+            ResetView(instant: true); // same reasoning as AdoptNewlyCreatedTerrainData's own call
             SetStatus("Loaded terrain: " + mapName);
         }
         else
@@ -7250,6 +7251,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _pendingInitialTopView = false;
     }
 
+    /// <summary>The map's true geometric center, from its actual grid size — NOT
+    /// DefaultMapCenter, which is only correct for a 1024-world-unit map (512,0,512 happens to
+    /// be exactly its center). A 512 or 2048 map has a different center; ResetView using the
+    /// hardcoded constant regardless of map size was landing off-center on anything but 1024.</summary>
+    private Vector3 ComputeMapCenter()
+    {
+        var data = _terrainShell?.Data;
+        if (data != null && data.IsInitialized && data.GridWidth > 0 && data.GridHeight > 0 && data.CellSize > 0f)
+            return new Vector3(data.GridWidth * data.CellSize * 0.5f, 0f, data.GridHeight * data.CellSize * 0.5f);
+        return DefaultMapCenter;
+    }
+
     /// <summary>
     /// Returns the camera to its starting top-down overview — pan, zoom and
     /// rotation all reset to the same defaults used on first load. Unlike
@@ -7271,7 +7284,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (cam == null)
             return;
 
-        _mapViewCenter = DefaultMapCenter;
+        _mapViewCenter = ComputeMapCenter();
         _mapViewSize = 512f;
         if (cam.orthographic)
             cam.orthographicSize = _mapViewSize;
@@ -7369,7 +7382,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 return ray.GetPoint(enter);
         }
 
-        return DefaultMapCenter;
+        return ComputeMapCenter();
     }
 
     /// <summary>Dispatches by action id rather than a literal KeyCode so a
