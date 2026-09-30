@@ -66218,6 +66218,13 @@ MonoBehaviour:
   RnmBakeOverrideSunIntensity: 1
   RnmBakeOverrideShadowColor: {r: 0.64, g: 0.77, b: 0.92, a: 1}
   RnmBakeShadowSoftRadius: 6
+  ImportedRnmBakedRgba: 
+  ImportedRnmWidth: 0
+  ImportedRnmHeight: 0
+  ImportedRnmWorldOriginX: 0
+  ImportedRnmWorldOriginZ: 0
+  ImportedRnmWorldSpanX: 1
+  ImportedRnmWorldSpanZ: 1
   PointCloudSkyColor: {r: 0.75, g: 0.88, b: 1, a: 1}
   PointCloudSkyIntensity: 0.5
   PointCloudGroundReflection: 0.5
