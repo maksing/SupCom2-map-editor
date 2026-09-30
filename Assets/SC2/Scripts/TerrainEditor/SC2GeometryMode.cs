@@ -913,8 +913,16 @@ public class SC2GeometryMode
             {
                 var pos = sculptPositions[slot];
                 GetSymmetricStampTransform(slot, out var mirror, out var swapAxes, out var rotationRad);
+                // Noise (mode 4) needs its own, UN-combined symmetry rotation (not mixed with the
+                // free per-stroke _geoBrushRotationRad rotationRad already carries) plus the
+                // symmetry center, to map each vertex back to its slot-0 counterpart before
+                // sampling — see SculptBrush's own comment on its Noise case.
+                var slotRotationDeg = mode == 4
+                    ? SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot)
+                    : 0f;
                 _win.ActiveRuntime.SculptBrush(pos - offset, _radius, effectiveStrength, _hardness, mode,
-                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
+                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes,
+                    _win.Data.SymmetryCenter - offset, slotRotationDeg);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
         }

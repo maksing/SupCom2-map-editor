@@ -84,7 +84,11 @@ public static class SC2RnmBakeService
         // world geometry into that shared frame internally.
         var hfield = BuildShadowHfield(coreData, importedTerrains, out _, out _, out _);
         var info = SC2TerrainExporter.BuildInfoModel(coreData, session);
-        return BakeInternal(model, pairIndexPerLayer, bg.Pairs, hfield, Vector3.zero, coreData, info, "background RNM mask(s)");
+        // bakeImportedWorldRnm: false — this bake's own model never merges imported terrain (see
+        // BuildBackgroundBakeGeometry), so without this it would see zero imported layers every
+        // time and wipe out whatever the core's own Bake() already baked.
+        return BakeInternal(model, pairIndexPerLayer, bg.Pairs, hfield, Vector3.zero, coreData, info, "background RNM mask(s)",
+            bakeImportedWorldRnm: false);
     }
 
     /// <summary>Builds the heightmap used ONLY for the shadow horizon-
@@ -215,7 +219,7 @@ public static class SC2RnmBakeService
     /// background-local) hfield's — see BuildShadowHfield.</summary>
     private static string BakeInternal(TerrainModel model, List<int> pairIndexPerLayer, List<SC2MaterialPair> pairs,
         HfieldModel hfield, Vector3 hfieldOffset, SC2TerrainData bakeSettingsSource, InfoModel info, string unitLabel,
-        ImportedBake imported = null)
+        ImportedBake imported = null, bool bakeImportedWorldRnm = true)
     {
         var tangents = SC2RnmMaskBaker.ComputeVertexTangents(model);
 
@@ -313,6 +317,21 @@ public static class SC2RnmBakeService
         // masks of their own — a namespace apart from the pair masks above.
         var importedCount = imported != null ? BakeImportedMasks(model, tangents, settings, imported) : 0;
 
+        // Separate from the per-object masks above (and independent of
+        // whether that feature's session/blob-store is even available) — a
+        // single, always-on, world-space-sampled bake so SC2Decal.shader can
+        // give a decal sitting on imported terrain a reasonable, baked-
+        // consistent tint even when nobody has configured a per-object mask
+        // for it. MUST run after BakeImportedMasks just above — both read/
+        // write the SAME imported layers' Uv2U/Uv2V, and BakeImportedMasks
+        // needs to see the ORIGINAL per-object UV2 first. Gated on
+        // bakeImportedWorldRnm — BakeBackground's OWN model never has a -1
+        // (imported) layer at all, so without this gate every background
+        // bake would see zero imported layers and WIPE the real data an
+        // earlier core Bake() already produced.
+        if (bakeImportedWorldRnm)
+            BakeImportedWorldRnm(model, tangents, pairIndexPerLayer, settings, bakeSettingsSource);
+
         bakeSettingsSource.RnmBakeGeneration++;
         return importedCount > 0
             ? $"Baked lighting for {bakedCount} {unitLabel} + {importedCount} imported mask(s)."
@@ -391,6 +410,105 @@ public static class SC2RnmBakeService
         }
         imported.Commit(next);
         return groups.Count;
+    }
+
+    /// <summary>Bakes ONE world-space RGBA texture covering the union of every imported-terrain
+    /// layer's world bounds (pairIndexPerLayer[li] &lt; 0 — "shadow-casting geometry only, no pair
+    /// mask", see BuildBakeGeometry's own tagging), storing the SAME combined-and-contrast-stretched
+    /// value SC2TerrainView.shader's own PreviewMode==4 live-terrain preview already computes
+    /// per-pixel at runtime — decals don't need the 3 separate basis layers any more than that
+    /// preview does. Writes into <paramref name="coreData"/>'s ImportedRnm* fields directly (no
+    /// session/blob-store dependency at bake time — SC2RuntimeTerrainPersistence handles turning
+    /// this in-memory byte array into a real saved blob separately). Reuses the exact same
+    /// SC2RnmMaskBaker.BakeMaskGroup rasterizer the pair masks above use, by temporarily
+    /// overwriting the imported layers' own Uv2U/Uv2V to world-space-normalized coordinates —
+    /// BakeMaskGroup rasterizes purely by each vertex's own UV2, so this one substitution is the
+    /// only change needed to redirect it at a world-space domain instead of a per-object one. MUST
+    /// run after BakeImportedMasks — see this method's own call site comment.</summary>
+    private static void BakeImportedWorldRnm(TerrainModel model, Vector3[] tangents, List<int> pairIndexPerLayer,
+        SC2RnmMaskBaker.Settings settings, SC2TerrainData coreData)
+    {
+        var layerIndices = new List<int>();
+        for (var li = 0; li < pairIndexPerLayer.Count; li++)
+            if (pairIndexPerLayer[li] < 0) layerIndices.Add(li);
+        if (layerIndices.Count == 0)
+        {
+            coreData.ImportedRnmBakedRgba = Array.Empty<byte>();
+            coreData.ImportedRnmWidth = 0;
+            coreData.ImportedRnmHeight = 0;
+            return;
+        }
+
+        var minX = float.MaxValue; var minZ = float.MaxValue;
+        var maxX = float.MinValue; var maxZ = float.MinValue;
+        foreach (var li in layerIndices)
+        {
+            var layer = model.Layers[li];
+            var vertEnd = li + 1 < model.Layers.Count ? model.Layers[li + 1].CumulativeVertices : model.Vertices.Count;
+            for (var vi = layer.CumulativeVertices; vi < vertEnd; vi++)
+            {
+                var v = model.Vertices[vi];
+                if (v.PosX < minX) minX = v.PosX; if (v.PosX > maxX) maxX = v.PosX;
+                if (v.PosZ < minZ) minZ = v.PosZ; if (v.PosZ > maxZ) maxZ = v.PosZ;
+            }
+        }
+        if (minX > maxX)
+        {
+            coreData.ImportedRnmBakedRgba = Array.Empty<byte>();
+            coreData.ImportedRnmWidth = 0;
+            coreData.ImportedRnmHeight = 0;
+            return; // degenerate — layers tagged imported but with no actual vertices
+        }
+
+        const float pad = 8f; // world units, so real edge geometry isn't sampled exactly at the UV border
+        minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
+        var spanX = Mathf.Max(1f, maxX - minX);
+        var spanZ = Mathf.Max(1f, maxZ - minZ);
+
+        foreach (var li in layerIndices)
+        {
+            var layer = model.Layers[li];
+            var vertEnd = li + 1 < model.Layers.Count ? model.Layers[li + 1].CumulativeVertices : model.Vertices.Count;
+            for (var vi = layer.CumulativeVertices; vi < vertEnd; vi++)
+            {
+                var v = model.Vertices[vi];
+                v.Uv2U = (v.PosX - minX) / spanX;
+                v.Uv2V = (v.PosZ - minZ) / spanZ;
+                model.Vertices[vi] = v; // TerrainVertex is a struct — List<T>'s indexer needs an explicit write-back
+            }
+        }
+
+        // Fixed default for v1, no new UI control — matches this codebase's
+        // own existing "fixed resolution, not tied to physical area"
+        // precedent (SC2TerrainRuntime.RebuildRnmArrays' own 1024x1024).
+        const int resolution = 1024;
+        var result = SC2RnmMaskBaker.BakeMaskGroup(model, tangents, layerIndices, resolution, resolution, settings);
+
+        var n = resolution * resolution;
+        var rgba = new byte[n * 4];
+        for (var i = 0; i < n; i++)
+        {
+            for (var c = 0; c < 3; c++)
+            {
+                var m0 = result.Rgb0[i * 3 + c] / 255f;
+                var m1 = result.Rgb1[i * 3 + c] / 255f;
+                var m2 = result.Rgb2[i * 3 + c] / 255f;
+                // Same fixed equal-weight sum + contrast stretch SC2TerrainView.shader's live-terrain
+                // preview already uses — see this method's own doc comment.
+                var combined = (m0 + m1 + m2) * 0.5774f;
+                combined = Mathf.Clamp01((combined - 0.5f) * 2.2f + 0.5f);
+                rgba[i * 4 + c] = (byte)Mathf.RoundToInt(combined * 255f);
+            }
+            rgba[i * 4 + 3] = result.Covered[i] ? (byte)255 : (byte)0; // real per-texel coverage, before gap-fill
+        }
+
+        coreData.ImportedRnmBakedRgba = rgba;
+        coreData.ImportedRnmWidth = resolution;
+        coreData.ImportedRnmHeight = resolution;
+        coreData.ImportedRnmWorldOriginX = minX;
+        coreData.ImportedRnmWorldOriginZ = minZ;
+        coreData.ImportedRnmWorldSpanX = spanX;
+        coreData.ImportedRnmWorldSpanZ = spanZ;
     }
 
     /// <summary>A (u, v) → alpha sampler over the material's current

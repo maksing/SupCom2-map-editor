@@ -4789,6 +4789,10 @@ public class SC2TerrainShell : ScriptableObject
         // bakeSettingsSource parameter).
         runtime.SetAllPairMaterials(mats, shaderMode, _data.RnmBakeGeneration);
         runtime.SetHeightGradientOverlay(_prev == PreviewMode.HeightGradient || _forceHfieldOverlay, _heightGradientMin, _heightGradientMax);
+        // Map-wide, not tied to core-vs-background — cheap (cache-gated on the
+        // bake actually changing), so publishing it again from either
+        // runtime's own call here is harmless.
+        SC2TerrainRuntime.PublishImportedRnmGlobals(_data);
 
         // RNM basis-texture UV domain — see SC2TerrainRuntime.
         // SetRnmUvTransform's own doc comment. Set unconditionally (cheap
@@ -4801,8 +4805,14 @@ public class SC2TerrainShell : ScriptableObject
             // hardcoded 1024 only ever happened to be correct for an
             // exactly-1024-unit map, and otherwise showed the RNM basis
             // preview sampling the wrong (too-small) fraction of the mask.
-            runtime.SetRnmUvTransform(Vector2.zero,
-                new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize)));
+        {
+            var coreSpan = new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize));
+            runtime.SetRnmUvTransform(Vector2.zero, coreSpan);
+            // Absolute world space (offset Vector2.zero IS the core's own world
+            // origin already) — see PublishDecalLightingGlobals' own doc
+            // comment for why this differs from the background branch below.
+            runtime.PublishDecalLightingGlobals("Core", Vector2.zero, coreSpan);
+        }
         else
         {
             // ComputeBounds returns WORLD-space bounds (matches
@@ -4817,8 +4827,12 @@ public class SC2TerrainShell : ScriptableObject
             SC2BackgroundTerrain.ComputeBounds(_data, _data.BackgroundTerrainSize,
                 out var bgMinX, out var bgMinZ, out var bgMaxX, out var bgMaxZ, out _);
             var worldOffset = SC2BackgroundTerrain.GetWorldOffset(_data);
-            runtime.SetRnmUvTransform(new Vector2(bgMinX - worldOffset.x, bgMinZ - worldOffset.z),
-                new Vector2(Mathf.Max(1f, bgMaxX - bgMinX), Mathf.Max(1f, bgMaxZ - bgMinZ)));
+            var bgSpan = new Vector2(Mathf.Max(1f, bgMaxX - bgMinX), Mathf.Max(1f, bgMaxZ - bgMinZ));
+            runtime.SetRnmUvTransform(new Vector2(bgMinX - worldOffset.x, bgMinZ - worldOffset.z), bgSpan);
+            // Deliberately NOT shifted by worldOffset, unlike the local-frame
+            // call just above — a decal reads its own ABSOLUTE i.worldPos.xz,
+            // not the background chunk mesh's own local uv0 frame.
+            runtime.PublishDecalLightingGlobals("Bg", new Vector2(bgMinX, bgMinZ), bgSpan);
         }
     }
 

@@ -182,6 +182,9 @@ public class SC2TerrainRuntime : IDisposable
     private RenderTexture  _pairColorRT;
     private Material       _pairColorViewMat;
     private int            _lastPairHash = -1;
+    // Cached for PublishDecalLightingGlobals, which has no other access to
+    // the pair count SetAllPairMaterials already computed.
+    private int            _lastPairCountForGlobals = 1;
 
     // Baked RNM lighting preview (SC2RnmBakeService/PreviewMode==4) — packed
     // into ONE Texture2DArray (layer = pairIdx*3 + basisIndex) instead of 3
@@ -289,6 +292,71 @@ public class SC2TerrainRuntime : IDisposable
         var invX = span.x > 0.0001f ? 1f / span.x : 0f;
         var invY = span.y > 0.0001f ? 1f / span.y : 0f;
         _sharedChunkMat.SetVector("_RnmUvInvScale", new Vector4(invX, invY, 0f, 0f));
+    }
+
+    /// <summary>Publishes this runtime's pair-map/RNM/tiling-LUT state as GLOBAL shader properties
+    /// suffixed "_Core"/"_Bg" so SC2Decal.shader — a Resources-only material with no reference to
+    /// either terrain runtime — can reproduce the exact "which pair, was it actually baked, what
+    /// does it look like" lookup the terrain's own chunk mesh already does, from a decal's own
+    /// world position, instead of lighting itself with a generic directional light. worldOffset/span
+    /// MUST be absolute WORLD-space (not this runtime's own _RnmUvOffset, which for the background
+    /// is shifted into its own local frame — see SetRnmUvTransform's own doc comment); callers
+    /// already have the pre-shift world bounds on hand at their own SetRnmUvTransform call site.</summary>
+    public void PublishDecalLightingGlobals(string suffix, Vector2 worldOffset, Vector2 span)
+    {
+        Shader.SetGlobalInt("_RnmValid_" + suffix, _rnmArray != null ? 1 : 0);
+        if (_rnmArray != null) Shader.SetGlobalTexture("_RnmArr_" + suffix, _rnmArray);
+        if (PairMapRT != null) Shader.SetGlobalTexture("_PairMapTex_" + suffix, PairMapRT);
+        if (_tilingLUT != null) Shader.SetGlobalTexture("_TilingLUT_" + suffix, _tilingLUT);
+        Shader.SetGlobalInt("_PairCount_" + suffix, _lastPairCountForGlobals);
+        Shader.SetGlobalVector("_RnmUvOffset_" + suffix, new Vector4(worldOffset.x, worldOffset.y, 0f, 0f));
+        var invX = span.x > 0.0001f ? 1f / span.x : 0f;
+        var invY = span.y > 0.0001f ? 1f / span.y : 0f;
+        Shader.SetGlobalVector("_RnmUvInvScale_" + suffix, new Vector4(invX, invY, 0f, 0f));
+    }
+
+    // Static/map-wide cache for PublishImportedRnmGlobals below — this baked
+    // texture belongs to neither the core nor the background runtime
+    // instance (it covers imported terrain.bdf objects, which can sit
+    // anywhere relative to either), so it isn't stored per-instance the way
+    // _rnmArray is.
+    private static Texture2D _importedRnmTex;
+    private static int _importedRnmCacheKey = int.MinValue;
+
+    /// <summary>Publishes SC2RnmBakeService's baked imported-terrain world RNM texture
+    /// (SC2TerrainData.ImportedRnmBakedRgba) as globals for SC2Decal.shader's third, last-resort
+    /// lookup (after core/background both say "no data here") — see PublishDecalLightingGlobals'
+    /// own doc comment for why decals need this at all. Rebuilds the cached Texture2D only when the
+    /// bake actually changed (width/height/generation), not every call.</summary>
+    public static void PublishImportedRnmGlobals(SC2TerrainData coreData)
+    {
+        if (coreData == null || !coreData.HasImportedRnmBake)
+        {
+            Shader.SetGlobalInt("_ImportedRnmValid", 0);
+            return;
+        }
+        var w = coreData.ImportedRnmWidth;
+        var h = coreData.ImportedRnmHeight;
+        var key = ((w * 397 + h) * 31 + coreData.RnmBakeGeneration) * 31 + coreData.ImportedRnmBakedRgba.Length;
+        if (key != _importedRnmCacheKey || _importedRnmTex == null || _importedRnmTex.width != w || _importedRnmTex.height != h)
+        {
+            if (_importedRnmTex != null) DestroyObject(_importedRnmTex);
+            _importedRnmTex = new Texture2D(w, h, TextureFormat.RGBA32, false, true)
+            {
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+                name = "SC2_ImportedRnmTex",
+            };
+            _importedRnmTex.LoadRawTextureData(coreData.ImportedRnmBakedRgba);
+            _importedRnmTex.Apply(false);
+            _importedRnmCacheKey = key;
+        }
+        Shader.SetGlobalTexture("_ImportedRnmTex", _importedRnmTex);
+        Shader.SetGlobalInt("_ImportedRnmValid", 1);
+        Shader.SetGlobalVector("_ImportedRnmWorldOffset", new Vector4(coreData.ImportedRnmWorldOriginX, coreData.ImportedRnmWorldOriginZ, 0f, 0f));
+        var invX = coreData.ImportedRnmWorldSpanX > 0.0001f ? 1f / coreData.ImportedRnmWorldSpanX : 0f;
+        var invY = coreData.ImportedRnmWorldSpanZ > 0.0001f ? 1f / coreData.ImportedRnmWorldSpanZ : 0f;
+        Shader.SetGlobalVector("_ImportedRnmInvScale", new Vector4(invX, invY, 0f, 0f));
     }
 
     public void Dispose()
@@ -801,9 +869,14 @@ public class SC2TerrainRuntime : IDisposable
     public void SculptBrush(Vector3 worldPos, float radius, float strength, float hardness,
                              int mode,
                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
-                             float brushRotationRad = 0f, Vector2 brushMirror = default, bool brushSwapAxes = false)
+                             float brushRotationRad = 0f, Vector2 brushMirror = default, bool brushSwapAxes = false,
+                             Vector3 symmetryCenter = default, float slotRotationDeg = 0f)
     {
         if (brushMirror == default) brushMirror = Vector2.one;
+        // Noise (mode 4) below needs its OWN mirror/rotation transform, separate from
+        // brushMirror/brushRotationRad above (which shape the custom-stamp FALLOFF, not the noise
+        // pattern) — see that case's own comment.
+        var slotRotationRad = -slotRotationDeg * Mathf.Deg2Rad;
         var r2 = radius * radius;
         // 2x the effect the raw Strength value produces (i.e. at Strength's
         // max of 1, the brush now moves twice as much height per tick as
@@ -837,7 +910,31 @@ public class SC2TerrainRuntime : IDisposable
                 case 0: _heights[idx] += amt; break;
                 case 1: _heights[idx] -= amt; break;
                 case 2: _heights[idx]  = Mathf.Lerp(_heights[idx], AvgH(gx,gz), amt*.5f); break;
-                case 4: _heights[idx] += (Mathf.PerlinNoise(wx*.05f,wz*.05f)-.5f)*amt*2; break;
+                case 4:
+                {
+                    // Sampling Perlin noise at the vertex's own absolute world position (wx, wz)
+                    // made a symmetric copy's bumps completely uncorrelated with the original —
+                    // Perlin noise isn't symmetric around an arbitrary point, so a mirrored/rotated
+                    // copy needs to sample the SAME noise VALUE its slot-0 counterpart would, by
+                    // mapping this vertex back to that counterpart's position (mirror is its own
+                    // inverse; -slotRotationDeg undoes a radial copy's own rotation) before
+                    // sampling — identical to how GetSlotRotationDegrees/GetSlotMirror already
+                    // describe the position relationship itself, just applied to a single vertex
+                    // instead of the whole brush.
+                    var relX = wx - symmetryCenter.x; var relZ = wz - symmetryCenter.z;
+                    var canonX = brushSwapAxes ? relZ : relX;
+                    var canonZ = brushSwapAxes ? relX : relZ;
+                    canonX *= brushMirror.x; canonZ *= brushMirror.y;
+                    if (Mathf.Abs(slotRotationRad) > 0.0001f)
+                    {
+                        var s = Mathf.Sin(slotRotationRad); var c = Mathf.Cos(slotRotationRad);
+                        var rx = canonX * c - canonZ * s; var rz = canonX * s + canonZ * c;
+                        canonX = rx; canonZ = rz;
+                    }
+                    canonX += symmetryCenter.x; canonZ += symmetryCenter.z;
+                    _heights[idx] += (Mathf.PerlinNoise(canonX * .05f, canonZ * .05f) - .5f) * amt * 2;
+                    break;
+                }
             }
             _heights[idx] = SC2TerrainData.ClampHeight(_heights[idx]);
         }
@@ -1096,6 +1193,7 @@ public class SC2TerrainRuntime : IDisposable
     public void SetAllPairMaterials(PairMaterialData[] pairs, int previewMode, int bakeGeneration = 0)
     {
         var n = Mathf.Min(pairs?.Length ?? 0, 72);
+        _lastPairCountForGlobals = Mathf.Max(n, 1);
         RebuildDiffuseArrays(pairs, n);
         // RebuildRnmArrays does a full CPU readback (CopyRawToArray) per
         // layer, same cost class as RebuildDiffuseArrays. Only rebuild the

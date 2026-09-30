@@ -555,6 +555,13 @@ public static class SC2RuntimeTerrainPersistence
         doc.Terrain.PointCloudBoxSize = data.PointCloudBoxSize;
         doc.Terrain.PointCloudUp = PutBlobBytes(blobStore, data.PointCloudUpDds);
         doc.Terrain.PointCloudDown = PutBlobBytes(blobStore, data.PointCloudDownDds);
+        doc.Terrain.ImportedRnmBakedRgba = PutBlobBytes(blobStore, data.ImportedRnmBakedRgba);
+        doc.Terrain.ImportedRnmWidth = data.ImportedRnmWidth;
+        doc.Terrain.ImportedRnmHeight = data.ImportedRnmHeight;
+        doc.Terrain.ImportedRnmWorldOriginX = data.ImportedRnmWorldOriginX;
+        doc.Terrain.ImportedRnmWorldOriginZ = data.ImportedRnmWorldOriginZ;
+        doc.Terrain.ImportedRnmWorldSpanX = data.ImportedRnmWorldSpanX;
+        doc.Terrain.ImportedRnmWorldSpanZ = data.ImportedRnmWorldSpanZ;
         doc.Scenario.MapShotBgra = PutBlobBytes(blobStore, data.MapShotBgraPixels);
         doc.Scenario.CustomMinimapPng = PutBlobBytes(blobStore, data.CustomMinimapPng);
         doc.Collision2.PreviewMeshBytes = PutBlobBytes(blobStore, data.Collision2PreviewBytes);
@@ -870,6 +877,12 @@ public static class SC2RuntimeTerrainPersistence
         public Vector3 PointCloudBoxOrigin, PointCloudBoxSize;
         public byte[] PointCloudUpDds, PointCloudDownDds;
 
+        // Decal lighting consistency — see SC2RnmBakeService.BakeImportedWorldRnm.
+        public byte[] ImportedRnmBakedRgba = Array.Empty<byte>();
+        public int ImportedRnmWidth, ImportedRnmHeight;
+        public float ImportedRnmWorldOriginX, ImportedRnmWorldOriginZ;
+        public float ImportedRnmWorldSpanX = 1f, ImportedRnmWorldSpanZ = 1f;
+
         // Objects (Objects Editor Plan) — these are plain [Serializable] POCO
         // lists (SC2ObjectsModel.cs) with only JsonUtility-friendly field
         // types (string/float/int/bool/Vector3/Quaternion/List<T>), so unlike
@@ -1056,6 +1069,13 @@ public static class SC2RuntimeTerrainPersistence
         dto.PointCloudBoxSize = data.PointCloudBoxSize;
         dto.PointCloudUpDds = data.PointCloudUpDds ?? Array.Empty<byte>();
         dto.PointCloudDownDds = data.PointCloudDownDds ?? Array.Empty<byte>();
+        dto.ImportedRnmBakedRgba = data.ImportedRnmBakedRgba ?? Array.Empty<byte>();
+        dto.ImportedRnmWidth = data.ImportedRnmWidth;
+        dto.ImportedRnmHeight = data.ImportedRnmHeight;
+        dto.ImportedRnmWorldOriginX = data.ImportedRnmWorldOriginX;
+        dto.ImportedRnmWorldOriginZ = data.ImportedRnmWorldOriginZ;
+        dto.ImportedRnmWorldSpanX = data.ImportedRnmWorldSpanX;
+        dto.ImportedRnmWorldSpanZ = data.ImportedRnmWorldSpanZ;
 
         data.EnsureObjectsLists();
         dto.ObjProps = new List<SC2ObjProp>(data.ObjProps);
@@ -1263,6 +1283,15 @@ public static class SC2RuntimeTerrainPersistence
         }
         data.PointCloudUpDds = dto.PointCloudUpDds is { Length: > 0 } ? dto.PointCloudUpDds : null;
         data.PointCloudDownDds = dto.PointCloudDownDds is { Length: > 0 } ? dto.PointCloudDownDds : null;
+        // Array.Empty<byte>(), not null — matches this field's own "empty = never baked" idiom
+        // (SC2MaterialPair.RnmBakedRgb0's convention), unlike PointCloudUpDds's null-means-absent one.
+        data.ImportedRnmBakedRgba = dto.ImportedRnmBakedRgba ?? Array.Empty<byte>();
+        data.ImportedRnmWidth = dto.ImportedRnmWidth;
+        data.ImportedRnmHeight = dto.ImportedRnmHeight;
+        data.ImportedRnmWorldOriginX = dto.ImportedRnmWorldOriginX;
+        data.ImportedRnmWorldOriginZ = dto.ImportedRnmWorldOriginZ;
+        data.ImportedRnmWorldSpanX = dto.ImportedRnmWorldSpanX;
+        data.ImportedRnmWorldSpanZ = dto.ImportedRnmWorldSpanZ;
 
         data.ObjProps = dto.ObjProps ?? new List<SC2ObjProp>();
         foreach (var prop in data.ObjProps)

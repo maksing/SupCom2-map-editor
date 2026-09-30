@@ -67,6 +67,15 @@ namespace SC2.MapEditor.Document
         public SC2BlobReference PointCloudUp;
         public SC2BlobReference PointCloudDown;
 
+        /// <summary>Decal lighting consistency — see SC2RnmBakeService.BakeImportedWorldRnm's own
+        /// doc comment. Separate from ImportedRnm above (the per-object, mapmaker-controlled masks
+        /// feature) — this is a single, always-on, world-space-sampled bake SC2Decal.shader falls
+        /// back to for a decal sitting on imported terrain with no per-object mask configured.</summary>
+        public SC2BlobReference ImportedRnmBakedRgba;
+        public int ImportedRnmWidth, ImportedRnmHeight;
+        public float ImportedRnmWorldOriginX, ImportedRnmWorldOriginZ;
+        public float ImportedRnmWorldSpanX = 1f, ImportedRnmWorldSpanZ = 1f;
+
         /// <summary>The Lighting Bake tab's own 4 sync toggles + override
         /// values (SC2TerrainData.RnmBakeSync*/RnmBakeOverride*) — had no
         /// document schema home at all, so a save/reload silently reset every

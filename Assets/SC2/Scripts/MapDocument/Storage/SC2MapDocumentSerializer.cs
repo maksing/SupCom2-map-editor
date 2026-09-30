@@ -890,6 +890,13 @@ namespace SC2.MapEditor.Document
             o.Set("pointCloudBoxSize", WriteVector3(t.PointCloudBoxSize));
             o.Set("pointCloudUp", WriteBlobRef(t.PointCloudUp));
             o.Set("pointCloudDown", WriteBlobRef(t.PointCloudDown));
+            o.Set("importedRnmBakedRgba", WriteBlobRef(t.ImportedRnmBakedRgba));
+            o.Set("importedRnmWidth", SC2JsonValue.Of(t.ImportedRnmWidth));
+            o.Set("importedRnmHeight", SC2JsonValue.Of(t.ImportedRnmHeight));
+            o.Set("importedRnmWorldOriginX", SC2JsonValue.Of(t.ImportedRnmWorldOriginX));
+            o.Set("importedRnmWorldOriginZ", SC2JsonValue.Of(t.ImportedRnmWorldOriginZ));
+            o.Set("importedRnmWorldSpanX", SC2JsonValue.Of(t.ImportedRnmWorldSpanX));
+            o.Set("importedRnmWorldSpanZ", SC2JsonValue.Of(t.ImportedRnmWorldSpanZ));
             var simplification = SC2JsonValue.NewObject();
             simplification.Set("enabled", SC2JsonValue.Of(t.Simplification.Enabled));
             o.Set("simplification", simplification);
@@ -958,6 +965,13 @@ namespace SC2.MapEditor.Document
                 PointCloudBoxSize = o.Get("pointCloudBoxSize").Kind == SC2JsonKind.Object ? ReadVector3(o.Get("pointCloudBoxSize")) : Vector3.zero,
                 PointCloudUp = ReadBlobRef(o.Get("pointCloudUp")),
                 PointCloudDown = ReadBlobRef(o.Get("pointCloudDown")),
+                ImportedRnmBakedRgba = ReadBlobRef(o.Get("importedRnmBakedRgba")),
+                ImportedRnmWidth = o.Get("importedRnmWidth").AsInt(0),
+                ImportedRnmHeight = o.Get("importedRnmHeight").AsInt(0),
+                ImportedRnmWorldOriginX = (float)o.Get("importedRnmWorldOriginX").AsDouble(0.0),
+                ImportedRnmWorldOriginZ = (float)o.Get("importedRnmWorldOriginZ").AsDouble(0.0),
+                ImportedRnmWorldSpanX = (float)o.Get("importedRnmWorldSpanX").AsDouble(1.0),
+                ImportedRnmWorldSpanZ = (float)o.Get("importedRnmWorldSpanZ").AsDouble(1.0),
                 IsInitialized = o.Get("isInitialized").AsBool(false),
                 DataVersion = o.Get("dataVersion").AsInt(0),
                 ImportOnlyMode = o.Get("importOnlyMode").AsBool(false),

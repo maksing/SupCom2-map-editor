@@ -88,6 +88,16 @@ namespace SC2.MapEditor.Document
             data.PointCloudBoxSize = document.Terrain.PointCloudBoxSize;
             data.PointCloudUpDds = NullIfEmpty(ReadBytes(blobStore, document.Terrain.PointCloudUp));
             data.PointCloudDownDds = NullIfEmpty(ReadBytes(blobStore, document.Terrain.PointCloudDown));
+            // Array.Empty<byte>(), not NullIfEmpty(...) — matches this field's own "empty = never
+            // baked" idiom (SC2MaterialPair.RnmBakedRgb0's convention), unlike the point-cloud
+            // fields' null-means-absent one just above.
+            data.ImportedRnmBakedRgba = ReadBytes(blobStore, document.Terrain.ImportedRnmBakedRgba) ?? Array.Empty<byte>();
+            data.ImportedRnmWidth = document.Terrain.ImportedRnmWidth;
+            data.ImportedRnmHeight = document.Terrain.ImportedRnmHeight;
+            data.ImportedRnmWorldOriginX = document.Terrain.ImportedRnmWorldOriginX;
+            data.ImportedRnmWorldOriginZ = document.Terrain.ImportedRnmWorldOriginZ;
+            data.ImportedRnmWorldSpanX = document.Terrain.ImportedRnmWorldSpanX;
+            data.ImportedRnmWorldSpanZ = document.Terrain.ImportedRnmWorldSpanZ;
             data.Collision2PreviewBytes = NullIfEmpty(ReadBytes(blobStore, document.Collision2.PreviewMeshBytes));
             data.CustomCollision2Bytes = NullIfEmpty(ReadBytes(blobStore, document.Collision2.CustomMeshBytes));
             data.UseCustomCollision2 = document.Collision2.UseCustomMesh && data.CustomCollision2Bytes != null;

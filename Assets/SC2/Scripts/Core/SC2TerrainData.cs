@@ -528,6 +528,23 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// no equivalent cost before real baked-data sampling existed.</summary>
     [NonSerialized] public int RnmBakeGeneration;
 
+    /// <summary>Baked world-space RGBA texture covering the union of every imported terrain.bdf
+    /// object's world bounds (SC2RnmBakeService.BakeImportedWorldRnm) — RGB is the SAME combined,
+    /// contrast-stretched value SC2TerrainView.shader's own PreviewMode==4 live-terrain preview
+    /// already computes per-pixel at runtime ((m0+m1+m2)*0.5774, then the RNM_CONTRAST stretch); A is
+    /// 255 where a real triangle actually covered that texel (SC2RnmMaskBaker.MaskResult.Covered,
+    /// before gap-fill), 0 elsewhere — SC2Decal.shader's own "is there real baked data here, or fall
+    /// through to plain light" test. Empty means "no imported terrain, or never baked" — same idiom
+    /// as SC2MaterialPair.RnmBakedRgb0's own doc comment.</summary>
+    public byte[] ImportedRnmBakedRgba = Array.Empty<byte>();
+    public int ImportedRnmWidth, ImportedRnmHeight;
+    public float ImportedRnmWorldOriginX, ImportedRnmWorldOriginZ;
+    public float ImportedRnmWorldSpanX = 1f, ImportedRnmWorldSpanZ = 1f;
+
+    /// <summary>Mirrors SC2MaterialPair.HasBakedRnmLighting's own gate.</summary>
+    public bool HasImportedRnmBake =>
+        ImportedRnmBakedRgba.Length == ImportedRnmWidth * ImportedRnmHeight * 4 && ImportedRnmWidth > 0 && ImportedRnmHeight > 0;
+
     [Header("Point cloud (unit lighting)")]
     /// <summary>Lighting Bake > Point Cloud: the sky light colour and its intensity, how much of the baked ground
     /// light a unit picks up from below, how much sky light leaks into the lower hemisphere, the blur growth per
