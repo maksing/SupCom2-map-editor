@@ -603,7 +603,12 @@ public static class SC2RuntimeTerrainPersistence
         return blobStore.Put(new MemoryStream(bytes));
     }
 
-    /// <summary>Deletes a saved terrain's file from disk. Returns false if it didn't exist.</summary>
+    /// <summary>Deletes a saved terrain's file from disk. Returns false if it didn't exist.
+    /// Also removes the matching .sc2mapdoc package and .sc2mapshare folder — leaving the
+    /// latter behind resurrected the just-deleted JSON, since EnsureSharePackagesInstalled
+    /// (run by every ListSavedTerrains call, including the one right after this) reinstalls
+    /// any .sc2mapshare folder whose JSON is missing, treating a leftover share package as
+    /// "not yet installed" rather than "its map was deleted".</summary>
     public static bool Delete(string mapName)
     {
         var path = GetSavePath(mapName);
@@ -611,6 +616,15 @@ public static class SC2RuntimeTerrainPersistence
             return false;
 
         File.Delete(path);
+
+        var docDir = DocumentPackageDirectory(mapName);
+        if (Directory.Exists(docDir))
+            Directory.Delete(docDir, recursive: true);
+
+        var shareDir = SharePackageDirectory(mapName);
+        if (Directory.Exists(shareDir))
+            Directory.Delete(shareDir, recursive: true);
+
         return true;
     }
 
