@@ -423,7 +423,7 @@ public class SC2PairsMode
             }
             if (Data.GlobalUvScaleEnabled)
             {
-                var newGlobalUvScale = SC2TerrainShell.DrawCompactSlider("UV Tile Size (world units)", Data.GlobalUvScale, 0.5f, 50f,
+                var newGlobalUvScale = SC2TerrainShell.DrawCompactSlider("UV Tile Size (world units)", Data.GlobalUvScale, 0.5f, 150f,
                     onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Global UV Scale"));
                 if (!Mathf.Approximately(newGlobalUvScale, Data.GlobalUvScale))
                 {
