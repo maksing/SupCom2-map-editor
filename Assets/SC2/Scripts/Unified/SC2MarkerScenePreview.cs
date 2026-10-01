@@ -54,6 +54,16 @@ public static class SC2MarkerScenePreview
 {
     private const string RootName = "__SC2_MarkerPreviews";
 
+    /// <summary>These gizmo meshes sit at the marker's own stored position
+    /// with no vertical separation from the ground, so a decal projected onto
+    /// the same ground (also flush, see SC2Decal.shader's own Offset bias)
+    /// has essentially zero real depth gap to win or lose against — making the
+    /// decal's coverage of the gizmo come down to a depth-bias coin flip
+    /// instead of a reliable, resolution-independent ZTest. A small genuine
+    /// world-space lift gives the gizmo an unambiguous depth advantage no
+    /// polygon-offset tuning on the decal's side can undo.</summary>
+    private const float GroundLift = 0.15f;
+
     /// <summary>Every marker gizmo except Mass
     /// reads too small next to the terrain at real authored scale - scale
     /// them up 2x in the viewport. Mass is deliberately excluded (its flat
@@ -287,7 +297,7 @@ public static class SC2MarkerScenePreview
     {
         var rotation = Quaternion.Euler(orientationEuler);
         var scale = key == "mass" ? 1f : DefaultGizmoScale;
-        return Matrix4x4.TRS(position, rotation, ZMirrorScale * scale);
+        return Matrix4x4.TRS(position + Vector3.up * GroundLift, rotation, ZMirrorScale * scale);
     }
 
     private static void RemoveInstanced(int id)
@@ -466,6 +476,7 @@ public static class SC2MarkerScenePreview
     /// cost to guard it.)</summary>
     private static void ApplyLegacyTransform(GameObject anchor, string key, Vector3 position, Vector3 orientationEuler)
     {
+        position += Vector3.up * GroundLift;
         var rotation = Quaternion.Euler(orientationEuler);
         var scale = key == "mass" ? 1f : DefaultGizmoScale;
         var targetScale = ZMirrorScale * scale;

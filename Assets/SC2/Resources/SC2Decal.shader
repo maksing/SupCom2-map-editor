@@ -74,9 +74,14 @@ Shader "SC2/Decal"
             Blend One OneMinusSrcAlpha
             ZWrite Off
             Cull Off
-            // Same intent as SC2CostsOverlay's Offset -1,-1: keep decals from
-            // z-fighting with the terrain they're projected onto.
-            Offset -2, -2
+            // Same intent AND same magnitude as SC2CostsOverlay's Offset -1,-1:
+            // keep decals from z-fighting with the terrain they're projected
+            // onto. This was -2,-2 (double CostsOverlay's own bias despite this
+            // comment's claim they match) — strong enough to also win the depth
+            // test against nearby real geometry it has no business beating, e.g.
+            // the base of a marker gizmo mesh sitting close to ground level,
+            // painting over it and making the marker hard to pick out.
+            Offset -1, -1
 
             CGPROGRAM
             #pragma vertex vert

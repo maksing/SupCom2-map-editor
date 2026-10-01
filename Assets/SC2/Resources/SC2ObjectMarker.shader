@@ -34,6 +34,12 @@ Shader "Hidden/SC2/ObjectMarker"
         // default 0 and renders exactly as before.
         _IconTex ("Icon", 2D) = "white" {}
         _UseIcon ("Use Icon", Float) = 0
+        // A dark rim blended in near the diamond's outer edge — without it, a
+        // marker's edge is its own translucent _Color directly against whatever
+        // is underneath, so a bright/saturated decal can wash the edge out to
+        // where the marker is hard to pick out even though it's drawn on top. A
+        // dark outline silhouette stays readable against any background.
+        _OutlineWidth ("Outline Width", Range(0, 0.5)) = 0.18
     }
     SubShader
     {
@@ -74,6 +80,7 @@ Shader "Hidden/SC2/ObjectMarker"
             float _InnerRatio;
             sampler2D _IconTex;
             float _UseIcon;
+            float _OutlineWidth;
 
             v2f vert (appdata v)
             {
@@ -128,10 +135,16 @@ Shader "Hidden/SC2/ObjectMarker"
                 // Diamond shape (matches the 45-degree-rotated square the
                 // IMGUI DrawViewportGlyph drew) via a simple L1-distance
                 // test, with a smaller solid inner diamond for the same
-                // two-tone look.
+                // two-tone look, and a dark outline band fading in just
+                // inside the outer edge (see _OutlineWidth's own comment)
+                // so the silhouette stays readable over any background.
                 float d = abs(i.local.x) + abs(i.local.y);
                 clip(1.0 - d);
-                return d <= _InnerRatio ? _InnerColor : _Color;
+                if (d <= _InnerRatio) return _InnerColor;
+                float outlineStart = 1.0 - _OutlineWidth;
+                if (d > outlineStart)
+                    return lerp(_Color, _InnerColor, saturate((d - outlineStart) / _OutlineWidth));
+                return _Color;
             }
             ENDCG
         }
