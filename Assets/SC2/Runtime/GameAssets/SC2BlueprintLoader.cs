@@ -14,7 +14,7 @@ using CharPtr = KopiLua.Lua.CharPtr;
 /// </summary>
 public static class SC2BlueprintLoader
 {
-    private static readonly object SyncRoot = new object();
+    internal static readonly object SyncRoot = new object();
     private static readonly Dictionary<lua_State, CaptureContext> Captures = new Dictionary<lua_State, CaptureContext>();
 
     public static SC2Blueprint ParseFile(string path)

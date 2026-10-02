@@ -160,6 +160,7 @@ public sealed class SC2ObjectsShell
     private bool _markerTemplatePicking;
     private bool _markerAdvancedExpanded;
     private readonly SC2SoundEventPicker _soundEventPicker = new SC2SoundEventPicker();
+    private readonly SC2EffectMarkerPicker _effectMarkerPicker = new SC2EffectMarkerPicker();
     private string _renamePrefixMarkers = "Marker";
     private string _assignArmyInput = "";
     private string _lastImportSummary;
@@ -1235,18 +1236,24 @@ public sealed class SC2ObjectsShell
         }
     }
 
-    /// <summary>Gives every other member of <paramref name="edited"/>'s live symmetry group the same Sound event
-    /// (an empty event clears it), so mirrored Sound markers always play the same sound.</summary>
-    private void PropagateMarkerEventName(SC2ObjMarker edited)
+    /// <summary>Gives every other member of <paramref name="edited"/>'s live symmetry group the same values for the
+    /// named extra fields (a field the edited marker does not have is removed from them), so mirrored Sound and
+    /// Effect markers always play the same sound / show the same effect.</summary>
+    private void PropagateMarkerFields(SC2ObjMarker edited, params string[] keys)
     {
         var group = FindSymmetryGroup(edited.Id);
         if (group == null) return;
-        var eventName = SC2SoundEventPicker.GetEventName(edited);
         foreach (var member in group.Members)
         {
             if (member.ObjectId == edited.Id) continue;
             var sibling = LookupMarker(member.ObjectId);
-            if (sibling != null) SC2SoundEventPicker.SetEventName(sibling, eventName);
+            if (sibling == null) continue;
+            foreach (var key in keys)
+            {
+                sibling.ExtraFields.RemoveAll(field => string.Equals(field.Key, key, StringComparison.OrdinalIgnoreCase));
+                foreach (var field in edited.ExtraFields)
+                    if (string.Equals(field.Key, key, StringComparison.OrdinalIgnoreCase)) sibling.ExtraFields.Add(field);
+            }
         }
     }
 
@@ -1426,7 +1433,8 @@ public sealed class SC2ObjectsShell
         }
         Data.ObjSymmetryGroups.Add(group);
         // Members that already existed keep their own fields; a Sound event on the canonical marker is shared with them.
-        if (SC2SoundEventPicker.GetEventName(canonical).Length > 0) PropagateMarkerEventName(canonical);
+        if (SC2SoundEventPicker.GetEventName(canonical).Length > 0) PropagateMarkerFields(canonical, "EventName");
+        if (SC2EffectMarkerPicker.GetTemplate(canonical).Length > 0) PropagateMarkerFields(canonical, SC2EffectMarkerPicker.FieldKeys);
         _lastActionSummary = $"Linked {group.Members.Count} marker(s) with live symmetry.";
         MarkObjectsDirty();
     }
@@ -4242,7 +4250,12 @@ public sealed class SC2ObjectsShell
 
         if (string.Equals(m.Type, "Sound", StringComparison.OrdinalIgnoreCase) && _soundEventPicker.Draw(m, w, PushUndo))
         {
-            PropagateMarkerEventName(m);
+            PropagateMarkerFields(m, "EventName");
+            MarkObjectsDirty();
+        }
+        if (string.Equals(m.Type, "Effect", StringComparison.OrdinalIgnoreCase) && _effectMarkerPicker.Draw(m, w, PushUndo))
+        {
+            PropagateMarkerFields(m, SC2EffectMarkerPicker.FieldKeys);
             MarkObjectsDirty();
         }
 
@@ -4268,13 +4281,13 @@ public sealed class SC2ObjectsShell
                 if (f.Key != prevKey || f.RawValue != prevVal)
                 {
                     MarkObjectsDirty();
-                    if (string.Equals(f.Key, "EventName", StringComparison.OrdinalIgnoreCase)) PropagateMarkerEventName(m);
+                    if (IsSharedMarkerField(f.Key) || IsSharedMarkerField(prevKey)) PropagateMarkerFields(m, f.Key, prevKey);
                 }
                 if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
                 {
-                    var removedEventName = string.Equals(f.Key, "EventName", StringComparison.OrdinalIgnoreCase);
+                    var removedSharedKey = f.Key;
                     m.ExtraFields.RemoveAt(i);
-                    if (removedEventName) PropagateMarkerEventName(m);
+                    if (IsSharedMarkerField(removedSharedKey)) PropagateMarkerFields(m, removedSharedKey);
                     MarkObjectsDirty(); GUILayout.EndHorizontal(); break;
                 }
                 GUILayout.EndHorizontal();
@@ -4323,6 +4336,11 @@ public sealed class SC2ObjectsShell
         return true;
     }
 
+    /// <summary>The extra fields a symmetric group of Sound or Effect markers keeps identical across its members.</summary>
+    private static bool IsSharedMarkerField(string key) =>
+        string.Equals(key, "EventName", StringComparison.OrdinalIgnoreCase) ||
+        SC2EffectMarkerPicker.FieldKeys.Any(shared => string.Equals(shared, key, StringComparison.OrdinalIgnoreCase));
+
     private void ApplyMarkerTemplate(SC2ObjMarker m, SC2MarkerTemplates.Template t)
     {
         m.Type = t.Name;
@@ -4332,6 +4350,16 @@ public sealed class SC2ObjectsShell
         // Re-applying the Sound template must not throw away the event the marker already plays.
         var keptEventName = string.Equals(t.Name, "Sound", StringComparison.OrdinalIgnoreCase) ? SC2SoundEventPicker.GetEventName(m) : string.Empty;
         if (keptEventName.Length > 0) extras.Add(new SC2LuaField { Key = "EventName", RawValue = "STRING( '" + keptEventName + "' )" });
+        // An Effect marker always carries all three emitter fields (the game reads EmitterOffset without a nil check),
+        // and re-applying the template keeps the effect it already has.
+        if (string.Equals(t.Name, "Effect", StringComparison.OrdinalIgnoreCase))
+        {
+            var effect = new SC2ObjMarker { ExtraFields = new List<SC2LuaField>(m.ExtraFields) };
+            var keptTemplate = SC2EffectMarkerPicker.GetTemplate(effect);
+            if (keptTemplate.Length > 0) SC2EffectMarkerPicker.SetTemplate(effect, keptTemplate);
+            SC2EffectMarkerPicker.EnsureScaleAndOffset(effect);
+            extras.AddRange(effect.ExtraFields.Where(field => SC2EffectMarkerPicker.FieldKeys.Any(key => string.Equals(key, field.Key, StringComparison.OrdinalIgnoreCase))));
+        }
         if (t.Resource)
         {
             extras.Add(new SC2LuaField { Key = "resource", RawValue = "BOOLEAN( true )" });

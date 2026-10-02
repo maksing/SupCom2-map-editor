@@ -53,7 +53,7 @@ public static class SC2MarkerTemplates
         new() { Name = "Hydrocarbon", Resource = true, Amount = 100f, Size = 3f, Prop = "/props/markers/M_Hydrocarbon_prop.bp", ColorHex = "ff008000", IconKey = "other" },
         new() { Name = "Combat Zone", Hint = true, Prop = "/props/markers/M_CombatZone_prop.bp", ColorHex = "ff800000", IconKey = "combat_zone" },
         new() { Name = "Defensive Point", Hint = true, Prop = "/props/markers/M_Defensive_prop.bp", ColorHex = "ff008000", IconKey = "defensive_point" },
-        new() { Name = "Effect", Hint = true, Prop = "/props/markers/M_Defensive_prop.bp", ColorHex = "ffbffcd0", IconKey = "effect" },
+        new() { Name = "Effect", Prop = "", ColorHex = "ff008000", IconKey = "effect" },
         new() { Name = "Expansion Area", Hint = true, Prop = "/props/markers/M_Expansion_prop.bp", ColorHex = "ff008080", IconKey = "expansion_area" },
         new() { Name = "Large Expansion Area", Hint = true, Prop = "/props/markers/M_Expansion_prop.bp", ColorHex = "ffff0080", IconKey = "large_expansion_area" },
         new() { Name = "Naval Area", Hint = true, Prop = "/props/markers/M_Expansion_prop.bp", ColorHex = "ff0000FF", IconKey = "naval_area" },
