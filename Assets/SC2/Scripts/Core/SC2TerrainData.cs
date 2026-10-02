@@ -365,6 +365,13 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// maximum foam"), so this is a small positive floor rather than 0.</summary>
     public float WaterDepthMinAlpha = 0.04f;
 
+    /// <summary>How many texels of the generated waterDepth texture's land side get a non-zero
+    /// alpha instead of the usual hard 0 cutoff right at the coastline — i.e. how far the
+    /// water-depth pixels extend into the terrain boundary. Applies to the Game View preview
+    /// (on Regenerate Preview) and to the exported .waterDepth.dds. 0 = old hard-cutoff
+    /// behavior.</summary>
+    public float WaterDepthLandBleedTexels = 10f;
+
     /// <summary>When on, forces the outermost ring of texels of the
     /// generated waterDepth texture to read as water (alpha 1, ignoring the
     /// real land/water classification there) — for a water body

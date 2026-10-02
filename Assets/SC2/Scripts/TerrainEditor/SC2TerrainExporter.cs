@@ -1264,7 +1264,14 @@ public static class SC2TerrainExporter
                 infoModel.WaterDepthBoundsSizeX = data.CostsGridSize;
                 infoModel.WaterDepthBoundsSizeY = data.CostsGridSize;
 
-                SC2Log.Log($"[SC2Exporter] waterDepth.dds generated: {wdTexSize}x{wdTexSize}, margin={data.WaterDepthMargin}, falloffPower={data.WaterDepthFalloffPower}.");
+                SC2Log.Log($"[SC2Exporter] waterDepth.dds generated: {wdTexSize}x{wdTexSize}, margin={data.WaterDepthMargin}, falloffPower={data.WaterDepthFalloffPower}, landBleedTexels={data.WaterDepthLandBleedTexels}.");
+
+                // See SC2WaterPreview.InvalidateMaterial's own doc comment — the live Game View
+                // water preview only rebuilds its material (and re-reads this file) when the
+                // legacy InfoModel header bytes change, which this fresh export doesn't touch.
+                // Without this, exporting while the map is still open in the editor left the
+                // preview showing whatever Mask1 texture it loaded before, however stale.
+                SC2WaterPreview.InvalidateMaterial();
             }
             else
             {

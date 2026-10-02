@@ -32,6 +32,7 @@ namespace SC2.MapEditor.Document
             float waterDepthMargin = 64f,
             float waterDepthFalloffPower = 2f,
             float waterDepthMinAlpha = 0.04f,
+            float waterDepthLandBleedTexels = 10f,
             bool waterDepthPaintBorder = true,
             bool waterDepthImageBorderOutline = false,
             string[] textureSourceTags = null,
@@ -71,6 +72,7 @@ namespace SC2.MapEditor.Document
                 WaterDepthMargin = waterDepthMargin,
                 WaterDepthFalloffPower = waterDepthFalloffPower,
                 WaterDepthMinAlpha = waterDepthMinAlpha,
+                WaterDepthLandBleedTexels = waterDepthLandBleedTexels,
                 WaterDepthPaintBorder = waterDepthPaintBorder,
                 WaterDepthImageBorderOutline = waterDepthImageBorderOutline,
             };

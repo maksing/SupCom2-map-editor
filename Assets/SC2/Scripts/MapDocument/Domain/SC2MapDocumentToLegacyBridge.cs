@@ -351,6 +351,7 @@ namespace SC2.MapEditor.Document
             public float WaterDepthMargin = 64f;
             public float WaterDepthFalloffPower = 2f;
             public float WaterDepthMinAlpha = 0.04f;
+            public float WaterDepthLandBleedTexels = 10f;
             public bool WaterDepthPaintBorder = true;
             public bool WaterDepthImageBorderOutline;
         }
@@ -378,6 +379,7 @@ namespace SC2.MapEditor.Document
                 WaterDepthMargin = doc.WaterDepthMargin,
                 WaterDepthFalloffPower = doc.WaterDepthFalloffPower,
                 WaterDepthMinAlpha = doc.WaterDepthMinAlpha,
+                WaterDepthLandBleedTexels = doc.WaterDepthLandBleedTexels,
                 WaterDepthPaintBorder = doc.WaterDepthPaintBorder,
                 WaterDepthImageBorderOutline = doc.WaterDepthImageBorderOutline,
             };

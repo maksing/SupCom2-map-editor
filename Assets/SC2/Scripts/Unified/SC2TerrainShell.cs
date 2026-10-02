@@ -1383,6 +1383,16 @@ public class SC2TerrainShell : ScriptableObject
             MarkDirtyAndRepaint();
         }
 
+        var nextLandBleed = DrawCompactSlider("Land Bleed (texels)", _data.WaterDepthLandBleedTexels, 0f, 50f,
+            onValueChangeStart: () => RecordUndoCheckpoint("Change Water Depth Land Bleed"));
+        if (!Mathf.Approximately(nextLandBleed, _data.WaterDepthLandBleedTexels))
+        {
+            _data.WaterDepthLandBleedTexels = nextLandBleed;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote("How many texels the water-depth pixels extend into the terrain boundary (land texels near the shore keep a non-zero alpha instead of a hard cutoff). Applies to the Game View on Regenerate Preview, and to the exported texture. 0 = hard cutoff.");
+
         var nextBorder = EditorGUILayout.Toggle("Paint Water At Image Border", _data.WaterDepthPaintBorder);
         if (nextBorder != _data.WaterDepthPaintBorder)
         {
@@ -1403,6 +1413,10 @@ public class SC2TerrainShell : ScriptableObject
         }
         DrawUnifiedNote("Paints a hard 1-pixel ring of solid, fully-opaque water color around the texture's own outer edge — a visible frame around the whole texture, applied last so it always wins over the other options above.");
 
+        // Ends here, not after Regenerate Preview below — the button used to sit inside this
+        // group, making it unclickable whenever Auto-Generate was off.
+        EditorGUI.EndDisabledGroup();
+
         EditorGUILayout.Space(4);
         if (GUILayout.Button("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(22f))))
             RegenerateWaterDepthPreview();
@@ -1414,7 +1428,6 @@ public class SC2TerrainShell : ScriptableObject
             GUI.DrawTexture(rect, _waterDepthPreviewTex, ScaleMode.ScaleToFit, true);
         }
 
-        EditorGUI.EndDisabledGroup();
         EndUnifiedPanelBox();
     }
 
@@ -1423,8 +1436,15 @@ public class SC2TerrainShell : ScriptableObject
         DestroyWaterDepthPreview();
         var info = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true);
         var waterColor = new Color(info.WaterColorR, info.WaterColorG, info.WaterColorB, 1f);
-        _waterDepthPreviewTex = SC2WaterDepthTextureGenerator.GeneratePreviewTexture(
-            _data, SampleLiveHeightGrid, info.WaterElevation, waterColor);
+        SC2WaterDepthTextureGenerator.Generate(_data, SampleLiveHeightGrid, info.WaterElevation, waterColor,
+            out var rgb, out var alpha, out var texSize);
+        _waterDepthPreviewTex = SC2WaterDepthTextureGenerator.BuildPreviewTexture(rgb, alpha, texSize);
+
+        // The live Game View water uses this same generated data directly (see
+        // SC2WaterPreview.SetGeneratedMask) rather than waiting for an Export to write the
+        // .waterDepth.dds file its material would otherwise load.
+        SC2WaterPreview.SetGeneratedMask(SC2WaterDepthTextureGenerator.BuildMaskTexture(rgb, alpha, texSize));
+
         MarkDirtyAndRepaint();
     }
 

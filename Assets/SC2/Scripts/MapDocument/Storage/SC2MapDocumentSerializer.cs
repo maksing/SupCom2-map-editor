@@ -297,6 +297,7 @@ namespace SC2.MapEditor.Document
             o.Set("waterDepthMargin", SC2JsonValue.Of(e.WaterDepthMargin));
             o.Set("waterDepthFalloffPower", SC2JsonValue.Of(e.WaterDepthFalloffPower));
             o.Set("waterDepthMinAlpha", SC2JsonValue.Of(e.WaterDepthMinAlpha));
+            o.Set("waterDepthLandBleedTexels", SC2JsonValue.Of(e.WaterDepthLandBleedTexels));
             o.Set("waterDepthPaintBorder", SC2JsonValue.Of(e.WaterDepthPaintBorder));
             o.Set("waterDepthImageBorderOutline", SC2JsonValue.Of(e.WaterDepthImageBorderOutline));
             var unknowns = SC2JsonValue.NewArray();
@@ -329,6 +330,7 @@ namespace SC2.MapEditor.Document
                 WaterDepthMargin = (float)o.Get("waterDepthMargin").AsDouble(64f),
                 WaterDepthFalloffPower = (float)o.Get("waterDepthFalloffPower").AsDouble(2f),
                 WaterDepthMinAlpha = (float)o.Get("waterDepthMinAlpha").AsDouble(0.04f),
+                WaterDepthLandBleedTexels = (float)o.Get("waterDepthLandBleedTexels").AsDouble(10.0),
                 WaterDepthPaintBorder = o.Get("waterDepthPaintBorder").AsBool(true),
                 WaterDepthImageBorderOutline = o.Get("waterDepthImageBorderOutline").AsBool(false),
             };

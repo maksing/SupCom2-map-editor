@@ -140,12 +140,28 @@ public static class SC2WaterDepthTextureGenerator
         var gridSize = Mathf.Max(1, data.CostsGridSize);
 
         var isWater = ClassifyWater(data, sampleHeight, waterElevation, texSize, gridSize);
-        var distTexels = DistanceToShoreTexels(isWater, texSize);
 
         var worldPerTexel = (float)gridSize / texSize;
         var margin = Mathf.Max(0.01f, data.WaterDepthMargin);
         var falloffPower = Mathf.Max(0.01f, data.WaterDepthFalloffPower);
         var minAlpha = Mathf.Clamp01(data.WaterDepthMinAlpha);
+        var landBleedTexels = Mathf.Max(0f, data.WaterDepthLandBleedTexels);
+
+        // The shoreline is pushed out onto the land by landBleedTexels: every land texel within
+        // that distance of the real water is treated as water, and everything below (shore
+        // distance, alpha curve) is computed from that extended boundary with one formula —
+        // there is no separate land-side alpha. Only built when the bleed is enabled, since it
+        // costs an extra chamfer pass.
+        if (landBleedTexels > 0f)
+        {
+            var isLand = new bool[isWater.Length];
+            for (var i = 0; i < isWater.Length; i++) isLand[i] = !isWater[i];
+            var distToWaterTexels = DistanceToShoreTexels(isLand, texSize);
+            for (var i = 0; i < isWater.Length; i++)
+                if (!isWater[i] && distToWaterTexels[i] <= landBleedTexels) isWater[i] = true;
+        }
+
+        var distTexels = DistanceToShoreTexels(isWater, texSize);
 
         var texelCount = texSize * texSize;
         rgb = new byte[texelCount * 3];
@@ -204,14 +220,54 @@ public static class SC2WaterDepthTextureGenerator
         }
     }
 
-    /// <summary>Convenience wrapper for the Water tab's live preview —
-    /// builds a real Texture2D (RGBA32) from Generate's raw byte arrays so
-    /// the UI can just GUI.DrawTexture it, no DDS round-trip needed for an
-    /// in-editor look.</summary>
-    public static Texture2D GeneratePreviewTexture(SC2TerrainData data, Func<float, float, float> sampleHeight,
-        float waterElevation, Color waterColor)
+    // Mirrors SC2Water.shader's own shoreColor formula exactly (that shader's
+    // own FoamFalloffPower comment: alpha just above 0 -> strongest foam,
+    // alpha 1 -> no foam) — a raw alpha-blended preview showed a low-alpha
+    // "strong foam" shore/land texel as nearly transparent instead of the
+    // bright foam it actually renders as in the real water material, making
+    // the shore bleed (and changes to its width) look like nothing was
+    // happening even though the generated alpha data was correct.
+    private const float FoamPreviewFalloffPower = 16f;
+    private static readonly Color32 FoamPreviewColor = new(235, 245, 250, 255);
+
+    /// <summary>The texture SC2Water.shader's _Mask1Tex actually samples for the live 3D preview,
+    /// built straight from Generate's raw byte arrays instead of reading the exported
+    /// .waterDepth.dds back off disk — so a change to any water-depth setting (Land Bleed
+    /// included) shows up in the Game View on Regenerate Preview, without needing an Export
+    /// first. Rows are written bottom-up (world z=0 in the LAST row): the exported DDS puts z=0 in
+    /// its first row and the loader flips DDS rows into Unity's bottom-up layout, which is what
+    /// SC2Water.shader's explicit `depthSample.y = 1 - y` is written against.</summary>
+    public static Texture2D BuildMaskTexture(byte[] rgb, byte[] alpha, int texSize)
     {
-        Generate(data, sampleHeight, waterElevation, waterColor, out var rgb, out var alpha, out var texSize);
+        var tex = new Texture2D(texSize, texSize, TextureFormat.RGBA32, false, true)
+        {
+            name = "WaterDepthLiveMask",
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear,
+            hideFlags = HideFlags.HideAndDontSave,
+        };
+        var pixels = new Color32[texSize * texSize];
+        for (var z = 0; z < texSize; z++)
+        for (var x = 0; x < texSize; x++)
+        {
+            var src = z * texSize + x;
+            pixels[(texSize - 1 - z) * texSize + x] = new Color32(rgb[src * 3], rgb[src * 3 + 1], rgb[src * 3 + 2], alpha[src]);
+        }
+        tex.SetPixels32(pixels);
+        tex.Apply(false, false);
+        return tex;
+    }
+
+    /// <summary>The Water tab's flat 2D preview image, built from Generate's raw byte arrays so
+    /// the UI can just GUI.DrawTexture it. Approximates SC2Water.shader's own foam-vs-water-color
+    /// blend (see FoamPreviewFalloffPower's own comment) instead of just
+    /// alpha-blending the raw generated alpha channel, so this preview
+    /// actually looks like the water the real material will render — alpha 0
+    /// (land) stays fully transparent; any alpha above 0 renders solid,
+    /// blending from foam-white (low alpha, right at the shore) to the flat
+    /// water color (alpha 1, open water).</summary>
+    public static Texture2D BuildPreviewTexture(byte[] rgb, byte[] alpha, int texSize)
+    {
         var tex = new Texture2D(texSize, texSize, TextureFormat.RGBA32, false, false)
         {
             name = "WaterDepthPreview",
@@ -221,7 +277,13 @@ public static class SC2WaterDepthTextureGenerator
         };
         var pixels = new Color32[texSize * texSize];
         for (var i = 0; i < pixels.Length; i++)
-            pixels[i] = new Color32(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2], alpha[i]);
+        {
+            if (alpha[i] == 0) { pixels[i] = new Color32(0, 0, 0, 0); continue; }
+            var a = alpha[i] / 255f;
+            var foamIntensity = Mathf.Pow(Mathf.Clamp01(1f - a), FoamPreviewFalloffPower);
+            var waterCol = new Color32(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2], 255);
+            pixels[i] = Color32.Lerp(waterCol, FoamPreviewColor, foamIntensity);
+        }
         tex.SetPixels32(pixels);
         tex.Apply(false, false);
         return tex;

@@ -31,6 +31,7 @@ namespace SC2.MapEditor.Document
                 data.WaterDepthMargin,
                 data.WaterDepthFalloffPower,
                 data.WaterDepthMinAlpha,
+                data.WaterDepthLandBleedTexels,
                 data.WaterDepthPaintBorder,
                 data.WaterDepthImageBorderOutline,
                 data.EnvironmentTextureSourceTags,

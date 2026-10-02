@@ -252,6 +252,8 @@ public static class SC2WaterPreview
     private static Mesh _mesh;
     private static Material _material;
     private static byte[] _lastHeaderSnapshot;
+    private static Texture2D _generatedMask;
+    private static bool _generatedMaskApplied;
 
     /// <summary>Diagnostic: logs only on a real state transition
     /// (not every tick — compared against this each call), so it stays
@@ -311,6 +313,22 @@ public static class SC2WaterPreview
         }
 
         var info = SC2TerrainExporter.BuildInfoModel(data, session, quiet: true);
+        // Mirrors SC2TerrainExporter's own export-time auto-fill exactly (see its
+        // "auto-fill it here rather than leaving WaterDepthOriginX/Y/BoundsSizeX/Y..."
+        // comment) — without this, a REAL/vanilla map's own authored WaterDepthOriginX/Y/
+        // BoundsSizeX/Y (a small rect around its actual lake, in the real game's own
+        // convention) stays on `info` here, while SC2WaterDepthTextureGenerator.Generate
+        // always rasterizes the WHOLE map in the [0, CostsGridSize] convention. The live
+        // preview's _WaterDepthArea would project the mask through that mismatched small
+        // rect. Only applied when WaterDepthAutoGenerate is on, matching the exporter's own
+        // gate exactly.
+        if (data.WaterDepthAutoGenerate)
+        {
+            info.WaterDepthOriginX = 0f;
+            info.WaterDepthOriginY = 0f;
+            info.WaterDepthBoundsSizeX = data.CostsGridSize;
+            info.WaterDepthBoundsSizeY = data.CostsGridSize;
+        }
         if (info.WaterEnabled == 0)
         {
             SC2WaterRenderController.DisableForActiveCamera();
@@ -381,6 +399,15 @@ public static class SC2WaterPreview
         // one every time - ApplyTo updates the existing material's
         // properties in place, which is cheap and log-free by construction
         // (plain SetTexture/SetColor/SetVector calls).
+        var useGeneratedMask = data.WaterDepthAutoGenerate && _generatedMask != null;
+        if (useGeneratedMask != _generatedMaskApplied)
+        {
+            // Force a rebuild so Mask1 is re-resolved from disk once the generated override goes
+            // away (Auto-Generate turned off), instead of keeping the last generated texture.
+            _generatedMaskApplied = useGeneratedMask;
+            _lastHeaderSnapshot = null;
+        }
+
         if (_material == null || !HeaderUnchanged(info))
         {
             // Build the same Vertices+Layer+Material triple the real export
@@ -398,6 +425,15 @@ public static class SC2WaterPreview
             else
                 SC2WaterMaterialFactory.ApplyTo(_material, syntheticModel, info);
             _lastHeaderSnapshot = (byte[])info.Header.Clone();
+        }
+
+        // Every call, not only inside the rebuild branch above: ApplyTo re-resolves Mask1 from
+        // the .waterDepth.dds path each time it runs, and SetGeneratedMask can swap the texture
+        // without any header change to trigger that branch at all.
+        if (useGeneratedMask)
+        {
+            _material.SetTexture("_Mask1Tex", _generatedMask);
+            _material.SetFloat("_HasMask1Tex", 1f);
         }
 
         // See the long comment above _go's recreation block: this must run
@@ -489,4 +525,23 @@ public static class SC2WaterPreview
         if (_material != null) { UnityEngine.Object.DestroyImmediate(_material); _material = null; }
         _lastHeaderSnapshot = null;
     }
+
+    /// <summary>Hands the live preview the water-depth mask Generate just produced (see
+    /// SC2WaterDepthTextureGenerator.BuildMaskTexture), used in place of whatever
+    /// .waterDepth.dds the material would resolve from disk — only while Auto-Generate is on.
+    /// Takes ownership of the texture and destroys the previous one.</summary>
+    public static void SetGeneratedMask(Texture2D mask)
+    {
+        if (_generatedMask != null) UnityEngine.Object.DestroyImmediate(_generatedMask);
+        _generatedMask = mask;
+    }
+
+    /// <summary>Forces the next Ensure() call to rebuild the material (and re-read whatever
+    /// waterDepth.dds currently sits on disk) regardless of HeaderUnchanged's own comparison.
+    /// HeaderUnchanged only tracks the legacy InfoModel.Header bytes (WaterElevation/WaterColor/
+    /// etc.) — it has no way to notice the waterDepth.dds FILE itself changing, whether from a
+    /// fresh Export or from fields that live outside that header (e.g. WaterDepthLandBleedTexels).
+    /// Without this, a Regenerate/Export left this live Game View preview showing a stale
+    /// texture reference until something ELSE happened to touch the header.</summary>
+    public static void InvalidateMaterial() => _lastHeaderSnapshot = null;
 }

@@ -67,6 +67,7 @@ public sealed class SC2TerrainUndoStack
         public float WaterDepthMargin;
         public float WaterDepthFalloffPower;
         public float WaterDepthMinAlpha;
+        public float WaterDepthLandBleedTexels;
         public bool WaterDepthPaintBorder;
         public bool WaterDepthImageBorderOutline;
         public string PlayableAreaName;
@@ -259,6 +260,7 @@ public sealed class SC2TerrainUndoStack
             WaterDepthMargin = data.WaterDepthMargin,
             WaterDepthFalloffPower = data.WaterDepthFalloffPower,
             WaterDepthMinAlpha = data.WaterDepthMinAlpha,
+            WaterDepthLandBleedTexels = data.WaterDepthLandBleedTexels,
             WaterDepthPaintBorder = data.WaterDepthPaintBorder,
             WaterDepthImageBorderOutline = data.WaterDepthImageBorderOutline,
             PlayableAreaName = data.PlayableAreaName,
@@ -309,6 +311,7 @@ public sealed class SC2TerrainUndoStack
         data.WaterDepthMargin = snapshot.WaterDepthMargin;
         data.WaterDepthFalloffPower = snapshot.WaterDepthFalloffPower;
         data.WaterDepthMinAlpha = snapshot.WaterDepthMinAlpha;
+        data.WaterDepthLandBleedTexels = snapshot.WaterDepthLandBleedTexels;
         data.WaterDepthPaintBorder = snapshot.WaterDepthPaintBorder;
         data.WaterDepthImageBorderOutline = snapshot.WaterDepthImageBorderOutline;
         data.PlayableAreaName = snapshot.PlayableAreaName;

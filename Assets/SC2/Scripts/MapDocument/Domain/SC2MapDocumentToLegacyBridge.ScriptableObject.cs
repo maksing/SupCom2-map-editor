@@ -128,6 +128,7 @@ namespace SC2.MapEditor.Document
             data.WaterDepthMargin = env.WaterDepthMargin;
             data.WaterDepthFalloffPower = env.WaterDepthFalloffPower;
             data.WaterDepthMinAlpha = env.WaterDepthMinAlpha;
+            data.WaterDepthLandBleedTexels = env.WaterDepthLandBleedTexels;
             data.WaterDepthPaintBorder = env.WaterDepthPaintBorder;
             data.WaterDepthImageBorderOutline = env.WaterDepthImageBorderOutline;
 
