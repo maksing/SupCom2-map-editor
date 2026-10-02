@@ -14,7 +14,7 @@ public static class SC2TextureBrowser
     private const float DetailsWidth = 230f;
     private const float CellWidth = 118f;
     private const float CellHeight = 142f;
-    private static readonly SC2TextureThumbnailCache Cache = new(96);
+    private static readonly SC2TextureThumbnailCache Cache = new(192);
     /// <summary>DrawPreview's Texture2D branch (material-slot picker boxes,
     /// e.g. "left panel" Diffuse1/RNM Mask 0-2) has no SC2TextureCatalogEntry
     /// to key Cache off — it draws mat.GetTexture(...) directly. Same
@@ -94,6 +94,19 @@ public static class SC2TextureBrowser
     // so the user sees the actual thumbnail instead of just a name.
     private static readonly List<(SC2TextureUsage Usage, SC2TextureCatalogEntry Entry)> _siblingSuggestions = new();
     private static Vector2 _gridScroll;
+
+    // Thumbnails that must be decoded from a file or archive are held back while the grid is
+    // scrolling (and briefly after), limited to a couple per repaint, and only started for cards
+    // inside the viewport — loading every card of every newly exposed row in one frame is what made
+    // scrolling stutter.
+    private const double GridScrollSettleSeconds = 0.04;
+    private const double HeavyThumbnailLoadBudgetSeconds = 0.010;
+    private const int DiskThumbnailLoadsPerRepaint = 12;
+    private static float _lastGridScrollY;
+    private static double _lastGridScrollChangeTime;
+    private static double _heavyThumbnailTimeThisRepaint;
+    private static int _diskThumbnailLoadsThisRepaint;
+    private static Texture2D _checkerTexture;
     // Widened from Texture2D: a cubemap/volume catalog entry's real picked
     // asset is a Cubemap/Texture3D (see Accept()) — all IS-A Texture.
     private static Texture _pendingTexture;
@@ -432,7 +445,23 @@ public static class SC2TextureBrowser
         var range = SC2TextureVirtualGrid.Calculate(_results.Count, columns * cellWidth + 0.01f, _gridScroll.y, rect.height, cellWidth, cellHeight, 1);
         var content = new Rect(0f, 0f, layoutWidth, Mathf.Max(rect.height, range.TotalHeight));
         _gridScroll = GUI.BeginScrollView(rect, _gridScroll, content, false, true);
+        var now = Time.realtimeSinceStartupAsDouble;
+        if (!Mathf.Approximately(_gridScroll.y, _lastGridScrollY))
+        {
+            _lastGridScrollY = _gridScroll.y;
+            _lastGridScrollChangeTime = now;
+        }
+        var scrollSettled = now - _lastGridScrollChangeTime > GridScrollSettleSeconds;
+        if (Event.current.type == EventType.Repaint)
+        {
+            _heavyThumbnailTimeThisRepaint = 0d;
+            _diskThumbnailLoadsThisRepaint = 0;
+        }
         var entries = SC2TextureCatalog.Instance.Entries;
+        // Cards inside the viewport are drawn (and their thumbnails loaded) first, then the
+        // overscan rows around them: the loads left over in the frame's budget warm those up, so
+        // the next rows are usually already there by the time they scroll into view.
+        for (var pass = 0; pass < 2; pass++)
         for (var visible = range.FirstIndex; visible < range.LastIndexExclusive; visible++)
         {
             var catalogIndex = _results[visible];
@@ -440,7 +469,12 @@ public static class SC2TextureBrowser
             var entry = entries[catalogIndex];
             var column = visible % range.Columns;
             var row = visible / range.Columns;
-            DrawCard(new Rect(column * cellWidth + 6f, row * cellHeight + 6f, cellWidth - 10f, cellHeight - 10f), entry);
+            var inViewport = (row + 1) * cellHeight > _gridScroll.y && row * cellHeight < _gridScroll.y + rect.height;
+            if (inViewport != (pass == 0)) continue;
+            var isRepaint = Event.current.type == EventType.Repaint;
+            var allowHeavyLoad = scrollSettled && _heavyThumbnailTimeThisRepaint < HeavyThumbnailLoadBudgetSeconds && isRepaint;
+            var allowDiskLoad = _diskThumbnailLoadsThisRepaint < DiskThumbnailLoadsPerRepaint && isRepaint;
+            DrawCard(new Rect(column * cellWidth + 6f, row * cellHeight + 6f, cellWidth - 10f, cellHeight - 10f), entry, allowHeavyLoad, allowDiskLoad);
         }
         GUI.EndScrollView();
     }
@@ -453,7 +487,7 @@ public static class SC2TextureBrowser
         return false;
     }
 
-    private static void DrawCard(Rect rect, SC2TextureCatalogEntry entry)
+    private static void DrawCard(Rect rect, SC2TextureCatalogEntry entry, bool allowHeavyLoad, bool allowDiskLoad)
     {
         var selected = entry.Id == _selectedId;
         var isSuggested = TryGetSuggestionUsage(entry.Id, out var suggestionUsage);
@@ -461,9 +495,14 @@ public static class SC2TextureBrowser
         DrawBorder(rect, selected ? new Color(0.36f, 0.65f, 1f, 1f) : isSuggested ? new Color(0.95f, 0.65f, 0.15f, 1f) : new Color(0.20f, 0.22f, 0.27f, 1f));
         var preview = new Rect(rect.x + 7f, rect.y + 7f, rect.width - 14f, rect.width - 14f);
         DrawChecker(preview);
-        var texture = Cache.Get(entry);
+        var heavyLoadsBefore = Cache.HeavyLoadCount;
+        var diskLoadsBefore = Cache.DiskLoadCount;
+        var started = Time.realtimeSinceStartupAsDouble;
+        var texture = Cache.Get(entry, allowHeavyLoad, allowDiskLoad);
+        if (Cache.HeavyLoadCount != heavyLoadsBefore) _heavyThumbnailTimeThisRepaint += Time.realtimeSinceStartupAsDouble - started;
+        if (Cache.DiskLoadCount != diskLoadsBefore) _diskThumbnailLoadsThisRepaint++;
         if (texture != null) DrawEntryTexture(preview, entry, texture);
-        else GUI.Label(preview, "not loaded", CenterMini());
+        else GUI.Label(preview, Cache.HasFailed(entry) ? "not loaded" : "loading...", CenterMini());
         GUI.Label(new Rect(rect.x + 5f, preview.yMax + 4f, rect.width - 10f, 18f), entry.Name, CenterMini());
         GUI.Label(new Rect(rect.x + 5f, preview.yMax + 20f, rect.width - 10f, 16f), entry.Category, CenterDim());
         // Inset into the thumbnail's own top-right corner by the same margin
@@ -1063,7 +1102,31 @@ public static class SC2TextureBrowser
         _channelMaterial.SetFloat("_Channel", _channel);
         Graphics.DrawTexture(rect, texture, FlippedSourceRect, 0, 0, 0, 0, _channelMaterial);
     }
-    private static void DrawChecker(Rect rect) { DrawRect(rect, new Color(0.12f, 0.13f, 0.15f, 1f)); const float s=12f; for(float y=rect.y;y<rect.yMax;y+=s) for(float x=rect.x;x<rect.xMax;x+=s) if((((int)((x-rect.x)/s)+(int)((y-rect.y)/s))&1)==0) DrawRect(new Rect(x,y,Mathf.Min(s,rect.xMax-x),Mathf.Min(s,rect.yMax-y)),new Color(0.17f,0.18f,0.21f,1f)); }
+    /// <summary>One tiled-texture draw instead of a rect per 12px square: with a card per grid cell
+    /// the per-square version issued a couple of thousand draws every repaint.</summary>
+    private static void DrawChecker(Rect rect)
+    {
+        const int square = 12;
+        if (_checkerTexture == null)
+        {
+            var dark = new Color32(31, 33, 38, 255);
+            var light = new Color32(43, 46, 54, 255);
+            var pixels = new Color32[square * 2 * square * 2];
+            for (var y = 0; y < square * 2; y++)
+            for (var x = 0; x < square * 2; x++)
+                pixels[y * square * 2 + x] = ((x / square + y / square) & 1) == 0 ? light : dark;
+            _checkerTexture = new Texture2D(square * 2, square * 2, TextureFormat.RGBA32, false)
+            {
+                name = "SC2TextureBrowserChecker",
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Repeat,
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            _checkerTexture.SetPixels32(pixels);
+            _checkerTexture.Apply(false, true);
+        }
+        GUI.DrawTextureWithTexCoords(rect, _checkerTexture, new Rect(0f, 0f, rect.width / (square * 2f), rect.height / (square * 2f)), false);
+    }
     private static void DrawBorder(Rect r, Color c) { DrawRect(new Rect(r.x,r.y,r.width,1),c); DrawRect(new Rect(r.x,r.yMax-1,r.width,1),c); DrawRect(new Rect(r.x,r.y,1,r.height),c); DrawRect(new Rect(r.xMax-1,r.y,1,r.height),c); }
     private static void DrawRect(Rect rect, Color color) { var old=GUI.color; GUI.color=color; GUI.DrawTexture(rect,Texture2D.whiteTexture); GUI.color=old; }
     private static void EnsureStyles()
