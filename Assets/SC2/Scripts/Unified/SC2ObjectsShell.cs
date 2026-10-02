@@ -159,6 +159,7 @@ public sealed class SC2ObjectsShell
     private Vector2 _scrollA, _scrollB, _scrollC;
     private bool _markerTemplatePicking;
     private bool _markerAdvancedExpanded;
+    private readonly SC2SoundEventPicker _soundEventPicker = new SC2SoundEventPicker();
     private string _renamePrefixMarkers = "Marker";
     private string _assignArmyInput = "";
     private string _lastImportSummary;
@@ -1234,6 +1235,21 @@ public sealed class SC2ObjectsShell
         }
     }
 
+    /// <summary>Gives every other member of <paramref name="edited"/>'s live symmetry group the same Sound event
+    /// (an empty event clears it), so mirrored Sound markers always play the same sound.</summary>
+    private void PropagateMarkerEventName(SC2ObjMarker edited)
+    {
+        var group = FindSymmetryGroup(edited.Id);
+        if (group == null) return;
+        var eventName = SC2SoundEventPicker.GetEventName(edited);
+        foreach (var member in group.Members)
+        {
+            if (member.ObjectId == edited.Id) continue;
+            var sibling = LookupMarker(member.ObjectId);
+            if (sibling != null) SC2SoundEventPicker.SetEventName(sibling, eventName);
+        }
+    }
+
     private void SetPropPosition(SC2ObjProp p, Vector3 newPos)
     {
         p.Position = newPos;
@@ -1409,6 +1425,8 @@ public sealed class SC2ObjectsShell
             group.Members.Add(new SC2ObjSymmetryMember { ObjectId = member.Id, SlotIndex = slot });
         }
         Data.ObjSymmetryGroups.Add(group);
+        // Members that already existed keep their own fields; a Sound event on the canonical marker is shared with them.
+        if (SC2SoundEventPicker.GetEventName(canonical).Length > 0) PropagateMarkerEventName(canonical);
         _lastActionSummary = $"Linked {group.Members.Count} marker(s) with live symmetry.";
         MarkObjectsDirty();
     }
@@ -4222,6 +4240,12 @@ public sealed class SC2ObjectsShell
         if (!string.Equals(m.Prop, editedMarkerProp, StringComparison.Ordinal))
             { if (TrySetMarkerPlacementKind(m, m.Type, editedMarkerProp)) MarkObjectsDirty(); }
 
+        if (string.Equals(m.Type, "Sound", StringComparison.OrdinalIgnoreCase) && _soundEventPicker.Draw(m, w, PushUndo))
+        {
+            PropagateMarkerEventName(m);
+            MarkObjectsDirty();
+        }
+
         SC2EnvFieldGui.SectionLabel("Export destination");
         var isArmyPos = ArmyPositionRe.IsMatch(m.Name);
         GUILayout.Label($"mapobjs.bdf: {(isArmyPos ? "no (start-position marker)" : "yes")}");
@@ -4241,8 +4265,18 @@ public sealed class SC2ObjectsShell
                 f.Key = SC2EnvFieldGui.TextField("Key", f.Key, "mki_ek_" + i);
                 f.RawValue = SC2EnvFieldGui.TextField("Value", f.RawValue, "mki_ev_" + i);
                 m.ExtraFields[i] = f;
-                if (f.Key != prevKey || f.RawValue != prevVal) MarkObjectsDirty();
-                if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f)))) { m.ExtraFields.RemoveAt(i); MarkObjectsDirty(); GUILayout.EndHorizontal(); break; }
+                if (f.Key != prevKey || f.RawValue != prevVal)
+                {
+                    MarkObjectsDirty();
+                    if (string.Equals(f.Key, "EventName", StringComparison.OrdinalIgnoreCase)) PropagateMarkerEventName(m);
+                }
+                if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
+                {
+                    var removedEventName = string.Equals(f.Key, "EventName", StringComparison.OrdinalIgnoreCase);
+                    m.ExtraFields.RemoveAt(i);
+                    if (removedEventName) PropagateMarkerEventName(m);
+                    MarkObjectsDirty(); GUILayout.EndHorizontal(); break;
+                }
                 GUILayout.EndHorizontal();
             }
             if (SC2EnvFieldGui.Button("Add raw field", GUILayout.Height(SC2UiScale.Pxf(18f))))
@@ -4295,6 +4329,9 @@ public sealed class SC2ObjectsShell
         m.Prop = t.Prop;
         m.ColorHex = t.ColorHex;
         var extras = new List<SC2LuaField>();
+        // Re-applying the Sound template must not throw away the event the marker already plays.
+        var keptEventName = string.Equals(t.Name, "Sound", StringComparison.OrdinalIgnoreCase) ? SC2SoundEventPicker.GetEventName(m) : string.Empty;
+        if (keptEventName.Length > 0) extras.Add(new SC2LuaField { Key = "EventName", RawValue = "STRING( '" + keptEventName + "' )" });
         if (t.Resource)
         {
             extras.Add(new SC2LuaField { Key = "resource", RawValue = "BOOLEAN( true )" });
