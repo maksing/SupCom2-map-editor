@@ -599,7 +599,21 @@ public sealed class SC2UnitPropBrowser
 
     private static string AssetIdentity(SC2GameAssetDiscoveryEntry entry)
     {
-        return (entry.Asset.Kind ?? "Blueprint") + ":" + entry.Asset.Id;
+        string kind = entry.Asset.Kind ?? "Blueprint";
+        // Prop blueprint ids repeat across folders (props/Debris/UEF/Debris_02 vs
+        // props/Debris/Cybran/Debris_02), so the id alone would merge unrelated props into one
+        // card. A prop is identified by its path inside props/; the only duplicates to collapse
+        // are the same prop shipped again under mods/<mod>/base|shadow/.
+        if (string.Equals(kind, "PropBlueprint", StringComparison.OrdinalIgnoreCase))
+        {
+            string source = (entry.Asset.SourcePath ?? string.Empty).Replace('\\', '/');
+            int propsStart = source.StartsWith("props/", StringComparison.OrdinalIgnoreCase)
+                ? 0
+                : source.IndexOf("/props/", StringComparison.OrdinalIgnoreCase) + 1;
+            if (propsStart > 0 || source.StartsWith("props/", StringComparison.OrdinalIgnoreCase))
+                return kind + ":" + source.Substring(propsStart);
+        }
+        return kind + ":" + entry.Asset.Id;
     }
 
     private static SC2GameAssetDiscoveryEntry SelectPreferredEntry(IEnumerable<SC2GameAssetDiscoveryEntry> entries)
