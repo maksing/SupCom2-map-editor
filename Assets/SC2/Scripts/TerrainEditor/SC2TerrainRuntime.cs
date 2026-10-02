@@ -8,7 +8,7 @@ using UnityEngine.Rendering;
 /// Heights stored as float[] on CPU → uploaded to chunk meshes on demand.
 /// PairMapRT and BlendRT still GPU-resident (fast brush paint).
 /// </summary>
-public class SC2TerrainRuntime : IDisposable
+public partial class SC2TerrainRuntime : IDisposable
 {
     public const int CHUNK_SIZE = 64; // quads per chunk side (smaller = faster dirty rebuild)
 
@@ -58,11 +58,18 @@ public class SC2TerrainRuntime : IDisposable
     public void SetActiveRnmMaskGroup(string maskName, SC2TerrainData data)
     {
         var next = NormalizeMaskName(maskName);
-        if (_activeBlendMaskName == next) return;
-        if (!string.IsNullOrEmpty(_activeBlendMaskName))
+        // The layers on screen belong to one SC2TerrainData; when another one is passed (a different map was loaded
+        // into this runtime) they are stale, must not be written into that data, and are reloaded from it.
+        var dataChanged = _activeStack != null && data.BlendLayerStacks != null && !data.BlendLayerStacks.Contains(_activeStack);
+        if (_activeBlendMaskName == next && !dataChanged) return;
+        if (!string.IsNullOrEmpty(_activeBlendMaskName) && !dataChanged)
             FlushActiveBlendGroup(data);
+        ReleaseLayerRTs();
+        _activeStack = null;
         LoadMaskGroupToRT(next, data);
         _activeBlendMaskName = next;
+        // Shows the group's editing layers (flattened into BlendRT, which replaces the plain mask load above).
+        AttachLayerStack(data);
     }
 
 
@@ -106,6 +113,9 @@ public class SC2TerrainRuntime : IDisposable
         var maskName = _activeBlendMaskName;
         if (string.IsNullOrEmpty(maskName)) return;
 
+        // Layers: finish any pending paint (flatten, then copy the painted layer back into the stack) first, so
+        // BlendRT below is the up-to-date composite of the stack.
+        CommitLayerEdits();
         var bytes = ReadBlendBytes(BlendRT);
         for (var i = 0; i < data.Pairs.Count; i++)
             if (NormalizeMaskName(data.Pairs[i].RnmMaskName) == maskName)
@@ -365,6 +375,7 @@ public class SC2TerrainRuntime : IDisposable
         _chunks.Clear();
         if (_chunkRoot != null) DestroyObject(_chunkRoot);
         if (_sharedChunkMat != null) DestroyObject(_sharedChunkMat);
+        DisposeBlendLayers();
         SafeRelease(PairMapRT); SafeRelease(BlendRT); SafeRelease(_pairColorRT);
         if (_diffuse1Array != null) DestroyObject(_diffuse1Array);
         if (_diffuse2Array != null) DestroyObject(_diffuse2Array);
@@ -827,6 +838,7 @@ public class SC2TerrainRuntime : IDisposable
         RenderTexture.active = prevActive;
         DestroyObject(tex);
         _activeBlendMaskName = NormalizeMaskName(found.RnmMaskName);
+        AttachLayerStack(data);
 
         UnityEngine.Debug.Log($"[SC2Runtime] Restored BlendRT from pair '{found.Name}' mask '{found.RnmMaskName}'");
     }
@@ -1132,33 +1144,18 @@ public class SC2TerrainRuntime : IDisposable
     }
 
     public void PaintBlend(Vector3 worldPos, float radius, float strength, float blendValue, bool erase=false, Texture customBrush=null, float rotationRadians=0f,
-        Vector2 brushMirror = default, bool brushSwapAxes = false)
+        Vector2 brushMirror = default, bool brushSwapAxes = false, bool removeFromLayer = false)
     {
         if (brushMirror == default) brushMirror = Vector2.one;
         if (!EnsureShaders()) return;
-        var uvX = worldPos.x / (GridWidth  * CellSize);
-        var uvZ = worldPos.z / (GridHeight * CellSize);
-        var uvR = Mathf.Max(radius / (GridWidth * CellSize), 0.001f);
-        _paintBrushMat.SetVector("_BrushUV",      new Vector4(uvX, uvZ, 0, 0));
-        _paintBrushMat.SetFloat ("_BrushRadius",  uvR);
-        _paintBrushMat.SetFloat ("_BrushStrength",strength);
-        _paintBrushMat.SetColor ("_PaintColor",   new Color(.5f,.5f,.5f, erase?0f:blendValue));
-        _paintBrushMat.SetInt   ("_PaintMode",    2);
-        // Custom stamp brush (Blend/RNM only — see SC2PaintBrush.shader;
-        // Pair assign/erase always keeps the round brush).
-        var useCustom = customBrush != null;
-        _paintBrushMat.SetTexture("_BrushTex",      useCustom ? customBrush : Texture2D.whiteTexture);
-        _paintBrushMat.SetFloat  ("_UseCustomBrush",useCustom ? 1f : 0f);
-        // Per-stroke randomized rotation, rolled once by
-        // SC2PaintMode at mouse-down and passed unchanged for the whole
-        // stroke — harmless when useCustom is false (branch never runs).
-        _paintBrushMat.SetFloat  ("_BrushRotation", rotationRadians);
-        // Mirrors the stamp's content for a REFLECTED symmetric copy (X/Y/diagonal mirror slots) —
-        // see SC2SymmetryMath.GetSlotMirror, whose caller (SC2PaintMode.HandleRnm) computes this
-        // per symmetric position. (1,1)/false for slot 0 and every rotation-only copy, which keeps
-        // the stamp unmirrored there, same as before this parameter existed.
-        _paintBrushMat.SetVector ("_BrushMirror",   brushMirror);
-        _paintBrushMat.SetFloat  ("_BrushSwapAxes", brushSwapAxes ? 1f : 0f);
+        // With editing layers the stroke goes into the active layer's texture and BlendRT is re-flattened by the
+        // caller once per tick (RecompositeBlendIfDirty); without a stack the mask is painted directly as before.
+        if (HasActiveLayers)
+        {
+            PaintActiveLayer(worldPos, radius, strength, blendValue, erase, removeFromLayer, customBrush, rotationRadians, brushMirror, brushSwapAxes);
+            return;
+        }
+        ConfigureBlendBrush(worldPos, radius, strength, blendValue, erase, customBrush, rotationRadians, brushMirror, brushSwapAxes, 2);
         var tmp = RenderTexture.GetTemporary(BlendRT.descriptor);
         var prevActive = RenderTexture.active;
         Graphics.Blit(BlendRT, tmp, _paintBrushMat);

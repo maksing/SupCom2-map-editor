@@ -321,6 +321,60 @@ public class MapDocumentToLegacyBridgeTests
     }
 
     [Fact]
+    public void ReconstructTerrain_RoundTripsBlendMaskLayers()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var pair = new SC2MaterialPair { Id = "pair-a", RnmMaskName = "mask01", RnmMaskBytes = new byte[] { 1, 2, 3, 4 }, MaskWidth = 2, MaskHeight = 1 };
+            var stack = new SC2BlendMaskLayerStack { MaskName = "mask01", Width = 2, Height = 1, ActiveIndex = 1 };
+            stack.Layers.Add(new SC2BlendMaskLayer { Id = "base", Name = "Base", Data = new byte[] { 10, 255, 20, 255 } });
+            stack.Layers.Add(new SC2BlendMaskLayer { Id = "top", Name = "Detail", Visible = false, Opacity = 0.4f, Data = new byte[] { 200, 128, 0, 0 } });
+
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material>(), new List<SC2MaterialPair> { pair },
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+            SC2TerrainLegacyBridge.AttachBlendLayers(doc, new[] { stack }, store);
+
+            var result = SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store);
+
+            var rebuilt = Assert.Single(result.BlendLayerStacks);
+            Assert.Equal("mask01", rebuilt.MaskName);
+            Assert.Equal(1, rebuilt.ActiveIndex);
+            Assert.Equal(2, rebuilt.Layers.Count);
+            Assert.Equal("Base", rebuilt.Layers[0].Name);
+            Assert.Equal(new byte[] { 10, 255, 20, 255 }, rebuilt.Layers[0].Data);
+            Assert.False(rebuilt.Layers[1].Visible);
+            Assert.Equal(0.4f, rebuilt.Layers[1].Opacity, 3);
+            Assert.Equal(new byte[] { 200, 128, 0, 0 }, rebuilt.Layers[1].Data);
+            Assert.Equal(new byte[] { 1, 2, 3, 4 }, result.Pairs[0].RnmMaskBytes); // the composite is untouched
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ReconstructTerrain_AMaskWithoutLayersGivesNoStack()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var pair = new SC2MaterialPair { Id = "pair-a", RnmMaskName = "mask01", RnmMaskBytes = new byte[] { 1, 2, 3, 4 }, MaskWidth = 2, MaskHeight = 1 };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material>(), new List<SC2MaterialPair> { pair },
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+
+            Assert.Empty(SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store).BlendLayerStacks);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void ReconstructTerrain_ThrowsOnNullArguments()
     {
         var store = NewStore(out var root);

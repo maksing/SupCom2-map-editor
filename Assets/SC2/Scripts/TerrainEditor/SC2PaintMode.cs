@@ -52,6 +52,13 @@ public class SC2PaintMode
     private int   _rnmPair  = 0;
     private float _rnmBlend = 1f;
     private bool  _rnmErase = false;
+    // Brush lowers the active layer's coverage instead of painting value (the layer eraser); never on the Base layer.
+    private bool  _rnmRemoveFromLayer = false;
+    // Structural layer edits (add/delete/move/...) are queued by the buttons and run at the next Layout event, so the
+    // control tree never changes between an event and the repaint that follows it.
+    private readonly Queue<System.Action> _pendingLayerActions = new();
+    private bool   _layerSettingsNeedFlush;
+    private double _layerSettingsChangedAt;
 
     // Cached CPU snapshot of BlendRT for the preview swatch (see DrawRnm) —
     // deliberately a Texture2D, never the live RenderTexture, and throttled.
@@ -199,6 +206,7 @@ public class SC2PaintMode
         var names = new string[Data.Pairs.Count];
         for (var i = 0; i < Data.Pairs.Count; i++) names[i] = Data.Pairs[i].Name;
         var w = SC2TerrainShell.GetPanelContentWidth();
+        if (Event.current.type == EventType.Layout) RunPendingLayerActions();
         EditorGUILayout.LabelField("Pair", EditorStyles.miniLabel);
         var nextRnmPair = EditorGUILayout.Popup("paint-blend-pair", _rnmPair, names, SC2UiScale.PopupStyle(), GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (nextRnmPair != _rnmPair)
@@ -210,12 +218,19 @@ public class SC2PaintMode
         {
             _win.ActiveRuntime?.SetActivePairForBlend(_rnmPair, Data);
         }
+        DrawLayerPanel(w);
         _rnmBlend = SC2TerrainShell.DrawCompactSlider("Blend alpha", _rnmBlend, 0f, 1f);
         EditorGUILayout.LabelField(
             _rnmBlend < .1f ? "← D1 (base)" :
             _rnmBlend > .9f ? "→ D2 (blend)" : "↔ blending",
             EditorStyles.centeredGreyMiniLabel);
         _rnmErase = EditorGUILayout.Toggle("Erase (→0)", _rnmErase);
+        var layerRuntime = _win.ActiveRuntime;
+        var canRemoveFromLayer = layerRuntime != null && layerRuntime.HasActiveLayers && layerRuntime.ActiveBlendStack.ActiveIndex > 0;
+        if (canRemoveFromLayer)
+            _rnmRemoveFromLayer = EditorGUILayout.Toggle("Remove from layer", _rnmRemoveFromLayer);
+        else
+            _rnmRemoveFromLayer = false;
 
         // Brush shape is a shared setting, always the CORE's own _win.Data —
         // see SC2GeometryMode's own header comment for why.
@@ -293,24 +308,149 @@ public class SC2PaintMode
 
         EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
         var bw = Mathf.Max(48f, (w - 4f) * 0.5f);
-        if (GUILayout.Button("Reset (α=0)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && _win.ActiveRuntime != null)
+        var fillRuntime = _win.ActiveRuntime;
+        if (GUILayout.Button("Reset (α=0)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && fillRuntime != null)
         {
-            var prev = RenderTexture.active;
-            RenderTexture.active = _win.ActiveRuntime.BlendRT;
-            GL.Clear(false, true, new Color(.5f, .5f, .5f, 0f));
-            RenderTexture.active = prev;
-            _win.ActiveRuntime.FlushActiveBlendGroup(Data);
-            EditorUtility.SetDirty(Data);
+            if (fillRuntime.HasActiveLayers)
+                // The Base layer resets to value 0 (fully covering), any other layer becomes fully transparent.
+                RunLayerEdit("Reset Blend Layer", stack => fillRuntime.FillActiveLayer(0f, stack.ActiveIndex == 0 ? 1f : 0f), rebuild: false);
+            else
+                ClearBlendRT(fillRuntime, 0f);
         }
-        if (GUILayout.Button("Fill (α=1)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && _win.ActiveRuntime != null)
+        if (GUILayout.Button("Fill (α=1)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(bw)) && fillRuntime != null)
         {
-            var prev = RenderTexture.active;
-            RenderTexture.active = _win.ActiveRuntime.BlendRT;
-            GL.Clear(false, true, new Color(.5f, .5f, .5f, 1f));
-            RenderTexture.active = prev;
-            _win.ActiveRuntime.FlushActiveBlendGroup(Data);
-            EditorUtility.SetDirty(Data);
+            if (fillRuntime.HasActiveLayers)
+                RunLayerEdit("Fill Blend Layer", stack => fillRuntime.FillActiveLayer(1f, 1f), rebuild: false);
+            else
+                ClearBlendRT(fillRuntime, 1f);
         }
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private void ClearBlendRT(SC2TerrainRuntime runtime, float alpha)
+    {
+        var prev = RenderTexture.active;
+        RenderTexture.active = runtime.BlendRT;
+        GL.Clear(false, true, new Color(.5f, .5f, .5f, alpha));
+        RenderTexture.active = prev;
+        runtime.FlushActiveBlendGroup(Data);
+        EditorUtility.SetDirty(Data);
+    }
+
+    /// <summary>Records the undo checkpoint for a layer edit on whichever surface (core or background) is being painted.</summary>
+    private void RecordLayerCheckpoint(string label)
+    {
+        if (Data == _win.Data) _win.RecordRnmBlendCheckpoint();
+        else _win.RecordUndoCheckpointFor(Data, label);
+    }
+
+    /// <summary>One undoable edit of the active mask group's layers: checkpoint, pending paint committed, the edit, then
+    /// the render textures rebuilt (structure changed) or just re-flattened, and the composite written back to the pairs.</summary>
+    private void RunLayerEdit(string label, System.Action<SC2BlendMaskLayerStack> edit, bool rebuild)
+    {
+        var runtime = _win.ActiveRuntime;
+        var stack = runtime?.ActiveBlendStack;
+        if (runtime == null || stack == null) return;
+        RecordLayerCheckpoint(label);
+        runtime.CommitLayerEdits();
+        edit(stack);
+        if (rebuild) runtime.RefreshLayersFromStack();
+        else runtime.RecompositeBlend();
+        FinishLayerEdit(runtime);
+    }
+
+    private void FinishLayerEdit(SC2TerrainRuntime runtime)
+    {
+        runtime.CommitLayerEdits();
+        runtime.FlushActiveBlendGroup(Data);
+        _layerSettingsNeedFlush = false;
+        _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
+        EditorUtility.SetDirty(Data);
+        if (Data != _win.Data) _win.RefreshBackgroundRuntime();
+        _win.MarkDirtyAndRepaint();
+    }
+
+    private void RunPendingLayerActions()
+    {
+        while (_pendingLayerActions.Count > 0) _pendingLayerActions.Dequeue().Invoke();
+        // An opacity drag re-flattens on the GPU every change but only writes the composite back to the pairs once the
+        // value has stopped changing (the readback is a full 2048x2048 copy).
+        if (_layerSettingsNeedFlush && EditorApplication.timeSinceStartup - _layerSettingsChangedAt > 0.35 && _win.ActiveRuntime != null)
+            FinishLayerEdit(_win.ActiveRuntime);
+    }
+
+    /// <summary>The layers list of the active mask group, top layer first: visibility, select (click the name),
+    /// move up/down, duplicate, delete; below it the selected layer's name and opacity, New layer and Merge down.</summary>
+    private void DrawLayerPanel(float w)
+    {
+        var runtime = _win.ActiveRuntime;
+        if (runtime == null || !runtime.HasActiveLayers) return;
+        var stack = runtime.ActiveBlendStack;
+
+        EditorGUILayout.Space(4);
+        EditorGUILayout.LabelField("Layers", EditorStyles.miniLabel);
+        var smallButton = Mathf.Max(24f, SC2UiScale.Pxf(26f));
+        var rowHeight = SC2UiScale.Pxf(20f);
+        for (var i = stack.Layers.Count - 1; i >= 0; i--)
+        {
+            var index = i;
+            var layer = stack.Layers[i];
+            EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+            // A button, not a bare checkbox: it names what a click does (Hide / Show) and a hidden layer's name is greyed.
+            var wasVisible = layer.Visible;
+            if (GUILayout.Button(wasVisible ? "Hide" : "Show", GUILayout.Width(SC2UiScale.Pxf(40f)), GUILayout.Height(rowHeight)))
+                _pendingLayerActions.Enqueue(() => RunLayerEdit(wasVisible ? "Hide Blend Layer" : "Show Blend Layer", st => st.Layers[index].Visible = !wasVisible, rebuild: false));
+            var selected = index == stack.ActiveIndex;
+            var previousColor = GUI.backgroundColor;
+            var previousContent = GUI.contentColor;
+            if (selected) GUI.backgroundColor = new Color(0.45f, 0.7f, 1f, 1f);
+            if (!wasVisible) GUI.contentColor = new Color(1f, 1f, 1f, 0.45f);
+            if (GUILayout.Button(layer.Name, GUILayout.Height(rowHeight), GUILayout.ExpandWidth(true)) && !selected)
+                _pendingLayerActions.Enqueue(() => { runtime.SelectBlendLayer(index); _win.MarkDirtyAndRepaint(); });
+            GUI.backgroundColor = previousColor;
+            GUI.contentColor = previousContent;
+            if (GUILayout.Button("Up", GUILayout.Width(smallButton), GUILayout.Height(rowHeight)) && index < stack.Layers.Count - 1)
+                _pendingLayerActions.Enqueue(() => RunLayerEdit("Move Blend Layer", st => st.MoveLayer(index, 1), rebuild: true));
+            if (GUILayout.Button("Dn", GUILayout.Width(smallButton), GUILayout.Height(rowHeight)) && index > 0)
+                _pendingLayerActions.Enqueue(() => RunLayerEdit("Move Blend Layer", st => st.MoveLayer(index, -1), rebuild: true));
+            if (GUILayout.Button("Dup", GUILayout.Width(smallButton + 6f), GUILayout.Height(rowHeight)))
+                _pendingLayerActions.Enqueue(() => RunLayerEdit("Duplicate Blend Layer", st => st.DuplicateLayer(index), rebuild: true));
+            if (GUILayout.Button("X", GUILayout.Width(smallButton - 4f), GUILayout.Height(rowHeight)) && stack.Layers.Count > 1)
+                _pendingLayerActions.Enqueue(() => RunLayerEdit("Delete Blend Layer", st => st.RemoveLayer(index), rebuild: true));
+            EditorGUILayout.EndHorizontal();
+        }
+
+        var active = stack.Active;
+        if (active != null)
+        {
+            var newName = EditorGUILayout.TextField("Name", active.Name);
+            if (newName != active.Name)
+            {
+                // Not an undo step of its own (a step per keystroke would flood the undo stack); it is written back to
+                // the document with the next flush.
+                active.Name = newName;
+                _layerSettingsChangedAt = EditorApplication.timeSinceStartup;
+                _layerSettingsNeedFlush = true;
+                EditorUtility.SetDirty(Data);
+            }
+            var opacity = SC2TerrainShell.DrawCompactSlider("Opacity", active.Opacity, 0f, 1f, active.Id,
+                onValueChangeStart: () => RecordLayerCheckpoint("Change Blend Layer Opacity"));
+            if (!Mathf.Approximately(opacity, active.Opacity))
+            {
+                active.Opacity = opacity;
+                runtime.RecompositeBlend();
+                _layerSettingsChangedAt = EditorApplication.timeSinceStartup;
+                _layerSettingsNeedFlush = true;
+                _win.MarkDirtyAndRepaint();
+            }
+        }
+
+        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var half = Mathf.Max(48f, (w - 4f) * 0.5f);
+        if (GUILayout.Button("+ New layer", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(half)))
+            _pendingLayerActions.Enqueue(() => RunLayerEdit("Add Blend Layer", st => st.AddLayerAboveActive(), rebuild: true));
+        if (GUILayout.Button("Merge down", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(half)) && stack.ActiveIndex > 0)
+            _pendingLayerActions.Enqueue(() => RunLayerEdit("Merge Blend Layer", st => st.MergeDown(st.ActiveIndex), rebuild: true));
         EditorGUILayout.EndHorizontal();
     }
 
@@ -751,8 +891,10 @@ public class SC2PaintMode
             // returns the CONTENT rotation; negated here because _BrushRotation rotates the sample
             // offset, the inverse operation (see that method's own doc comment).
             var extraRotationRad = -SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
-            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes);
+            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, _rnmRemoveFromLayer);
         }
+        // With editing layers the dabs above went into the active layer; flatten them into the mask once per tick.
+        _win.ActiveRuntime.RecompositeBlendIfDirty();
 #if UNITY_EDITOR
         SceneView.RepaintAll();
 #endif
@@ -780,14 +922,27 @@ public class SC2PaintMode
     {
         public SC2TerrainData Data;
         public int PairIndex;
+        // The flattened mask. Only kept for a surface without editing layers; with layers the stack below reproduces it.
         public byte[] Bytes;
+        // The whole layer stack (settings, order, active layer, and each layer's pixel array by reference).
+        public SC2BlendMaskLayerStack Stack;
     }
 
     public object CaptureActiveBlendState()
     {
-        if (_win.ActiveRuntime == null || _win.ActiveRuntime.BlendRT == null)
+        var runtime = _win.ActiveRuntime;
+        if (runtime == null || runtime.BlendRT == null)
             return null;
-        return new RnmBlendSnapshot { Data = Data, PairIndex = _rnmPair, Bytes = _win.ActiveRuntime.ReadBlendCPU() };
+        // Copies the active layer's pending paint into the stack first, so the snapshot has its current pixels.
+        runtime.CommitLayerEdits();
+        var stack = runtime.ActiveBlendStack;
+        return new RnmBlendSnapshot
+        {
+            Data = Data,
+            PairIndex = _rnmPair,
+            Stack = stack?.Clone(),
+            Bytes = stack == null ? runtime.ReadBlendCPU() : null,
+        };
     }
 
     public void ApplyActiveBlendState(object state)
@@ -804,7 +959,8 @@ public class SC2PaintMode
         // exact restored bytes, so that intermediate load is harmless, just
         // slightly redundant work (undo/redo aren't a hot per-frame path).
         runtime.SetActivePairForBlend(_rnmPair, snap.Data);
-        runtime.UploadBlendCPU(snap.Bytes);
+        if (snap.Stack != null) runtime.ReplaceActiveBlendStack(snap.Data, snap.Stack);
+        else runtime.UploadBlendCPU(snap.Bytes);
         runtime.FlushActiveBlendGroup(snap.Data);
         _win.MarkDirtyAndRepaint();
     }

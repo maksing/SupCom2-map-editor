@@ -191,7 +191,16 @@ public class MapDocumentSerializerTests
             SlotIds = { "pair-1", "" },
         };
         doc.Terrain.Blend = new SC2BlendDocument { Width = 2048, Height = 2048, BlendTextureRgba32 = new SC2BlobReference("blend-hash", 16777216) };
-        doc.Terrain.Rnm.MaskSets.Add(new SC2RnmMaskSetDocument { Id = "rnm-1", Name = "mask01", Width = 512, Height = 512, MaskBytes = new SC2BlobReference("rnm-hash", 786432) });
+        doc.Terrain.Rnm.MaskSets.Add(new SC2RnmMaskSetDocument
+        {
+            Id = "rnm-1", Name = "mask01", Width = 512, Height = 512, MaskBytes = new SC2BlobReference("rnm-hash", 786432),
+            Layers =
+            {
+                new SC2BlendLayerDocument { Id = "layer-base", Name = "Base", Visible = true, Opacity = 1f, Data = new SC2BlobReference("layer-base-hash", 524288) },
+                new SC2BlendLayerDocument { Id = "layer-top", Name = "Detail", Visible = false, Opacity = 0.25f, Data = new SC2BlobReference("layer-top-hash", 524288) },
+            },
+            ActiveLayerIndex = 1,
+        });
         doc.Terrain.Simplification.Enabled = true;
         doc.Terrain.Normals.RecalculateOnEdit = false;
         doc.Terrain.Symmetry.Mode = SymmetryMode.X;

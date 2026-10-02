@@ -186,6 +186,39 @@ namespace SC2.MapEditor.Document
             };
         }
 
+        /// <summary>Adds the blend mask layer stacks to the mask sets of <paramref name="doc"/> (the set named like the
+        /// stack; a stack whose mask has no set yet gets one with an empty composite). Layer pixels go to the blob
+        /// store. Called after BuildFromLegacy, which already created the sets from the pairs.</summary>
+        public static void AttachBlendLayers(SC2TerrainDocument doc, IReadOnlyList<SC2BlendMaskLayerStack> stacks, ISC2BlobStore blobStore)
+        {
+            if (doc == null) throw new ArgumentNullException(nameof(doc));
+            if (blobStore == null) throw new ArgumentNullException(nameof(blobStore));
+            if (stacks == null) return;
+            foreach (var stack in stacks)
+            {
+                if (stack == null || stack.Layers == null || stack.Layers.Count == 0) continue;
+                var set = doc.Rnm.Find(stack.MaskName);
+                if (set == null)
+                {
+                    set = new SC2RnmMaskSetDocument { Id = stack.MaskName, Name = stack.MaskName, Width = stack.Width, Height = stack.Height };
+                    doc.Rnm.MaskSets.Add(set);
+                }
+                set.Layers = new List<SC2BlendLayerDocument>(stack.Layers.Count);
+                foreach (var layer in stack.Layers)
+                {
+                    set.Layers.Add(new SC2BlendLayerDocument
+                    {
+                        Id = layer.Id,
+                        Name = layer.Name,
+                        Visible = layer.Visible,
+                        Opacity = layer.Opacity,
+                        Data = layer.Data != null && layer.Data.Length > 0 ? blobStore.Put(new MemoryStream(layer.Data)) : SC2BlobReference.Empty,
+                    });
+                }
+                set.ActiveLayerIndex = stack.ActiveIndex;
+            }
+        }
+
         private static SC2MaterialPairDocument BuildPair(SC2MaterialPair p, SC2TerrainDocument doc, ISC2BlobStore blobStore)
         {
             EnsureId(p);

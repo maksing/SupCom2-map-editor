@@ -46,6 +46,7 @@ namespace SC2.MapEditor.Document
                 data.RnmBakeOverrideSunDirection, data.RnmBakeOverrideSunColor, data.RnmBakeOverrideSunIntensity, data.RnmBakeOverrideShadowColor,
                 data.RnmBakeShadowSoftRadius,
                 data.Uv1HeightWeight);
+            AttachBlendLayers(doc, data.BlendLayerStacks, blobStore);
             if (data.BackgroundTerrainEnabled && data.BackgroundTerrainData != null)
                 doc.Background = BuildFromLegacy(data.BackgroundTerrainData, blobStore);
             return doc;

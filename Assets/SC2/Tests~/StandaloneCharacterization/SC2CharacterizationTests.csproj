@@ -101,6 +101,8 @@
     <Compile Include="$(SC2Root)\Scripts\TerrainEditor\SC2TerrainUv1Unwrap.cs" Link="Source\SC2TerrainUv1Unwrap.cs" />
     <!-- Blender-style Flatten area plane (Vector3 / Mathf only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2FlattenMath.cs" Link="Source\SC2FlattenMath.cs" />
+    <!-- Blend mask editing layers: pure data + compositing math (System only). -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2BlendMaskLayers.cs" Link="Source\SC2BlendMaskLayers.cs" />
     <!-- Sun direction -> where a cube's shadow falls (Environment > Sun preview). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SunShadowMath.cs" Link="Source\SC2SunShadowMath.cs" />
     <!-- Point-cloud volume bake (pcloud_up / pcloud_down) and the DXT5 writer for it. -->

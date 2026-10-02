@@ -10,6 +10,17 @@ namespace SC2.MapEditor.Document
     /// RnmMaskName). Id defaults to the legacy RnmMaskName so existing masks
     /// keep a recognizable identity; kept as a separate field from Name so a
     /// future rename doesn't need to renumber every pair's RnmSetId.</summary>
+    /// <summary>One editing layer of a mask set's blend mask: its settings plus the layer's pixels (value and
+    /// coverage, two bytes per pixel) in the blob store. See SC2BlendMaskLayer.</summary>
+    public sealed class SC2BlendLayerDocument
+    {
+        public string Id = "";
+        public string Name = "";
+        public bool Visible = true;
+        public float Opacity = 1f;
+        public SC2BlobReference Data;
+    }
+
     public sealed class SC2RnmMaskSetDocument
     {
         public string Id = "";
@@ -33,11 +44,27 @@ namespace SC2.MapEditor.Document
         public SC2BlobReference BakedRgb2;
         public SC2BlobReference BakedShadowAlpha;
 
+        /// <summary>The blend mask's editing layers, bottom first. Empty for a mask saved before layers existed
+        /// (it is rebuilt as a single Base layer from MaskBytes when first edited). MaskBytes stays the
+        /// flattened composite.</summary>
+        public List<SC2BlendLayerDocument> Layers = new();
+        public int ActiveLayerIndex;
+
         public SC2RnmMaskSetDocument Clone() => new()
         {
             Id = Id, Name = Name, Width = Width, Height = Height, MaskBytes = MaskBytes,
             BakedRgb0 = BakedRgb0, BakedRgb1 = BakedRgb1, BakedRgb2 = BakedRgb2, BakedShadowAlpha = BakedShadowAlpha,
+            Layers = CloneLayers(Layers), ActiveLayerIndex = ActiveLayerIndex,
         };
+
+        private static List<SC2BlendLayerDocument> CloneLayers(List<SC2BlendLayerDocument> layers)
+        {
+            var copy = new List<SC2BlendLayerDocument>(layers?.Count ?? 0);
+            if (layers != null)
+                foreach (var layer in layers)
+                    copy.Add(new SC2BlendLayerDocument { Id = layer.Id, Name = layer.Name, Visible = layer.Visible, Opacity = layer.Opacity, Data = layer.Data });
+            return copy;
+        }
     }
 
     public sealed class SC2RnmDocument

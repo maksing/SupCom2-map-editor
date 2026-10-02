@@ -849,6 +849,26 @@ public static class SC2RuntimeTerrainPersistence
         public byte[] BakedShadowAlpha;
     }
 
+    /// <summary>One blend mask editing layer; see SC2BlendMaskLayer. Data is value + coverage, two bytes per pixel.</summary>
+    [Serializable]
+    private class BlendLayerDto
+    {
+        public string Id;
+        public string Name;
+        public bool Visible = true;
+        public float Opacity = 1f;
+        public byte[] Data;
+    }
+
+    [Serializable]
+    private class BlendLayerStackDto
+    {
+        public string MaskName;
+        public int Width, Height;
+        public int ActiveIndex;
+        public BlendLayerDto[] Layers;
+    }
+
     [Serializable]
     private class CostsBlockDto
     {
@@ -879,6 +899,9 @@ public static class SC2RuntimeTerrainPersistence
         // a file saved before this fix; FromDto falls back to each PairDto's
         // own inline bytes in that case.
         public RnmMaskSetDto[] RnmMaskSets;
+        // Blend mask editing layers, one stack per mask name. Absent in a save made before layers existed; the mask
+        // then becomes a one-layer stack the first time it is edited.
+        public BlendLayerStackDto[] BlendLayerStacks;
         // Without these three, a Build save/load round-trip silently drops
         // back to "no import-only, subdivided SAH BSP" regardless of what
         // was actually set — these bools have no other persisted backing in
@@ -1078,6 +1101,20 @@ public static class SC2RuntimeTerrainPersistence
         dto.RnmMaskSets = new RnmMaskSetDto[maskSets.Count];
         maskSets.Values.CopyTo(dto.RnmMaskSets, 0);
 
+        var layerStacks = data.BlendLayerStacks ?? new List<SC2BlendMaskLayerStack>();
+        dto.BlendLayerStacks = new BlendLayerStackDto[layerStacks.Count];
+        for (var i = 0; i < layerStacks.Count; i++)
+        {
+            var stack = layerStacks[i];
+            var layerDtos = new BlendLayerDto[stack.Layers.Count];
+            for (var l = 0; l < layerDtos.Length; l++)
+            {
+                var layer = stack.Layers[l];
+                layerDtos[l] = new BlendLayerDto { Id = layer.Id, Name = layer.Name, Visible = layer.Visible, Opacity = layer.Opacity, Data = layer.Data ?? Array.Empty<byte>() };
+            }
+            dto.BlendLayerStacks[i] = new BlendLayerStackDto { MaskName = stack.MaskName, Width = stack.Width, Height = stack.Height, ActiveIndex = stack.ActiveIndex, Layers = layerDtos };
+        }
+
         dto.ImportOnlyMode = data.ImportOnlyMode;
         dto.SingleBspNodePerLayer = data.SingleBspNodePerLayer;
         dto.VanillaCandidateBspSplit = data.VanillaCandidateBspSplit;
@@ -1257,6 +1294,30 @@ public static class SC2RuntimeTerrainPersistence
                 EnvironmentSourceTag = p.ExtrasStored ? p.EnvironmentSourceTag ?? "" : "",
                 EnvironmentForceExport = p.ExtrasStored && p.EnvironmentForceExport,
             });
+        }
+
+        data.BlendLayerStacks = new List<SC2BlendMaskLayerStack>();
+        foreach (var stackDto in dto.BlendLayerStacks ?? Array.Empty<BlendLayerStackDto>())
+        {
+            if (stackDto?.Layers == null || stackDto.Layers.Length == 0) continue;
+            var stack = new SC2BlendMaskLayerStack
+            {
+                MaskName = stackDto.MaskName ?? "mask01",
+                Width = stackDto.Width > 0 ? stackDto.Width : 2048,
+                Height = stackDto.Height > 0 ? stackDto.Height : 2048,
+                ActiveIndex = stackDto.ActiveIndex,
+            };
+            foreach (var layerDto in stackDto.Layers)
+                stack.Layers.Add(new SC2BlendMaskLayer
+                {
+                    Id = layerDto.Id ?? "",
+                    Name = layerDto.Name ?? "Layer",
+                    Visible = layerDto.Visible,
+                    Opacity = layerDto.Opacity,
+                    Data = layerDto.Data ?? Array.Empty<byte>(),
+                });
+            stack.Normalize();
+            data.BlendLayerStacks.Add(stack);
         }
 
         // Field-missing default (false) is already the correct behavior for

@@ -76,6 +76,7 @@ namespace SC2.MapEditor.Document
             public List<TextureSlotInfo> MaterialMask = new();
             public List<SC2MaterialPair> Pairs = new();
             public short[] TrianglePairIndex = Array.Empty<short>();
+            public List<SC2BlendMaskLayerStack> BlendLayerStacks = new();
         }
 
         public static TerrainResult ReconstructTerrain(SC2TerrainDocument doc, ISC2BlobStore blobStore)
@@ -199,6 +200,28 @@ namespace SC2.MapEditor.Document
             }
 
             result.TrianglePairIndex = ReconstructTrianglePairIndex(doc.PairAssignments, pairIdBySlot, blobStore);
+            foreach (var set in doc.Rnm.MaskSets)
+            {
+                if (set.Layers == null || set.Layers.Count == 0) continue;
+                var stack = new SC2BlendMaskLayerStack
+                {
+                    MaskName = set.Id,
+                    Width = set.Width > 0 ? set.Width : 2048,
+                    Height = set.Height > 0 ? set.Height : 2048,
+                    ActiveIndex = set.ActiveLayerIndex,
+                };
+                foreach (var layer in set.Layers)
+                    stack.Layers.Add(new SC2BlendMaskLayer
+                    {
+                        Id = layer.Id ?? "",
+                        Name = layer.Name ?? "Layer",
+                        Visible = layer.Visible,
+                        Opacity = layer.Opacity,
+                        Data = ReadBytes(blobStore, layer.Data),
+                    });
+                stack.Normalize();
+                result.BlendLayerStacks.Add(stack);
+            }
             return result;
         }
 

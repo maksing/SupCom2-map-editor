@@ -123,6 +123,20 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     [Header("Materials")] public List<SC2Material>    Materials=new();
     [Header("Pairs")]     public List<SC2MaterialPair> Pairs=new();
 
+    /// <summary>Editing layers of the blend mask, one stack per mask name (the name pairs share in
+    /// SC2MaterialPair.RnmMaskName). The stack is the source of truth for that mask; the pairs'
+    /// RnmMaskBytes stay the flattened composite the shader and the exporter read. A mask name without a
+    /// stack is a map painted before layers existed: it gets a one-layer stack from its mask on first use.</summary>
+    [Header("Blend mask layers")] public List<SC2BlendMaskLayerStack> BlendLayerStacks = new();
+
+    public SC2BlendMaskLayerStack FindBlendLayerStack(string maskName)
+    {
+        if (BlendLayerStacks == null) return null;
+        foreach (var stack in BlendLayerStacks)
+            if (stack != null && string.Equals(stack.MaskName, maskName, StringComparison.Ordinal)) return stack;
+        return null;
+    }
+
     // Heights: (GridWidth+1)*(GridHeight+1) floats — only serialised data for geometry
     public float[] Heights=Array.Empty<float>();
 
@@ -1217,6 +1231,9 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
 
         if (Materials == null) Materials = new List<SC2Material>();
         if (Pairs == null) Pairs = new List<SC2MaterialPair>();
+        if (BlendLayerStacks == null) BlendLayerStacks = new List<SC2BlendMaskLayerStack>();
+        BlendLayerStacks.RemoveAll(stack => stack == null);
+        foreach (var stack in BlendLayerStacks) stack.Normalize();
         EnsureDefaultMaterialsAndPair();
         EnsurePairAssignments();
         for (var i = 0; i < Pairs.Count; i++)

@@ -1285,6 +1285,23 @@ namespace SC2.MapEditor.Document
                 if (!s.BakedRgb1.IsEmpty) so.Set("bakedRgb1", WriteBlobRef(s.BakedRgb1));
                 if (!s.BakedRgb2.IsEmpty) so.Set("bakedRgb2", WriteBlobRef(s.BakedRgb2));
                 if (!s.BakedShadowAlpha.IsEmpty) so.Set("bakedShadowAlpha", WriteBlobRef(s.BakedShadowAlpha));
+                // Blend mask editing layers; absent for a mask that never had any.
+                if (s.Layers != null && s.Layers.Count > 0)
+                {
+                    var layers = SC2JsonValue.NewArray();
+                    foreach (var layer in s.Layers)
+                    {
+                        var lo = SC2JsonValue.NewObject();
+                        lo.Set("id", SC2JsonValue.Of(layer.Id ?? ""));
+                        lo.Set("name", SC2JsonValue.Of(layer.Name ?? ""));
+                        lo.Set("visible", SC2JsonValue.Of(layer.Visible));
+                        lo.Set("opacity", SC2JsonValue.Of((double)layer.Opacity));
+                        lo.Set("data", WriteBlobRef(layer.Data));
+                        layers.Add(lo);
+                    }
+                    so.Set("layers", layers);
+                    so.Set("activeLayer", SC2JsonValue.Of(s.ActiveLayerIndex));
+                }
                 sets.Add(so);
             }
             o.Set("maskSets", sets);
@@ -1295,8 +1312,21 @@ namespace SC2.MapEditor.Document
         {
             var r = new SC2RnmDocument();
             foreach (var so in o.Get("maskSets").Items())
+            {
+                var layers = new List<SC2BlendLayerDocument>();
+                foreach (var lo in so.Get("layers").Items())
+                    layers.Add(new SC2BlendLayerDocument
+                    {
+                        Id = lo.Get("id").AsString(""),
+                        Name = lo.Get("name").AsString(""),
+                        Visible = lo.Get("visible").AsBool(true),
+                        Opacity = (float)lo.Get("opacity").AsDouble(1.0),
+                        Data = ReadBlobRef(lo.Get("data")),
+                    });
                 r.MaskSets.Add(new SC2RnmMaskSetDocument
                 {
+                    Layers = layers,
+                    ActiveLayerIndex = so.Get("activeLayer").AsInt(0),
                     Id = so.Get("id").AsString(""),
                     Name = so.Get("name").AsString(""),
                     Width = so.Get("width").AsInt(0),
@@ -1307,6 +1337,7 @@ namespace SC2.MapEditor.Document
                     BakedRgb2 = ReadBlobRef(so.Get("bakedRgb2")),
                     BakedShadowAlpha = ReadBlobRef(so.Get("bakedShadowAlpha")),
                 });
+            }
             return r;
         }
 

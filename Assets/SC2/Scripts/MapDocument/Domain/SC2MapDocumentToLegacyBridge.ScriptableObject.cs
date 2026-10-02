@@ -212,6 +212,7 @@ namespace SC2.MapEditor.Document
                 data.Materials.Add(m);
             }
             data.Pairs = terrain.Pairs;
+            data.BlendLayerStacks = terrain.BlendLayerStacks;
 
             data.EnsureSerializableState();
             data.InvalidateGeometryCache();

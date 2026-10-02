@@ -21,6 +21,8 @@ Shader "Hidden/SC2/PaintBrush"
             float  _BrushStrength;  // 0..1 (used for soft edge threshold)
             float4 _PaintColor;     // target value to write
             int    _PaintMode;      // 0=paint(hard) 1=erase 2=soft(RNM blend)
+                                    // 3=soft paint into a blend mask LAYER (R value, G coverage)
+                                    // 4=soft erase from a blend mask LAYER (lowers G coverage, keeps R)
 
             // Optional custom stamp for Soft-blend (RNM) painting only — Pair
             // assign/erase (modes 0/1) always keep the built-in round brush
@@ -46,12 +48,22 @@ Shader "Hidden/SC2/PaintBrush"
             float2    _BrushMirror;
             float     _BrushSwapAxes;
 
+            // Applies a soft brush amount (0..1) to a pixel for the blend modes 2/3/4.
+            float4 ApplySoft(float4 src, float amt)
+            {
+                if (_PaintMode == 3)
+                    return float4(lerp(src.r, _PaintColor.a, amt), src.g + amt * (1.0 - src.g), src.b, 1.0);
+                if (_PaintMode == 4)
+                    return float4(src.r, src.g * (1.0 - amt), src.b, 1.0);
+                return lerp(src, _PaintColor, amt);
+            }
+
             float4 frag(v2f_img i) : SV_Target
             {
                 float4 src    = tex2D(_MainTex, i.uv);
                 float2 offset = (i.uv - _BrushUV) / _BrushRadius;
 
-                if (_PaintMode == 2 && _UseCustomBrush > 0.5)
+                if (_PaintMode >= 2 && _UseCustomBrush > 0.5)
                 {
                     // The stamp's own square footprint reaches its corners at
                     // sqrt(2)*radius, visibly outside the circular radius ring
@@ -100,7 +112,7 @@ Shader "Hidden/SC2/PaintBrush"
                     float4 stampSample = tex2D(_BrushTex, stampUv);
                     float  luminance   = dot(stampSample.rgb, float3(0.299, 0.587, 0.114));
                     float  amt         = luminance * stampSample.a * _BrushStrength;
-                    return lerp(src, _PaintColor, amt);
+                    return ApplySoft(src, amt);
                 }
 
                 float d = length(offset);
@@ -123,11 +135,10 @@ Shader "Hidden/SC2/PaintBrush"
                         return float4(1, 1, 1, 1); // 255 = unassigned
                     return src;
                 }
-                else // Soft blend (RNM alpha painting)
+                else // Soft blend (RNM alpha painting, modes 2/3/4)
                 {
                     float amt    = fo * _BrushStrength;
-                    float4 result = lerp(src, _PaintColor, amt);
-                    return result;
+                    return ApplySoft(src, amt);
                 }
             }
             ENDCG
