@@ -417,52 +417,7 @@ public static class SC2GameAssetScenePreview
             string batchKey = GetBatchKey(asset);
             if (!Batches.TryGetValue(batchKey, out batch))
             {
-                Debug.Log($"[SC2 Mesh] {logKey}: building new batch for asset '{asset.Id}' (kind={asset.Kind}, {asset.Lods.Count} LOD(s) declared, UniformScale={asset.UniformScale:0.###}).");
-
-                SC2GameAssetLod lod = asset.Lods.FirstOrDefault(candidate => candidate.ModelPaths != null && candidate.ModelPaths.Count > 0);
-                if (lod == null)
-                {
-                    error = "No resolved SCM exists for " + asset.Id + ".";
-                    Debug.LogWarning($"[SC2 Mesh] {logKey}: no LOD has a resolved ModelPaths entry. LODs: " +
-                        string.Join(" | ", asset.Lods.Select(l => $"lod{l.Index} declaredMeshPath='{l.DeclaredMeshPath}'")));
-                    return false;
-                }
-
-                Debug.Log($"[SC2 Mesh] {logKey}: using LOD {lod.Index} (declaredMeshPath='{lod.DeclaredMeshPath}'), {lod.ModelPaths.Count} candidate SCM path(s): {string.Join(" | ", lod.ModelPaths)}");
-
-                // ModelPaths are now normalized archive-relative paths (the
-                // browser's discovery pass is archive-native — see
-                // SC2GameAssetDiscovery.BuildFromArchive) — resolve existence
-                // via the reader's entry list instead of File.Exists.
-                string modelPath = lod.ModelPaths.FirstOrDefault(candidate => ArchiveHasEntry(reader, candidate));
-                if (string.IsNullOrWhiteSpace(modelPath))
-                {
-                    error = "Resolved SCM file no longer exists.";
-                    Debug.LogWarning($"[SC2 Mesh] {logKey}: none of the {lod.ModelPaths.Count} candidate SCM path(s) exist in the configured game archives.");
-                    return false;
-                }
-                Debug.Log($"[SC2 Mesh] {logKey}: reading SCM file '{modelPath}'.");
-
-                SC2ScmModel model;
-                using (var stream = new MemoryStream(ReadArchiveEntryBytes(reader, modelPath)))
-                    model = SC2ScmModelReader.Read(stream, modelPath);
-                Debug.Log($"[SC2 Mesh] {logKey}: SCM v{model.Version} parsed - vertices={model.Vertices.Count}, indices={model.Indices.Count} ({model.TriangleCount} tris), materialRanges={model.Materials.Count}, bones={model.Bones.Count}.");
-
-                Mesh mesh = CreateMesh(model, asset.Id);
-                if (mesh == null)
-                {
-                    error = "SCM has no renderable triangles.";
-                    Debug.LogWarning($"[SC2 Mesh] {logKey}: CreateMesh returned null (vertices={model.Vertices.Count}, indices={model.Indices.Count} - needs >=3 indices and >0 vertices).");
-                    return false;
-                }
-                Debug.Log($"[SC2 Mesh] {logKey}: Unity Mesh built - subMeshCount={mesh.subMeshCount}, bounds center={mesh.bounds.center}, bounds size={mesh.bounds.size}.");
-
-                var resolver = new ArchiveTextureResolver(reader);
-                Material[] materials = CreateMaterials(lod, mesh.subMeshCount, resolver, asset.Id);
-                var materialSetCount = lod.MaterialSets.FirstOrDefault(s => s.Materials.Count > 0)?.Materials.Count ?? 0;
-                Debug.Log($"[SC2 Mesh] {logKey}: materials built - count={materials.Length}, shader='{(materials.Length > 0 && materials[0] != null ? materials[0].shader.name : "none")}', declaredBlueprintMaterials={materialSetCount}, enableInstancing={(materials.Length > 0 && materials[0] != null && materials[0].enableInstancing)}.");
-
-                batch = new AssetBatch { Mesh = mesh, Materials = materials, Resolver = resolver, UniformScale = Mathf.Max(0.0001f, asset.UniformScale) };
+                if (!TryBuildBatch(logKey, asset, reader, true, false, out batch, out error)) return false;
                 Batches.Add(batchKey, batch);
             }
             else
@@ -476,6 +431,123 @@ public static class SC2GameAssetScenePreview
             error = "Could not create SCM preview: " + exception.Message;
             Debug.LogException(exception);
             batch = null;
+            return false;
+        }
+    }
+
+    private static void LogVerbose(bool verbose, string message)
+    {
+        if (verbose) Debug.Log(message);
+    }
+
+    /// <summary>Parses the asset's first resolved SCM and builds its Mesh and Materials into a new
+    /// batch, without registering it anywhere — the caller owns the result. May throw on a
+    /// corrupt archive entry; TryGetOrBuildBatch and TryBuildStandalonePreview both catch.</summary>
+    private static bool TryBuildBatch(string logKey, SC2GameAsset asset, ISC2SourceContainerReader reader, bool verbose, bool lightweightTextures, out AssetBatch batch, out string error)
+    {
+        batch = null;
+        error = null;
+        LogVerbose(verbose, $"[SC2 Mesh] {logKey}: building new batch for asset '{asset.Id}' (kind={asset.Kind}, {asset.Lods.Count} LOD(s) declared, UniformScale={asset.UniformScale:0.###}).");
+
+        SC2GameAssetLod lod = asset.Lods.FirstOrDefault(candidate => candidate.ModelPaths != null && candidate.ModelPaths.Count > 0);
+        if (lod == null)
+        {
+            error = "No resolved SCM exists for " + asset.Id + ".";
+            Debug.LogWarning($"[SC2 Mesh] {logKey}: no LOD has a resolved ModelPaths entry. LODs: " +
+                string.Join(" | ", asset.Lods.Select(l => $"lod{l.Index} declaredMeshPath='{l.DeclaredMeshPath}'")));
+            return false;
+        }
+
+        LogVerbose(verbose, $"[SC2 Mesh] {logKey}: using LOD {lod.Index} (declaredMeshPath='{lod.DeclaredMeshPath}'), {lod.ModelPaths.Count} candidate SCM path(s): {string.Join(" | ", lod.ModelPaths)}");
+
+        // ModelPaths are now normalized archive-relative paths (the
+        // browser's discovery pass is archive-native — see
+        // SC2GameAssetDiscovery.BuildFromArchive) — resolve existence
+        // via the reader's entry list instead of File.Exists.
+        string modelPath = lod.ModelPaths.FirstOrDefault(candidate => ArchiveHasEntry(reader, candidate));
+        if (string.IsNullOrWhiteSpace(modelPath))
+        {
+            error = "Resolved SCM file no longer exists.";
+            Debug.LogWarning($"[SC2 Mesh] {logKey}: none of the {lod.ModelPaths.Count} candidate SCM path(s) exist in the configured game archives.");
+            return false;
+        }
+        LogVerbose(verbose, $"[SC2 Mesh] {logKey}: reading SCM file '{modelPath}'.");
+
+        SC2ScmModel model;
+        using (var stream = new MemoryStream(ReadArchiveEntryBytes(reader, modelPath)))
+            model = SC2ScmModelReader.Read(stream, modelPath);
+        LogVerbose(verbose, $"[SC2 Mesh] {logKey}: SCM v{model.Version} parsed - vertices={model.Vertices.Count}, indices={model.Indices.Count} ({model.TriangleCount} tris), materialRanges={model.Materials.Count}, bones={model.Bones.Count}.");
+
+        Mesh mesh = CreateMesh(model, asset.Id);
+        if (mesh == null)
+        {
+            error = "SCM has no renderable triangles.";
+            Debug.LogWarning($"[SC2 Mesh] {logKey}: CreateMesh returned null (vertices={model.Vertices.Count}, indices={model.Indices.Count} - needs >=3 indices and >0 vertices).");
+            return false;
+        }
+        LogVerbose(verbose, $"[SC2 Mesh] {logKey}: Unity Mesh built - subMeshCount={mesh.subMeshCount}, bounds center={mesh.bounds.center}, bounds size={mesh.bounds.size}.");
+
+        var resolver = new ArchiveTextureResolver(reader);
+        Material[] materials = CreateMaterials(lod, mesh.subMeshCount, resolver, asset.Id, lightweightTextures);
+        var materialSetCount = lod.MaterialSets.FirstOrDefault(s => s.Materials.Count > 0)?.Materials.Count ?? 0;
+        LogVerbose(verbose, $"[SC2 Mesh] {logKey}: materials built - count={materials.Length}, shader='{(materials.Length > 0 && materials[0] != null ? materials[0].shader.name : "none")}', declaredBlueprintMaterials={materialSetCount}, enableInstancing={(materials.Length > 0 && materials[0] != null && materials[0].enableInstancing)}.");
+
+        batch = new AssetBatch { Mesh = mesh, Materials = materials, Resolver = resolver, UniformScale = Mathf.Max(0.0001f, asset.UniformScale) };
+        return true;
+    }
+
+    /// <summary>A caller-owned Mesh+Materials pair for `asset`, independent of the placed-instance
+    /// batches above: those are destroyed when their last instance is removed, so a viewer that
+    /// only wants to look at a model (the prop browser's 3D preview) must not borrow one.
+    /// Dispose frees the mesh, materials and the textures they loaded.</summary>
+    public sealed class StandalonePreview : IDisposable
+    {
+        public readonly Mesh Mesh;
+        public readonly Material[] Materials;
+        /// <summary>The blueprint's Display.UniformScale — the same factor a placed instance of this asset is drawn with.</summary>
+        public readonly float UniformScale;
+        private readonly IDisposable _resolver;
+
+        internal StandalonePreview(Mesh mesh, Material[] materials, float uniformScale, IDisposable resolver)
+        {
+            Mesh = mesh;
+            Materials = materials;
+            UniformScale = uniformScale;
+            _resolver = resolver;
+        }
+
+        public void Dispose()
+        {
+            if (Mesh != null) SafeDestroy(Mesh);
+            if (Materials != null) foreach (Material material in Materials) if (material != null) SafeDestroy(material);
+            _resolver?.Dispose();
+        }
+    }
+
+    /// <param name="lightweightTextures">Load only the diffuse and team textures (the normal map and
+    /// mask fall back to the shader's flat defaults) — roughly halves the texture work for a small
+    /// card thumbnail, where those two maps are not visible anyway.</param>
+    public static bool TryBuildStandalonePreview(SC2GameAsset asset, string gameDataRoot, out StandalonePreview preview, out string error, bool lightweightTextures = false)
+    {
+        preview = null;
+        error = null;
+        if (asset == null) { error = "Blueprint entry is missing."; return false; }
+        if (string.IsNullOrWhiteSpace(gameDataRoot) || !SC2GameArchiveRegistry.TryGetReader(out var reader))
+        {
+            error = "Game data root is not configured.";
+            return false;
+        }
+
+        try
+        {
+            if (!TryBuildBatch("browser-preview", asset, reader, false, lightweightTextures, out var batch, out error)) return false;
+            preview = new StandalonePreview(batch.Mesh, batch.Materials, batch.UniformScale, batch.Resolver);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            error = "Could not create SCM preview: " + exception.Message;
+            Debug.LogException(exception);
             return false;
         }
     }
@@ -615,9 +687,26 @@ public static class SC2GameAssetScenePreview
         return count <= indexCount - range.FirstIndex;
     }
 
-    private static Material[] CreateMaterials(SC2GameAssetLod lod, int subMeshCount, ArchiveTextureResolver resolver, string assetId)
+    private static SC2GameAssetMaterialSet DiffuseAndTeamOnly(SC2GameAssetMaterialSet source)
+    {
+        var copy = new SC2GameAssetMaterialSet { Name = source.Name };
+        foreach (var material in source.Materials)
+        {
+            var reduced = new SC2GameAssetMaterial { Name = material.Name, ShaderMacros = material.ShaderMacros };
+            foreach (var field in new[] { "DiffuseName", "TeamName" })
+            {
+                if (material.Textures.TryGetValue(field, out var raw)) reduced.Textures[field] = raw;
+                if (material.ResolvedTextures.TryGetValue(field, out var resolved)) reduced.ResolvedTextures[field] = resolved;
+            }
+            copy.Materials.Add(reduced);
+        }
+        return copy;
+    }
+
+    private static Material[] CreateMaterials(SC2GameAssetLod lod, int subMeshCount, ArchiveTextureResolver resolver, string assetId, bool lightweightTextures)
     {
         SC2GameAssetMaterialSet set = lod.MaterialSets.FirstOrDefault(candidate => candidate.Materials.Count > 0);
+        if (set != null && lightweightTextures) set = DiffuseAndTeamOnly(set);
         Material[] declared = new Material[0];
         if (set != null)
         {
@@ -756,12 +845,28 @@ public static class SC2GameAssetScenePreview
 
     /// <summary>ISC2SourceContainerReader has no O(1) existence check on its
     /// own interface (SC2MultiSourceContainerReader's own Contains is a
-    /// concrete-type-only convenience) — a linear scan over Entries is fine
-    /// here since every call site above is memoized (ArchiveTextureResolver's
-    /// _cache, and the one-shot model-candidate lookup in TryGetOrBuildBatch),
-    /// never repeated per-frame.</summary>
-    private static bool ArchiveHasEntry(ISC2SourceContainerReader reader, string normalizedPath) =>
-        reader.Entries.Any(e => string.Equals(e.NormalizedPath, normalizedPath, StringComparison.OrdinalIgnoreCase));
+    /// concrete-type-only convenience), so this keeps its own lookup set of the
+    /// reader's entry paths, rebuilt only when the reader instance (or its entry
+    /// count) changes.</summary>
+    private static bool ArchiveHasEntry(ISC2SourceContainerReader reader, string normalizedPath)
+    {
+        if (!ReferenceEquals(reader, _entrySetReader) || _entrySet == null || _entrySetCount != reader.Entries.Count)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in reader.Entries) set.Add(entry.NormalizedPath);
+            _entrySet = set;
+            _entrySetReader = reader;
+            _entrySetCount = reader.Entries.Count;
+        }
+        return _entrySet.Contains(normalizedPath);
+    }
+
+    // The archives hold well over a hundred thousand entries and every model needs a dozen
+    // existence checks (SCM candidates, textures with their .win variants), so a linear scan per
+    // check made building one model cost tens of milliseconds. One lookup set per reader instead.
+    private static ISC2SourceContainerReader _entrySetReader;
+    private static HashSet<string> _entrySet;
+    private static int _entrySetCount;
 
     /// <summary>ZipArchiveEntry.Open() (the real backing stream for a packed
     /// .scd) is forward-only/non-seekable, but SC2ScmModelReader.Read seeks —

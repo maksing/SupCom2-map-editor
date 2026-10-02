@@ -28,6 +28,11 @@ public sealed class SC2UnitPropBrowser
     }
 
     private const int WindowId = 184207;
+    private const int BackdropWindowId = 184206;
+    private const float WindowPadding = 12f;
+    private const float HeaderHeight = 42f;
+    private const float ScrollbarReserve = 18f;
+    private const float PanelGap = 8f;
     private const int MaxCachedPreviews = 72;
     private const int ThumbnailLoadsPerRepaint = 2;
     private const float CardWidth = 144f;
@@ -72,7 +77,44 @@ public sealed class SC2UnitPropBrowser
     private string _unitCategorySignature;
     private bool _unitCategoriesExpanded;
     private int _thumbnailLoadsThisRepaint;
-    private GUIStyle _cardLabelStyle, _cardStateReadyStyle, _cardStateIssueStyle, _fallbackLabelStyle;
+
+    // Prop 3D preview: the card under the cursor is remembered across frames (the panel keeps
+    // showing the last one when the cursor leaves the grid, so it can be dragged/zoomed) and only
+    // becomes the previewed model after the cursor has rested on it for HoverPreviewDelaySeconds —
+    // building a model parses an SCM and loads textures, which must not run for every card the
+    // cursor merely passes over.
+    private const float PropPreviewPanelWidth = 320f;
+    // Prop cards show a still 3D render of the model instead of a texture. Each one parses an
+    // SCM and loads its textures, so only one is built per repaint (cards scrolled into view fill
+    // in over the next few frames) and the renders are kept in a bounded LRU cache.
+    private const int MaxCachedModelThumbnails = 160;
+    private const int ModelThumbnailsPerRepaint = 1;
+    private const int ModelThumbnailWidth = 192;
+    private const int ModelThumbnailHeight = 144;
+    private readonly Dictionary<string, Texture2D> _modelThumbnails = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+    private readonly LinkedList<string> _modelThumbnailOrder = new LinkedList<string>();
+    private readonly Dictionary<string, LinkedListNode<string>> _modelThumbnailNodes = new Dictionary<string, LinkedListNode<string>>(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _failedModelThumbnails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private int _modelThumbnailsThisRepaint;
+
+    // Building anything (a thumbnail, or the preview model for the hovered card) is held back
+    // while the grid is scrolling and for ScrollSettleSeconds after it stops, and thumbnails are
+    // only built for cards actually inside the viewport: otherwise every frame of a scroll paid for
+    // another model, and the cards that scrolled past were built for nothing.
+    private const float ScrollSettleSeconds = 0.15f;
+    private float _lastScrollY;
+    private float _lastScrollChangeTime;
+    private float _cardsViewHeight;
+    private bool ScrollIdle => Time.realtimeSinceStartup - _lastScrollChangeTime > ScrollSettleSeconds;
+    private const float HoverPreviewDelaySeconds = 0.2f;
+    private readonly SC2PropModelPreview _propPreview = new SC2PropModelPreview();
+    private float _contentWidth = 1096f;
+    private float _cardWidth = CardWidth;
+    private SC2GameAssetDiscoveryEntry _hoveredEntry;
+    private SC2GameAssetDiscoveryEntry _previewedHoverCandidate;
+    private float _hoveredSince;
+    private SC2GameAssetDiscoveryEntry _previewedEntry;
+    private GUIStyle _titleStyle, _cardLabelStyle, _cardStateReadyStyle, _cardStateIssueStyle, _fallbackLabelStyle;
 
     // Built once per catalog load (PollLoadTask/StartLoad's cache-hit path),
     // not per lookup - lets callers resolve an existing SC2ObjProp.
@@ -117,24 +159,74 @@ public sealed class SC2UnitPropBrowser
         if (!IsOpen) return;
         PollLoadTask();
         float width = Mathf.Min(1120f, Mathf.Max(680f, Screen.width - 80f));
+        _contentWidth = width - WindowPadding * 2f;
         float height = Mathf.Min(740f, Mathf.Max(520f, Screen.height - 110f));
         var rect = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
-        GUI.ModalWindow(WindowId, rect, DrawWindow, _kind == AssetKind.Unit ? "Unit Browser" : "Prop Browser");
+
+        // Same look as the texture browser: a dimmed backdrop and an opaque window. GUIStyle.none
+        // keeps the skin's translucent window background out of the way; DrawWindow paints the
+        // window itself. The backdrop is a window too (not a plain rect) because the hosts call
+        // this from inside their own clipped panels, where a screen-sized rect would be clipped.
+        GUI.Window(BackdropWindowId, new Rect(0f, 0f, Screen.width, Screen.height), DrawBackdrop, GUIContent.none, GUIStyle.none);
+        GUI.BringWindowToBack(BackdropWindowId);
+        GUI.ModalWindow(WindowId, rect, DrawWindow, GUIContent.none, GUIStyle.none);
+    }
+
+    private static void DrawBackdrop(int windowId)
+    {
+        DrawRect(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.72f));
+    }
+
+    private static void DrawRect(Rect rect, Color color)
+    {
+        var previous = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previous;
+    }
+
+    private static void DrawBorder(Rect rect, Color color)
+    {
+        DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), color);
+        DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), color);
+        DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), color);
+        DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), color);
     }
 
     public void Close()
     {
         _onPick = null;
         _search = string.Empty;
+        _hoveredEntry = null;
+        _previewedEntry = null;
+        _propPreview.Dispose();
     }
 
     private void DrawWindow(int windowId)
     {
         _thumbnailLoadsThisRepaint = 0;
+        _modelThumbnailsThisRepaint = 0;
+
+        float windowWidth = _contentWidth + WindowPadding * 2f;
+        float windowHeight = Mathf.Min(740f, Mathf.Max(520f, Screen.height - 110f));
+        var windowRect = new Rect(0f, 0f, windowWidth, windowHeight);
+        DrawRect(windowRect, new Color(0.075f, 0.082f, 0.098f, 1f));
+        DrawBorder(windowRect, new Color(0.25f, 0.28f, 0.34f, 1f));
+        DrawRect(new Rect(0f, 0f, windowWidth, HeaderHeight), new Color(0.105f, 0.115f, 0.135f, 1f));
+        GUI.Label(new Rect(14f, 10f, 220f, 22f), _kind == AssetKind.Unit ? "Unit Browser" : "Prop Browser", TitleStyle);
+        if (GUI.Button(new Rect(windowWidth - 82f, 8f, 68f, 26f), "Close")) { Close(); GUIUtility.ExitGUI(); }
+
+        GUILayout.BeginArea(new Rect(WindowPadding, HeaderHeight + 8f, _contentWidth, windowHeight - HeaderHeight - 16f));
+        DrawWindowContent();
+        GUILayout.EndArea();
+    }
+
+    private void DrawWindowContent()
+    {
         GUILayout.BeginVertical();
         GUILayout.Label(_kind == AssetKind.Unit
             ? "Blueprint -> SCM -> DDS. Unit cards use the game's UI icon when it exists."
-            : "Blueprint -> SCM -> DDS. Prop cards use their resolved diffuse texture as a lightweight thumbnail.");
+            : "Blueprint -> SCM -> DDS. Prop cards show a 3D render of the model; hover one for a turning preview.");
 
         GUILayout.BeginHorizontal();
         // Read-only: the gamedata root is configured once, on the startup
@@ -149,7 +241,6 @@ public sealed class SC2UnitPropBrowser
         GUI.enabled = guiEnabledBeforeIndexButton && _loadTask == null && !string.IsNullOrWhiteSpace(GameDataRoot);
         if (GUILayout.Button(_result == null ? "Index" : "Reindex", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
         GUI.enabled = guiEnabledBeforeIndexButton;
-        if (GUILayout.Button("Close", GUILayout.Width(SC2UiScale.Pxf(66f)))) { Close(); GUIUtility.ExitGUI(); }
         GUILayout.EndHorizontal();
 
         if (_loadTask != null)
@@ -181,9 +272,20 @@ public sealed class SC2UnitPropBrowser
         if (_kind == AssetKind.Prop) DrawPropFolderFilter();
         if (_kind == AssetKind.Unit) DrawUnitFilterRow();
         var entries = GetVisibleEntries();
-        DrawCards(entries);
+        if (_kind == AssetKind.Prop)
+        {
+            if (Event.current.type == EventType.Repaint) _hoveredEntry = null;
+            float cardsAreaWidth = _contentWidth - PropPreviewPanelWidth - PanelGap;
+            GUILayout.BeginHorizontal();
+            GUILayout.BeginVertical(GUILayout.Width(cardsAreaWidth));
+            DrawCards(entries, cardsAreaWidth);
+            GUILayout.EndVertical();
+            GUILayout.Space(PanelGap);
+            DrawPropPreviewPanel();
+            GUILayout.EndHorizontal();
+        }
+        else DrawCards(entries, _contentWidth);
         GUILayout.EndVertical();
-        GUI.DragWindow(new Rect(0, 0, 10000, 22));
     }
 
     private void StartLoad(bool forceReindex)
@@ -198,6 +300,8 @@ public sealed class SC2UnitPropBrowser
 
         _unitIconPaths.Clear();
         _failedPreviewPaths.Clear();
+        ClearModelThumbnails();
+        _secondaryLabels.Clear();
         InvalidateVisibleEntries();
         if (!forceReindex && SharedIndexes.TryGetValue(root, out _result))
         {
@@ -559,6 +663,20 @@ public sealed class SC2UnitPropBrowser
         return folder.Replace("/", " / ");
     }
 
+    // The second card line (folder path for props, id for units) is built once per entry: it used
+    // to be re-derived with several string allocations for every card on every GUI event, which
+    // showed up as garbage-collection hitches while scrolling.
+    private readonly Dictionary<SC2GameAssetDiscoveryEntry, GUIContent> _secondaryLabels = new Dictionary<SC2GameAssetDiscoveryEntry, GUIContent>();
+
+    private GUIContent GetSecondaryLabel(SC2GameAssetDiscoveryEntry entry)
+    {
+        if (_secondaryLabels.TryGetValue(entry, out var label)) return label;
+        string text = _kind == AssetKind.Prop ? GetPropFolderBreadcrumb(entry) : entry.Asset.Id;
+        label = new GUIContent(text, text);
+        _secondaryLabels[entry] = label;
+        return label;
+    }
+
     private bool KindMatches(SC2GameAssetDiscoveryEntry entry)
     {
         return _kind == AssetKind.Unit
@@ -625,35 +743,92 @@ public sealed class SC2UnitPropBrowser
             .First();
     }
 
-    private void DrawCards(IReadOnlyList<SC2GameAssetDiscoveryEntry> entries)
+    private void DrawPropPreviewPanel()
     {
-        float available = Mathf.Max(500f, Screen.width - 150f);
-        int columns = Mathf.Clamp(Mathf.FloorToInt((available - 30f) / CardWidth), 3, 7);
+        if (Event.current.type == EventType.Repaint)
+        {
+            UpdatePreviewedEntry();
+            RepaintHost?.Invoke(); // keeps the model turning and the hover delay ticking
+        }
+
+        GUILayout.BeginVertical(GUILayout.Width(PropPreviewPanelWidth));
+        float side = PropPreviewPanelWidth;
+        var modelRect = GUILayoutUtility.GetRect(side, side, GUILayout.ExpandWidth(false), GUILayout.ExpandHeight(false));
+        _propPreview.Draw(modelRect);
+
+        var entry = _previewedEntry;
+        GUILayout.Label(entry == null ? "Hover a prop to preview it" : entry.Asset.DisplayName ?? entry.Asset.Id, CardLabelStyle, GUILayout.Height(20f));
+        GUILayout.Label(entry == null ? string.Empty : GetPropFolderBreadcrumb(entry), CardLabelStyle, GUILayout.Height(18f));
+        string status = entry == null || _propPreview.HasModel ? "Drag to rotate, wheel to zoom" : "No 3D model: " + (_propPreview.Error ?? "not loaded");
+        GUILayout.Label(status, entry == null || _propPreview.HasModel ? CardStateReadyStyle : CardStateIssueStyle, GUILayout.Height(18f));
+        GUILayout.FlexibleSpace();
+        GUILayout.EndVertical();
+    }
+
+    /// <summary>Promotes the hovered card to the previewed one once the cursor has rested on it
+    /// (see HoverPreviewDelaySeconds). Runs on Repaint only, so the panel's layout controls are
+    /// identical between a frame's Layout and Repaint events.</summary>
+    private void UpdatePreviewedEntry()
+    {
+        float now = Time.realtimeSinceStartup;
+        if (_hoveredEntry != _previewedHoverCandidate)
+        {
+            _previewedHoverCandidate = _hoveredEntry;
+            _hoveredSince = now;
+        }
+        if (_hoveredEntry == null || _hoveredEntry == _previewedEntry) return;
+        if (now - _hoveredSince < HoverPreviewDelaySeconds || !ScrollIdle) return;
+        _previewedEntry = _hoveredEntry;
+        _propPreview.SetAsset(_previewedEntry.Asset, GameDataRoot);
+    }
+
+    private void DrawCards(IReadOnlyList<SC2GameAssetDiscoveryEntry> entries, float areaWidth)
+    {
+        // Columns fill the area exactly: the card width stretches a little past CardWidth to
+        // absorb the remainder, so there is no empty strip beside the scrollbar or the preview.
+        float usable = Mathf.Max(CardWidth * 2f, areaWidth - ScrollbarReserve);
+        int columns = Mathf.Clamp(Mathf.FloorToInt(usable / CardWidth), 2, 8);
+        _cardWidth = Mathf.Floor(usable / columns);
+        float available = _cardWidth * columns;
         int rows = Mathf.CeilToInt(entries.Count / (float)columns);
         float totalHeight = Mathf.Max(1f, rows * CardHeight);
 
-        _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.ExpandHeight(true));
+        _scroll = GUILayout.BeginScrollView(_scroll, false, true, GUIStyle.none, GUI.skin.verticalScrollbar, GUILayout.ExpandHeight(true));
+        if (!Mathf.Approximately(_scroll.y, _lastScrollY))
+        {
+            _lastScrollY = _scroll.y;
+            _lastScrollChangeTime = Time.realtimeSinceStartup;
+        }
         Rect canvas = GUILayoutUtility.GetRect(available, totalHeight, GUILayout.Width(available), GUILayout.Height(totalHeight));
-        int firstRow = Mathf.Max(0, Mathf.FloorToInt(_scroll.y / CardHeight) - 1);
-        int lastRow = Mathf.Min(rows - 1, Mathf.CeilToInt((_scroll.y + Mathf.Max(260f, Screen.height - 250f)) / CardHeight) + 1);
+        float viewHeight = _cardsViewHeight > 1f ? _cardsViewHeight : Mathf.Max(260f, Screen.height - 250f);
+        int visibleFirstRow = Mathf.Max(0, Mathf.FloorToInt(_scroll.y / CardHeight));
+        int visibleLastRow = Mathf.FloorToInt((_scroll.y + viewHeight - 1f) / CardHeight);
+        int firstRow = Mathf.Max(0, visibleFirstRow - 1);
+        int lastRow = Mathf.Min(rows - 1, visibleLastRow + 1);
+        bool mayBuild = ScrollIdle;
         for (int row = firstRow; row <= lastRow; row++)
         {
             for (int column = 0; column < columns; column++)
             {
                 int index = row * columns + column;
                 if (index >= entries.Count) break;
-                Rect card = new Rect(canvas.x + column * CardWidth, canvas.y + row * CardHeight, CardWidth, CardHeight);
-                DrawCard(card, entries[index]);
+                Rect card = new Rect(canvas.x + column * _cardWidth, canvas.y + row * CardHeight, _cardWidth, CardHeight);
+                DrawCard(card, entries[index], mayBuild && row >= visibleFirstRow && row <= visibleLastRow);
             }
         }
         GUILayout.EndScrollView();
+        if (Event.current.type == EventType.Repaint) _cardsViewHeight = GUILayoutUtility.GetLastRect().height;
     }
 
-    private void DrawCard(Rect rect, SC2GameAssetDiscoveryEntry entry)
+    private void DrawCard(Rect rect, SC2GameAssetDiscoveryEntry entry, bool mayBuildThumbnail)
     {
-        GUI.Box(rect, GUIContent.none);
+        if (_kind == AssetKind.Prop && Event.current.type == EventType.Repaint && rect.Contains(Event.current.mousePosition))
+            _hoveredEntry = entry;
+        var cardInner = new Rect(rect.x + 2f, rect.y + 2f, rect.width - 4f, rect.height - 4f);
+        bool highlighted = _kind == AssetKind.Prop && entry == _previewedEntry;
+        DrawRect(cardInner, highlighted ? new Color(0.18f, 0.31f, 0.52f, 1f) : new Color(0.11f, 0.12f, 0.145f, 1f));
         var previewRect = new Rect(rect.x + 8, rect.y + 8, rect.width - 16, 96);
-        Texture2D preview = GetPreview(entry);
+        Texture preview = _kind == AssetKind.Prop ? GetModelThumbnail(entry, mayBuildThumbnail) : GetPreview(entry);
         if (preview != null) DrawFittedTexture(previewRect, preview);
         else
         {
@@ -665,8 +840,7 @@ public sealed class SC2UnitPropBrowser
         }
 
         GUI.Label(new Rect(rect.x + 5, rect.y + 106, rect.width - 10, 20), entry.Asset.DisplayName ?? entry.Asset.Id, CardLabelStyle);
-        string secondary = _kind == AssetKind.Prop ? GetPropFolderBreadcrumb(entry) : entry.Asset.Id;
-        GUI.Label(new Rect(rect.x + 5, rect.y + 126, rect.width - 10, 17), new GUIContent(secondary, secondary), CardLabelStyle);
+        GUI.Label(new Rect(rect.x + 5, rect.y + 126, rect.width - 10, 17), GetSecondaryLabel(entry), CardLabelStyle);
         string state = !entry.IsReady ? entry.Issues.First(issue => issue.IsBlocking).Kind : entry.Issues.Count == 0 ? "Ready" : "Ready (fallback)";
         GUI.Label(new Rect(rect.x + 5, rect.y + 144, rect.width - 10, 17), state, entry.IsReady ? CardStateReadyStyle : CardStateIssueStyle);
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Select(entry);
@@ -716,6 +890,70 @@ public sealed class SC2UnitPropBrowser
         return texture;
     }
 
+    /// <summary>The cached 3D render for a prop card, or null while it is still pending (or when
+    /// the prop has no model at all, in which case the card keeps its coloured placeholder).</summary>
+    private Texture2D GetModelThumbnail(SC2GameAssetDiscoveryEntry entry, bool mayBuild)
+    {
+        string key = entry.Asset.SourcePath;
+        if (string.IsNullOrEmpty(key) || _failedModelThumbnails.Contains(key)) return null;
+        if (_modelThumbnails.TryGetValue(key, out var cached))
+        {
+            if (cached != null)
+            {
+                var node = _modelThumbnailNodes[key];
+                _modelThumbnailOrder.Remove(node);
+                _modelThumbnailOrder.AddLast(node);
+                return cached;
+            }
+            _modelThumbnails.Remove(key);
+        }
+        if (!mayBuild || Event.current.type != EventType.Repaint || _modelThumbnailsThisRepaint >= ModelThumbnailsPerRepaint) return null;
+        if (!entry.Asset.Lods.Any(lod => lod.ModelPaths != null && lod.ModelPaths.Count > 0))
+        {
+            _failedModelThumbnails.Add(key);
+            return null;
+        }
+
+        _modelThumbnailsThisRepaint++;
+        if (!SC2GameAssetScenePreview.TryBuildStandalonePreview(entry.Asset, GameDataRoot, out var model, out _, true))
+        {
+            _failedModelThumbnails.Add(key);
+            return null;
+        }
+        Texture2D render;
+        try { render = _propPreview.RenderThumbnail(model, ModelThumbnailWidth, ModelThumbnailHeight); }
+        finally { model.Dispose(); }
+
+        _modelThumbnails[key] = render;
+        _modelThumbnailNodes[key] = _modelThumbnailOrder.AddLast(key);
+        while (_modelThumbnailOrder.Count > MaxCachedModelThumbnails)
+        {
+            string oldest = _modelThumbnailOrder.First.Value;
+            _modelThumbnailOrder.RemoveFirst();
+            _modelThumbnailNodes.Remove(oldest);
+            if (_modelThumbnails.TryGetValue(oldest, out var evicted)) DestroyThumbnail(evicted);
+            _modelThumbnails.Remove(oldest);
+        }
+        RepaintHost?.Invoke();
+        return render;
+    }
+
+    private void ClearModelThumbnails()
+    {
+        foreach (var render in _modelThumbnails.Values) DestroyThumbnail(render);
+        _modelThumbnails.Clear();
+        _modelThumbnailOrder.Clear();
+        _modelThumbnailNodes.Clear();
+        _failedModelThumbnails.Clear();
+    }
+
+    private static void DestroyThumbnail(Texture2D render)
+    {
+        if (render == null) return;
+        if (Application.isPlaying) UnityEngine.Object.Destroy(render);
+        else UnityEngine.Object.DestroyImmediate(render);
+    }
+
     private void TouchPreview(string path)
     {
         LinkedListNode<string> node;
@@ -754,6 +992,7 @@ public sealed class SC2UnitPropBrowser
         return string.IsNullOrEmpty(result) ? null : result;
     }
 
+    private GUIStyle TitleStyle => _titleStyle ??= new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 14, normal = { textColor = Color.white } };
     private GUIStyle CardLabelStyle => _cardLabelStyle ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, wordWrap = false, clipping = TextClipping.Clip };
     private GUIStyle CardStateReadyStyle => _cardStateReadyStyle ??= new GUIStyle(CardLabelStyle) { normal = { textColor = new Color(0.42f, 0.9f, 0.55f) } };
     private GUIStyle CardStateIssueStyle => _cardStateIssueStyle ??= new GUIStyle(CardLabelStyle) { normal = { textColor = new Color(1f, 0.62f, 0.28f) } };
@@ -766,7 +1005,7 @@ public sealed class SC2UnitPropBrowser
         return texture == null ? null : texture.ResolvedPath;
     }
 
-    private static void DrawFittedTexture(Rect rect, Texture2D texture)
+    private static void DrawFittedTexture(Rect rect, Texture texture)
     {
         float scale = Mathf.Min(rect.width / texture.width, rect.height / texture.height);
         float width = texture.width * scale;
