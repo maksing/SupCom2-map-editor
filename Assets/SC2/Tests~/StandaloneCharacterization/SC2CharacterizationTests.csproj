@@ -110,6 +110,10 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PairLockSet.cs" Link="Source\SC2PairLockSet.cs" />
     <!-- Axis-constrained rotate gesture rules. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2AxisRotation.cs" Link="Source\SC2AxisRotation.cs" />
+    <!-- Built-in brush image paths. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2BrushPresets.cs" Link="Source\SC2BrushPresets.cs" />
+    <!-- Distance-based dabs of a custom stamp stroke. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2StampStroke.cs" Link="Source\SC2StampStroke.cs" />
     <!-- Sun direction -> where a cube's shadow falls (Environment > Sun preview). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SunShadowMath.cs" Link="Source\SC2SunShadowMath.cs" />
     <!-- Point-cloud volume bake (pcloud_up / pcloud_down) and the DXT5 writer for it. -->

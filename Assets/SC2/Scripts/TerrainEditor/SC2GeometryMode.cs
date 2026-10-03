@@ -91,6 +91,12 @@ public class SC2GeometryMode
     private Vector3 _brushPos;
     private bool    _brushVis, _isPainting;
     private double  _lastApply;
+    // A custom stamp brush places a stamp every _stampSpacing x the brush diameter along the stroke, not one per input event (see
+    // SC2StampStroke). Flatten already dabs by distance on its own.
+    private readonly SC2StampStroke _stampStroke = new SC2StampStroke();
+    private float _stampSpacing = 0.4f;
+    // Off by default: the stroke dabs on every input event as before; on, it places stamps by distance.
+    private bool _stampSpaced;
     private const double kMinInterval = 0.016;
 
     // F interactive resize, Blender-style — see
@@ -207,6 +213,9 @@ public class SC2GeometryMode
         if (_win.Data.UseCustomGeometryBrush)
         {
             DrawCustomGeometryBrushPicker();
+            _stampSpaced = EditorGUILayout.Toggle("Place stamps by distance", _stampSpaced);
+            if (_stampSpaced)
+                _stampSpacing = SC2TerrainShell.DrawCompactSlider("Stamp spacing (% of diameter)", _stampSpacing * 100f, 10f, 200f, "geometry-stamp") / 100f;
             var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", _win.Data.RandomizeGeometryBrushRotation);
             if (nextRandomize != _win.Data.RandomizeGeometryBrushRotation)
             {
@@ -639,10 +648,13 @@ public class SC2GeometryMode
         var currentPath = _win.Data.CustomGeometryBrushTexturePath ?? "";
         if (currentPath != _customGeoBrushCachedPath)
         {
-            _customGeoBrushCache = SC2TerrainMaterialFactory.LoadTexturePublicAny(currentPath);
+            _customGeoBrushCache = SC2BrushLibrary.Resolve(currentPath);
             _customGeoBrushCachedPath = currentPath;
         }
         var pathDraft = _customGeoBrushCachedPath;
+        // The built-in brushes: one click sets the path and the texture.
+        var preset = SC2BrushLibrary.DrawPresetGrid(pathDraft, SC2TerrainShell.GetPanelContentWidth());
+        if (preset != null) { pathDraft = preset; _customGeoBrushCache = SC2BrushLibrary.Load(preset); }
         var picked = SC2TerrainShell.DrawTexturePickerWithPath("Brush Image", _customGeoBrushCache, "GeometryBrush:CustomBrush", ref pathDraft, out var pickedViaBrowser);
         if (picked != _customGeoBrushCache)
         {
@@ -689,11 +701,37 @@ public class SC2GeometryMode
             _geoBrushPixelsH = tex2d.height;
             _geoBrushPixelsSourceTex = tex2d;
         }
-        catch (UnityException ex)
+        catch (UnityException)
         {
-            Debug.LogWarning($"[SC2GeometryMode] Custom brush texture '{tex2d.name}' isn't CPU-readable — falling back to the round brush for this stroke: {ex.Message}");
-            _geoBrushPixels = null;
-            _geoBrushPixelsSourceTex = null;
+            // Not CPU-readable (a texture from the game archive, say): read it back through the GPU, so the sculpt tools still use the
+            // stamp instead of silently dropping to the round brush.
+            var rt = RenderTexture.GetTemporary(tex2d.width, tex2d.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            var previous = RenderTexture.active;
+            Texture2D copy = null;
+            try
+            {
+                Graphics.Blit(tex2d, rt);
+                RenderTexture.active = rt;
+                copy = new Texture2D(tex2d.width, tex2d.height, TextureFormat.RGBA32, false, true);
+                copy.ReadPixels(new Rect(0, 0, tex2d.width, tex2d.height), 0, 0);
+                copy.Apply(false);
+                _geoBrushPixels = copy.GetPixels32();
+                _geoBrushPixelsW = tex2d.width;
+                _geoBrushPixelsH = tex2d.height;
+                _geoBrushPixelsSourceTex = tex2d;
+            }
+            catch (UnityException ex)
+            {
+                Debug.LogWarning($"[SC2GeometryMode] Custom brush texture '{tex2d.name}' could not be read — falling back to the round brush for this stroke: {ex.Message}");
+                _geoBrushPixels = null;
+                _geoBrushPixelsSourceTex = null;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+                if (copy != null) Object.Destroy(copy);
+            }
         }
     }
 
@@ -804,6 +842,8 @@ public class SC2GeometryMode
         if (down)
         {
             _isPainting = true;
+            _stampStroke.End();
+            _win.ActiveRuntime?.BeginSculptStroke();
             // Roll a fresh stamp rotation for this stroke only,
             // and (re)build the readable-pixel cache the mask sampler needs
             // — see _geoBrushRotationRad/EnsureGeoBrushPixelCache's own doc
@@ -828,8 +868,12 @@ public class SC2GeometryMode
         // still rolls once per stroke (mouse-down) and holds it fixed for
         // the drag; this one re-rolls on every single application (down AND
         // every drag frame that passes the throttle above).
-        if (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation && _win.Data.RandomizeGeometryBrushRotationContinuous)
-            _geoBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
+        void RerollStampRotation()
+        {
+            if (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation && _win.Data.RandomizeGeometryBrushRotationContinuous)
+                _geoBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
+        }
+        RerollStampRotation();
 
         // A little wider than the nominal brush radius when notifying
         // Objects/Decals below — the brush's own falloff/hardness shaping
@@ -841,6 +885,18 @@ public class SC2GeometryMode
         var offset = _win.ActiveWorldOffset;
 
         var brushMask = _win.Data.UseCustomGeometryBrush ? _geoBrushPixels : null;
+
+        // By default every input event dabs once (a round brush, and a custom stamp too). With "Place stamps by distance" a custom stamp dabs
+        // by distance instead (Flatten has its own spacing below): one stamp where the stroke starts, then one every spacing along the
+        // path, so the stamps stay distinct instead of piling up into a blob.
+        List<Vector3> stampDabs = null;
+        if (brushMask != null && _stampSpaced && _tool != Tool.Flatten)
+        {
+            stampDabs = down ? _stampStroke.Begin(_brushPos) : _stampStroke.Move(_brushPos, SC2StampStroke.Spacing(_radius, _stampSpacing, Data.CellSize));
+            if (stampDabs.Count == 0) { e.Use(); return; }
+        }
+        var singleDab = new List<Vector3> { _brushPos };
+
         if (_tool == Tool.SetHeight)
         {
             // SetHeight: directly set vertices within radius to _setHeight,
@@ -849,14 +905,18 @@ public class SC2GeometryMode
             // comment — and ActiveRuntime works in LOCAL space, so each
             // world-space symmetric position is translated by
             // ActiveWorldOffset before applying and back before notifying.
-            var setHeightPositions = _win.Data.GetSymmetricPositions(_brushPos);
-            for (var slot = 0; slot < setHeightPositions.Count; slot++)
+            foreach (var dab in stampDabs ?? singleDab)
             {
-                var pos = setHeightPositions[slot];
-                GetSymmetricStampTransform(slot, out var mirror, out var swapAxes, out var rotationRad);
-                _win.ActiveRuntime.SculptSetHeight(pos - offset, _radius, _strength, _hardness, _setHeight,
-                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
-                _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
+                if (stampDabs != null) RerollStampRotation();
+                var setHeightPositions = _win.Data.GetSymmetricPositions(dab);
+                for (var slot = 0; slot < setHeightPositions.Count; slot++)
+                {
+                    var pos = setHeightPositions[slot];
+                    GetSymmetricStampTransform(slot, out var mirror, out var swapAxes, out var rotationRad);
+                    _win.ActiveRuntime.SculptSetHeight(pos - offset, _radius, _strength, _hardness, _setHeight,
+                        brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
+                    _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
+                }
             }
         }
         else if (_tool == Tool.Flatten)
@@ -908,7 +968,10 @@ public class SC2GeometryMode
             var effectiveStrength = appliesRadiusCompensation
                 ? _strength * (_radius / StrengthRadiusReference)
                 : _strength;
-            var sculptPositions = _win.Data.GetSymmetricPositions(_brushPos);
+            foreach (var dab in stampDabs ?? singleDab)
+            {
+            if (stampDabs != null) RerollStampRotation();
+            var sculptPositions = _win.Data.GetSymmetricPositions(dab);
             for (var slot = 0; slot < sculptPositions.Count; slot++)
             {
                 var pos = sculptPositions[slot];
@@ -924,6 +987,7 @@ public class SC2GeometryMode
                     brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes,
                     _win.Data.SymmetryCenter - offset, slotRotationDeg);
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
+            }
             }
         }
 

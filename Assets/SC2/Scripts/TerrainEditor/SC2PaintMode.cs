@@ -71,6 +71,13 @@ public class SC2PaintMode
     private float[] _lockBuffer;
     private bool _assignLockFoldout, _blendLockFoldout;
 
+    // A custom stamp brush places a stamp every _stampSpacing x the brush diameter along the stroke, not one per input event (see
+    // SC2StampStroke).
+    private readonly SC2StampStroke _stampStroke = new SC2StampStroke();
+    private float _stampSpacing = 0.4f;
+    // Off by default: the stroke dabs on every input event as before; on, it places stamps by distance.
+    private bool _stampSpaced;
+
     private bool  _autoOutline = false;
     private float _outlineWidth = 8f;
     private float _outlineSoftness = 0.5f;
@@ -354,6 +361,9 @@ public class SC2PaintMode
         if (_win.Data.UseCustomBrush)
         {
             DrawCustomBrushPicker();
+            _stampSpaced = EditorGUILayout.Toggle("Place stamps by distance", _stampSpaced);
+            if (_stampSpaced)
+                _stampSpacing = SC2TerrainShell.DrawCompactSlider("Stamp spacing (% of diameter)", _stampSpacing * 100f, 10f, 200f, "blend-stamp") / 100f;
             var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", _win.Data.RandomizeBrushRotation);
             if (nextRandomize != _win.Data.RandomizeBrushRotation)
             {
@@ -945,10 +955,13 @@ public class SC2PaintMode
         var currentPath = _win.Data.CustomBrushTexturePath ?? "";
         if (currentPath != _customBrushCachedPath)
         {
-            _customBrushCache = SC2TerrainMaterialFactory.LoadTexturePublicAny(currentPath);
+            _customBrushCache = SC2BrushLibrary.Resolve(currentPath);
             _customBrushCachedPath = currentPath;
         }
         var pathDraft = _customBrushCachedPath;
+        // The built-in brushes: one click sets the path and the texture.
+        var preset = SC2BrushLibrary.DrawPresetGrid(pathDraft, SC2TerrainShell.GetPanelContentWidth());
+        if (preset != null) { pathDraft = preset; _customBrushCache = SC2BrushLibrary.Load(preset); }
         var picked = SC2TerrainShell.DrawTexturePickerWithPath("Brush Image", _customBrushCache, "PaintBlend:CustomBrush", ref pathDraft, out var pickedViaBrowser);
         if (picked != _customBrushCache)
         {
@@ -1343,6 +1356,8 @@ public class SC2PaintMode
         {
             FlushOutlineJob();
             _isPainting = true;
+            _stampStroke.End();
+            _win.ActiveRuntime?.BeginBlendStroke();
             // Roll a fresh stamp rotation for this stroke only —
             // see _rnmBrushRotationRad's own doc comment.
             _rnmBrushRotationRad = (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation)
@@ -1362,15 +1377,6 @@ public class SC2PaintMode
         if (!down && now - _lastApply < kInterval) return;
         _lastApply = now;
 
-        // A SEPARATE toggle from RandomizeBrushRotation — that one still rolls
-        // once per stroke (mouse-down) and holds it fixed for the drag; this
-        // one re-rolls on every single application (down AND every drag
-        // frame that passes the throttle above), so continuously dragging
-        // the mouse keeps stamping fresh random orientations instead of one
-        // fixed one for the whole stroke.
-        if (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation && _win.Data.RandomizeBrushRotationContinuous)
-            _rnmBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
-
         // Holding Ctrl temporarily acts as the eraser,
         // alongside the same Ctrl-held-erase behavior for Props/Costs/
         // TerrainTypes painting — see SC2CostsShell.IsErasingHeld and
@@ -1379,20 +1385,41 @@ public class SC2PaintMode
         // paints while Ctrl is held.
         var erasing = _rnmErase || e.control;
         var customBrush = _win.Data.UseCustomBrush ? _customBrushCache : null;
-        var symmetricPositions = _win.Data.GetSymmetricPositions(_brushPos);
-        for (var slot = 0; slot < symmetricPositions.Count; slot++)
+
+        // By default every input event dabs once (a round brush, and a custom stamp too). With "Place stamps by distance" a custom stamp dabs
+        // by distance instead: one stamp where the stroke starts, then one every spacing along the path (none while the mouse has hardly
+        // moved), so the stamps stay distinct instead of piling up into a blob.
+        List<Vector3> dabs;
+        var dabStrength = _strength;
+        if (customBrush != null && _stampSpaced)
         {
-            // A reflected symmetric copy (X/Y/diagonal mirror) needs its stamp mirrored too, or it
-            // paints an identical, unmirrored copy of the stroke instead of one turned the other way.
-            SC2SymmetryMath.GetSlotMirror(_win.Data.Symmetry, slot, out var mirror, out var swapAxes);
-            // A rotation-only copy (Radial, or the 180-degree slot of XY/DiagonalBoth) instead needs
-            // its stamp turned to match, or it paints an unrotated copy. GetSlotRotationDegrees
-            // returns the CONTENT rotation; negated here because _BrushRotation rotates the sample
-            // offset, the inverse operation (see that method's own doc comment).
-            var extraRotationRad = -SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
-            _win.ActiveRuntime.SetBrushPairLock(LockTableOrNull(_blendLock));
-            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, _rnmRemoveFromLayer);
-            _win.ActiveRuntime.SetBrushPairLock(null);
+            dabs = down ? _stampStroke.Begin(_brushPos) : _stampStroke.Move(_brushPos, SC2StampStroke.Spacing(_radius, _stampSpacing, _win.Data.CellSize));
+            if (dabs.Count == 0) { e.Use(); return; }
+        }
+        else dabs = new List<Vector3> { _brushPos };
+
+        foreach (var dab in dabs)
+        {
+            // A SEPARATE toggle from RandomizeBrushRotation — that one still rolls once per stroke (mouse-down) and holds it fixed for
+            // the drag; this one re-rolls on every single dab, so a stroke keeps stamping fresh random orientations.
+            if (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation && _win.Data.RandomizeBrushRotationContinuous)
+                _rnmBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
+
+            var symmetricPositions = _win.Data.GetSymmetricPositions(dab);
+            for (var slot = 0; slot < symmetricPositions.Count; slot++)
+            {
+                // A reflected symmetric copy (X/Y/diagonal mirror) needs its stamp mirrored too, or it
+                // paints an identical, unmirrored copy of the stroke instead of one turned the other way.
+                SC2SymmetryMath.GetSlotMirror(_win.Data.Symmetry, slot, out var mirror, out var swapAxes);
+                // A rotation-only copy (Radial, or the 180-degree slot of XY/DiagonalBoth) instead needs
+                // its stamp turned to match, or it paints an unrotated copy. GetSlotRotationDegrees
+                // returns the CONTENT rotation; negated here because _BrushRotation rotates the sample
+                // offset, the inverse operation (see that method's own doc comment).
+                var extraRotationRad = -SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
+                _win.ActiveRuntime.SetBrushPairLock(LockTableOrNull(_blendLock));
+                _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, dabStrength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, _rnmRemoveFromLayer);
+                _win.ActiveRuntime.SetBrushPairLock(null);
+            }
         }
         // With editing layers the dabs above went into the active layer; flatten them into the mask once per tick.
         _win.ActiveRuntime.RecompositeBlendIfDirty();

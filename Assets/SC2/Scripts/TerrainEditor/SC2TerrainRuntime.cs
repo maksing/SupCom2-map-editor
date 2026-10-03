@@ -879,6 +879,18 @@ public partial class SC2TerrainRuntime : IDisposable
     // ── GPU sculpt brush ──────────────────────────────────────────────────────
     // Modifies CPU heights directly, then rebuilds dirty chunks
 
+    // The strongest amplitude a custom stamp has had at each vertex during the current sculpt stroke (see SC2StampStroke.EnvelopeGain);
+    // null until a stroke has begun.
+    private float[] _sculptStrokeMax;
+
+    /// <summary>Starts a sculpt stroke: forgets the amplitudes of the last one.</summary>
+    public void BeginSculptStroke()
+    {
+        if (_heights == null) return;
+        if (_sculptStrokeMax == null || _sculptStrokeMax.Length != _heights.Length) _sculptStrokeMax = new float[_heights.Length];
+        else System.Array.Clear(_sculptStrokeMax, 0, _sculptStrokeMax.Length);
+    }
+
     public void SculptBrush(Vector3 worldPos, float radius, float strength, float hardness,
                              int mode,
                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
@@ -918,6 +930,11 @@ public partial class SC2TerrainRuntime : IDisposable
             if (falloff <= 0f) continue;
             var amt     = falloff * dt;
             var idx     = gz * _stride + gx;
+            // A custom stamp adds only what its dabs reach here at most over the stroke, however many dabs land on the vertex
+            // (see SC2StampStroke.EnvelopeGain); a slowly moved stamp no longer piles up into a blob.
+            if (brushMask != null && _sculptStrokeMax != null && _sculptStrokeMax.Length == _heights.Length && (mode == 0 || mode == 1))
+                amt = SC2StampStroke.EnvelopeGain(ref _sculptStrokeMax[idx], amt);
+            if (amt <= 0f) continue;
             switch (mode)
             {
                 case 0: _heights[idx] += amt; break;
@@ -1030,6 +1047,14 @@ public partial class SC2TerrainRuntime : IDisposable
                 : HardnessFalloff(Mathf.Sqrt(d2) / radius, hardness);
             var blend = Mathf.Clamp01(falloff * Mathf.Max(0.01f, strength));
             var idx   = gz * _stride + gx;
+            if (brushMask != null && _sculptStrokeMax != null && _sculptStrokeMax.Length == _heights.Length)
+            {
+                // As in SculptBrush: the steps toward the target add up to one lerp by the strongest amplitude of the stroke.
+                var previousMax = _sculptStrokeMax[idx];
+                var gain = SC2StampStroke.EnvelopeGain(ref _sculptStrokeMax[idx], blend);
+                blend = SC2StampStroke.RemainingShare(gain, previousMax);
+                if (blend <= 0f) continue;
+            }
             _heights[idx] = SC2TerrainData.ClampHeight(Mathf.Lerp(_heights[idx], SC2TerrainData.ClampHeight(targetH), blend));
         }
         RebuildDirtyChunks(worldPos, radius);

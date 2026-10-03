@@ -211,6 +211,22 @@ public partial class SC2TerrainRuntime
         RecompositeBlend();
     }
 
+    /// <summary>Starts a brush stroke on the active layer: clears the stroke envelope a custom stamp keeps in the layer texture's blue
+    /// channel (see SC2PaintBrush.shader). Without it the first stamp of the stroke would see the end of the last one.</summary>
+    public void BeginBlendStroke()
+    {
+        if (!HasActiveLayers || !EnsureShaders()) return;
+        var target = _layerRTs[Mathf.Clamp(_activeStack.ActiveIndex, 0, _layerRTs.Count - 1)];
+        _paintBrushMat.SetInt("_PaintMode", 5);
+        _paintBrushMat.SetFloat("_LockMode", 0f);
+        var tmp = RenderTexture.GetTemporary(target.descriptor);
+        var prevActive = RenderTexture.active;
+        Graphics.Blit(target, tmp, _paintBrushMat);
+        Graphics.Blit(tmp, target);
+        RenderTexture.active = prevActive;
+        RenderTexture.ReleaseTemporary(tmp);
+    }
+
     /// <summary>Called after a paint tick (all symmetry copies painted) so the layers are flattened once per tick.</summary>
     public void RecompositeBlendIfDirty()
     {
