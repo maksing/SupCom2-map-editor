@@ -1358,6 +1358,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // flat terrain"/"Import Heightmap") until SetData() started hitting
         // it on every single load, not just those two buttons.
         _terrainShell?.Update();
+        SC2BusyOverlay.Tick(RepaintGameView);
         TickAutosave();
 
 #if !UNITY_EDITOR
@@ -1374,7 +1375,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // SC2TerrainShell.LastSaveRealtimeSeconds below, or directly by
     // TickAutosave itself right before it fires (a backup-only autosave
     // deliberately never touches LastSaveRealtimeSeconds — see
-    // SC2TerrainShell.RequestAutosaveBackup's own doc comment for why).
+    // SC2TerrainShell.BeginAutosaveBackup's own doc comment for why).
     // -1 means "nothing observed yet this session/terrain".
     private double _autosaveBaselineRealtime = -1;
     private double _lastObservedSaveRealtime = -1;
@@ -1412,15 +1413,27 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (now - _autosaveBaselineRealtime < SC2SaveSettings.AutosaveIntervalMinutes * 60.0)
             return;
 
+        // Another long job (an export, a bake) owns the plate: the backup stays due and is taken when it ends.
+        if (SC2BusyOverlay.IsActive)
+            return;
+
         _autosaveBaselineRealtime = now;
         SC2Log.Log($"[Autosave] {SC2SaveSettings.AutosaveIntervalMinutes:0.#}-minute interval reached — backing up '{_terrainShell.Data.MapName}'.");
-        // RequestAutosaveBackup, NOT RequestSave: autosave must only ever add a
+        // BeginAutosaveBackup, NOT RequestSave: autosave must only ever add a
         // rotating backup snapshot, never overwrite the canonical save file —
         // otherwise leaving the map open (and unsaved) for an hour would mean
         // there's no way back to what was on disk before that hour started.
-        // See SC2TerrainShell.RequestAutosaveBackup's own doc comment.
-        if (_terrainShell.RequestAutosaveBackup())
-            SetStatus($"Autosave backup created for '{_terrainShell.Data.MapName}'.");
+        // See SC2TerrainShell.BeginAutosaveBackup's own doc comment.
+        if (!SC2TerrainShell.AutosaveBackupsSupported)
+            return;
+        // The backup is written on a worker thread behind the busy plate, so the editor keeps running meanwhile.
+        var shell = _terrainShell;
+        var mapName = shell.Data.MapName;
+        SC2BusyOverlay.RunInBackground("Autosaving", $"Writing a backup of '{mapName}'.",
+            () => shell.BeginAutosaveBackup(ok =>
+            {
+                if (ok) SetStatus($"Autosave backup created for '{mapName}'.");
+            }));
     }
 
 #if UNITY_EDITOR
@@ -1450,6 +1463,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // frame (Play-mode-inside-the-Editor triggers both this and
         // Update()), so no extra guard is needed here.
         _terrainShell?.Update();
+        // Idempotent like the rest: a queued job starts once and the plate
+        // is released once, however many ticks reach it in one frame.
+        SC2BusyOverlay.Tick(RepaintGameView);
         // Same idempotence as above — TickAutosave only ever fires once real
         // time has actually advanced past the interval, so calling it again
         // from Update() the same frame (Play mode inside the Editor) is a
@@ -1550,7 +1566,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 #if !UNITY_EDITOR
         runtimeOverlayOpen = SC2RuntimeDropdown.IsAnyOpen || SC2RuntimeObjectPicker.IsAnyOpen || SC2RuntimeColorPalette.IsAnyOpen;
 #endif
-        _menuOverlayBlocksInput = (AnyMenuOpen() || runtimeOverlayOpen)
+        // The busy plate is modal too: nothing underneath it takes a click while a long job is queued or running.
+        _menuOverlayBlocksInput = (AnyMenuOpen() || runtimeOverlayOpen || SC2BusyOverlay.IsActive)
             && Event.current != null
             && Event.current.type != EventType.Repaint
             && Event.current.type != EventType.Layout;
@@ -1651,6 +1668,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         GUI.color = Color.white;
         GUI.backgroundColor = Color.white;
         GUI.contentColor = Color.white;
+        // Above everything, including the confirm dialog's own scrim.
+        SC2BusyOverlay.Draw();
         GUI.skin = previousSkin;
 
         if (Event.current == null || Event.current.type != EventType.Used)
@@ -1670,7 +1689,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // correct behavior anyway: a modal should block viewport
             // painting/placing/navigation underneath it, not just visually
             // cover it.
-            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false) || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen;
+            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false) || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2BusyOverlay.IsActive;
             if (!anyModalOpen)
             {
                 ReleaseStuckNumericFocusOnViewportClick();
@@ -6880,7 +6899,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// currently has keyboard focus.</summary>
     private void HandleGlobalUndoRedoSaveHotkey()
     {
-        if (!EnableHotkeys || _flying)
+        // A background job (export, bake, autosave) is reading the data: no undo, save or second export meanwhile.
+        if (!EnableHotkeys || _flying || SC2BusyOverlay.IsActive)
             return;
         var e = Event.current;
         if (e == null || e.type != EventType.KeyDown)

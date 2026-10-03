@@ -23,6 +23,25 @@ using SC2.MapEditor.SmartExport;
 /// </summary>
 public static class SC2TerrainExporter
 {
+    // The export may run on a worker thread behind the busy plate (SC2BusyOverlay). Editor progress bars and dialogs only work on
+    // the main thread, so from a worker the step goes to the plate and a dialog is shown on the main thread. The plate's bar stays
+    // indeterminate: the steps are very uneven (collision2 alone is most of the time), so a fraction would sit near the end for long.
+    private static void ReportProgress(string stage, float progress)
+    {
+        if (SC2BusyOverlay.IsOnMainThread) EditorUtility.DisplayProgressBar("Export", stage, progress);
+        else SC2BusyOverlay.Report(stage);
+    }
+
+    private static void ClearProgress()
+    {
+        if (SC2BusyOverlay.IsOnMainThread) EditorUtility.ClearProgressBar();
+    }
+
+    private static bool ExportDialog(string title, string message, string ok, string cancel = null) =>
+        SC2BusyOverlay.OnMain(() => cancel == null
+            ? EditorUtility.DisplayDialog(title, message, ok)
+            : EditorUtility.DisplayDialog(title, message, ok, cancel), System.Threading.Timeout.Infinite);
+
     // EditorUtility.DisplayDialog is a silent no-op in a standalone build
     // (UnityEditorRuntimeShim's version just returns true, shows nothing) —
     // every error/status message this used to communicate purely through
@@ -52,7 +71,7 @@ public static class SC2TerrainExporter
     {
         if (!data.IsInitialized || data.Pairs.Count == 0)
         {
-            EditorUtility.DisplayDialog("Export", "No data.", "OK");
+            ExportDialog("Export", "No data.", "OK");
             return "Export failed: no data.";
         }
         SC2Log.Log("=== Export invoked ===");
@@ -68,9 +87,9 @@ public static class SC2TerrainExporter
         }
         catch (Exception ex)
         {
-            EditorUtility.ClearProgressBar();
+            ClearProgress();
             SC2Log.LogException(ex);
-            EditorUtility.DisplayDialog("Error", ex.Message, "OK");
+            ExportDialog("Error", ex.Message, "OK");
             return "Export failed: " + ex.Message;
         }
         finally
@@ -210,7 +229,7 @@ public static class SC2TerrainExporter
         if (data.TrianglePairIndex == null || data.TrianglePairIndex.Length == 0)
         {
             SC2Log.LogWarning("[SC2Exporter] Aborted: TrianglePairIndex is empty.");
-            UnityEditor.EditorUtility.DisplayDialog("Export",
+            ExportDialog("Export",
                 "TrianglePairIndex is empty — go to Paint mode and paint pairs before exporting.", "OK");
             return new SC2ExportArtifacts { ErrorMessage = "Export failed: no pairs painted yet." };
         }
@@ -292,7 +311,14 @@ public static class SC2TerrainExporter
         // referenced by its real game path with no copy
         // (SC2VanillaArchiveClassifier); a "file:" custom import and any
         // non-vanilla archive always copy.
-        string ResolveRawResourcePath(string rawPath, Texture2D tex, bool forceExport = false)
+        // The export runs on a worker thread (SC2BusyOverlay); textures and the game archive may only be touched on the main
+        // thread, so the two helpers below run there (inline when the export itself runs on the main thread).
+        string ResolveRawResourcePath(string rawPath, Texture2D tex, bool forceExport = false) =>
+            SC2BusyOverlay.OnMain(() => ResolveRawResourcePathOnMain(rawPath, tex, forceExport));
+        string RegTex(Texture2D tex, string overridePath = null, bool forceExport = false) =>
+            SC2BusyOverlay.OnMain(() => RegTexOnMain(tex, overridePath, forceExport));
+
+        string ResolveRawResourcePathOnMain(string rawPath, Texture2D tex, bool forceExport = false)
         {
             if (string.IsNullOrEmpty(rawPath)) return null;
             // rawPathReg is keyed by the raw path alone. If an earlier slot
@@ -358,7 +384,7 @@ public static class SC2TerrainExporter
             return null;
         }
 
-        string RegTex(Texture2D tex, string overridePath = null, bool forceExport = false)
+        string RegTexOnMain(Texture2D tex, string overridePath = null, bool forceExport = false)
         {
             // A non-empty per-slot override path (SC2Material.
             // DiffuseOverridePath etc.) wins, regardless of whether "tex" is
@@ -495,7 +521,7 @@ public static class SC2TerrainExporter
         var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, (stage, progress) =>
         {
             SC2Log.Log($"[SC2Exporter] Build stage: {stage}");
-            EditorUtility.DisplayProgressBar("Export", stage, Mathf.Clamp01(progress * 0.75f));
+            ReportProgress(stage, Mathf.Clamp01(progress * 0.75f));
         }, coreOuterLock);
         SC2Log.Log($"[SC2Exporter] Build simplified export layers done in {swBuild.ElapsedMilliseconds}ms");
         SC2Log.Log($"[SC2Exporter] {build.Layers.Count} pair(s) have assigned triangles. " +
@@ -516,7 +542,7 @@ public static class SC2TerrainExporter
                 "(all TrianglePairIndex values are -1/unassigned, or stale from a previous session " +
                 "after an editor crash) and no imported terrain is present. Paint pairs again, or " +
                 "trigger a sync (switch to Paint mode) before exporting.");
-            EditorUtility.DisplayDialog("Export",
+            ExportDialog("Export",
                 "No triangles are assigned to any pair and no terrain.bdf is imported — nothing to export.\n" +
                 "Go to Paint mode and assign pairs, or import a terrain.bdf, then try again.", "OK");
             return new SC2ExportArtifacts { ErrorMessage = "Export failed: no triangles are assigned to any pair, and no imported terrain is present." };
@@ -524,7 +550,7 @@ public static class SC2TerrainExporter
 
         if (build.BuiltTriangleCount > 350_000)
         {
-            var continueHuge = EditorUtility.DisplayDialog(
+            var continueHuge = ExportDialog(
                 "Export",
                 $"Export mesh still has {build.BuiltTriangleCount:N0} triangles after simplification.\n" +
                 "BSP rebuild can take a long time and make Unity look frozen.\n\n" +
@@ -568,7 +594,7 @@ public static class SC2TerrainExporter
             var builtLayer = build.Layers[si];
             var pi   = builtLayer.PairIndex;
             var pair = data.Pairs[pi];
-            EditorUtility.DisplayProgressBar("Export", $"Pair {si+1}/{build.Layers.Count}: {pair.Name}",
+            ReportProgress($"Pair {si+1}/{build.Layers.Count}: {pair.Name}",
                 (float)si / build.Layers.Count * 0.75f);
 
             var s = builtLayer.Mesh;
@@ -702,9 +728,13 @@ public static class SC2TerrainExporter
                 SC2Log.Log($"[SC2Exporter] merging imported terrain '{imported.Name}': " +
                            $"{imported.Model.Materials.Count} materials, {imported.Model.Vertices.Count} verts, {imported.Model.Triangles.Count} tris");
                 var firstImportedMaterial = model.Materials.Count;
-                MergeImportedTerrain(model, imported, ResolveRawResourcePath);
-                ApplyImportedRnmMasks(model, firstImportedMaterial, imported, session, mapName, lightingDir, rnmCache, warnings);
-                CopyImportedTextures(imported.Model, outputDir, warnings, CollectForceExportBasePaths(imported));
+                // Imported objects carry Unity materials and textures: this step runs on the main thread.
+                SC2BusyOverlay.OnMain(() =>
+                {
+                    MergeImportedTerrain(model, imported, ResolveRawResourcePath);
+                    ApplyImportedRnmMasks(model, firstImportedMaterial, imported, session, mapName, lightingDir, rnmCache, warnings);
+                    CopyImportedTextures(imported.Model, outputDir, warnings, CollectForceExportBasePaths(imported));
+                });
             }
         }
 
@@ -1019,7 +1049,7 @@ public static class SC2TerrainExporter
             : useVanillaSplit ? "vanilla-candidate" : "subdivided (SAH)";
         SC2Log.Log($"[SC2Exporter] RebuildAllBsp started. Tris={model.Triangles.Count:N0}, Verts={model.Vertices.Count:N0}, mode={bspModeLabel}");
         var swBsp = System.Diagnostics.Stopwatch.StartNew();
-        EditorUtility.DisplayProgressBar("Export", $"BSP ({model.Triangles.Count:N0} tris)...", 0.85f);
+        ReportProgress($"BSP ({model.Triangles.Count:N0} tris)...", 0.85f);
         TerrainBdf.RebuildAllBsp(model, bspMinPolys, useVanillaSplit);
         var bspNodeCount = 0;
         foreach (var l in model.Layers) bspNodeCount += l.Nodes.Count;
@@ -1036,7 +1066,7 @@ public static class SC2TerrainExporter
                 material.TexturePaths[slot] = null;
             }
 
-        EditorUtility.DisplayProgressBar("Export", "Writing...", 0.9f);
+        ReportProgress("Writing...", 0.9f);
         var platform  = data.RawData != null ? data.RawData.Platform : BdfPlatform.Pc;
         var container = TerrainBdf.SerializeToContainer(model, platform);
         var terrainBytes = container.Write(TerrainBdf.Padding);
@@ -1047,7 +1077,7 @@ public static class SC2TerrainExporter
         // hfield.bdf (used for unit pathing/pathing height, camera bounds,
         // etc.) would desync from the terrain.bdf actually in the map, the
         // exact bug SC2HfieldProjectionService's doc comment warns about.
-        EditorUtility.DisplayProgressBar("Export", "Projecting hfield...", 0.95f);
+        ReportProgress("Projecting hfield...", 0.95f);
         // TerrainTypes: prefer what was hand-painted this session (SC2CostsShell
         // paints directly into data.TerrainTypes — see SC2GameViewEditorUI's
         // Costs tab) over whatever an originally-imported map's hfield.bdf had,
@@ -1095,7 +1125,7 @@ public static class SC2TerrainExporter
         // valid all-passable default even if the user never opened that tab, so
         // costs.bdf always exists and matches the 5-block vanilla layout
         // (Land_Small/Medium/Large, Water_Small/Large).
-        EditorUtility.DisplayProgressBar("Export", "Building costs...", 0.97f);
+        ReportProgress("Building costs...", 0.97f);
         data.EnsureCostsAndTerrainTypes();
         var costsModel = BuildCostsModelFromPaintedData(data, hfieldModel, session);
         var (costsData, costsOt) = CostsBdf.Serialize(costsModel, platform);
@@ -1127,7 +1157,7 @@ public static class SC2TerrainExporter
         // terrain/session left it at) — that sync gap is real and needs
         // every domain synced into the document at load time, not
         // only when its own tab is visited, to close fully.
-        EditorUtility.DisplayProgressBar("Export", "Building collision2...", 0.98f);
+        ReportProgress("Building collision2...", 0.98f);
         // Observability for the spike itself: with the offset already in
         // sync (the common case), the document and legacy paths produce an
         // IDENTICAL exported file — there is no way to tell which one
@@ -1176,7 +1206,7 @@ public static class SC2TerrainExporter
         // info.bdf as a passthrough only if nothing has been touched yet
         // (same "prefer live-edited, fall back to imported" reasoning already
         // used for TerrainTypes above).
-        EditorUtility.DisplayProgressBar("Export", "Building info.bdf...", 0.99f);
+        ReportProgress("Building info.bdf...", 0.99f);
         var infoModel = BuildInfoModel(data, session);
 
         // Environment textures are referenced by their real game path and
@@ -1301,7 +1331,7 @@ public static class SC2TerrainExporter
         // blocks this editor manages are touched — see SC2ObjectsExport's
         // doc comment for exactly which parts of that text are verified
         // against real files vs. best-effort.
-        EditorUtility.DisplayProgressBar("Export", "Building mapobjs.bdf...", 0.995f);
+        ReportProgress("Building mapobjs.bdf...", 0.995f);
         var mapObjsModel = SC2ObjectsExport.BuildMapObjsModel(data, session?.Document?.Environment?.WorkingHeader);
         var (mapObjsData, mapObjsOt) = MapObjsBdf.Serialize(mapObjsModel, platform);
         var mapObjsBytes = new BdfContainer { Platform = platform, Data = mapObjsData, OffsetTable = mapObjsOt, NumFiles = 1 }.Write(MapObjsBdf.Padding);
@@ -1394,7 +1424,7 @@ public static class SC2TerrainExporter
         }
         catch (Exception ex) { warnings.Add($"Lighting cleanup: {ex.Message}"); }
 
-        EditorUtility.ClearProgressBar();
+        ClearProgress();
         return new SC2ExportArtifacts
         {
             MapName = mapName,
@@ -1507,7 +1537,7 @@ public static class SC2TerrainExporter
         msg += $"\nCollision2 offset: {artifacts.Collision2HeightOffset} (source: {artifacts.Collision2OffsetSource})";
         foreach (var w in artifacts.Warnings) Debug.LogWarning($"[SC2Exporter] {w}");
         Debug.Log($"[SC2Exporter] {msg}");
-        EditorUtility.DisplayDialog("Done", msg, "OK");
+        ExportDialog("Done", msg, "OK");
         return msg;
     }
 
@@ -1809,7 +1839,7 @@ public static class SC2TerrainExporter
     {
         if (!data.IsInitialized || data.Pairs.Count == 0)
         {
-            EditorUtility.DisplayDialog("Export", "No data.", "OK");
+            ExportDialog("Export", "No data.", "OK");
             return "Export failed: no data.";
         }
         SC2Log.Log("=== Smart Export invoked ===");
@@ -1823,13 +1853,13 @@ public static class SC2TerrainExporter
 
             if (plan.HasBlockingErrors())
             {
-                EditorUtility.ClearProgressBar();
+                ClearProgress();
                 var errParts = new List<string>();
                 foreach (var f in plan.Files)
                     foreach (var e in f.Errors)
                         errParts.Add($"{f.RelativePath}: {e}");
                 var errMsg = "Smart Export blocked: " + string.Join("; ", errParts);
-                EditorUtility.DisplayDialog("Error", errMsg, "OK");
+                ExportDialog("Error", errMsg, "OK");
                 return errMsg;
             }
 
@@ -1839,7 +1869,7 @@ public static class SC2TerrainExporter
             // clean rather than compounding across exports.
             session?.MarkExported();
 
-            EditorUtility.ClearProgressBar();
+            ClearProgress();
             var msg = $"[Smart Export] terrain.bdf → maps/{artifacts.MapName}/\nPairs: {artifacts.LayersCount}  Vertices: {artifacts.VerticesCount}\n" +
                       $"Textures: {artifacts.TexturesCopied}" + (artifacts.Warnings.Count > 0 ? $"\n⚠ {artifacts.Warnings.Count} warnings (see Console)" : "");
             msg += $"\nCollision2 offset: {artifacts.Collision2HeightOffset} (source: {artifacts.Collision2OffsetSource})";
@@ -1847,14 +1877,14 @@ public static class SC2TerrainExporter
             if (exportAsArchives)
                 msg = PackStagingRootIntoSingleArchive(perMapRoot, archivePath, msg);
             Debug.Log($"[SC2Exporter] {msg}");
-            EditorUtility.DisplayDialog("Done (Smart Export)", msg, "OK");
+            ExportDialog("Done (Smart Export)", msg, "OK");
             return msg;
         }
         catch (Exception ex)
         {
-            EditorUtility.ClearProgressBar();
+            ClearProgress();
             SC2Log.LogException(ex);
-            EditorUtility.DisplayDialog("Error", ex.Message, "OK");
+            ExportDialog("Error", ex.Message, "OK");
             return "Export failed: " + ex.Message;
         }
         finally

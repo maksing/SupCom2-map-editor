@@ -16,7 +16,10 @@ public static class SC2PointCloudBakeService
 
     /// <summary>The default box: the whole map minus a 12-unit margin (as on the vanilla 1K maps), from the lowest
     /// terrain in it up 60 units.</summary>
-    public static void FitBox(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains, out Vector3 origin, out Vector3 size)
+    public static void FitBox(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains, out Vector3 origin, out Vector3 size) =>
+        FitBox(data, BuildHeightSampler(data, importedTerrains), out origin, out size);
+
+    private static void FitBox(SC2TerrainData data, System.Func<float, float, float> heightAt, out Vector3 origin, out Vector3 size)
     {
         var spanX = Mathf.Max(1f, data.GridWidth * data.CellSize);
         var spanZ = Mathf.Max(1f, data.GridHeight * data.CellSize);
@@ -24,7 +27,6 @@ public static class SC2PointCloudBakeService
         var boxX = spanX - 2f * margin;
         var boxZ = spanZ - 2f * margin;
 
-        var heightAt = BuildHeightSampler(data, importedTerrains);
         var lowest = float.PositiveInfinity;
         const int probes = 48;
         for (var j = 0; j < probes; j++)
@@ -43,14 +45,19 @@ public static class SC2PointCloudBakeService
     /// to the fitted one first when none is set. Returns a status line for the panel.</summary>
     public static string Bake(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains, SC2MapSession session)
     {
-        if (data == null || !data.IsInitialized) return "No active terrain to bake.";
+        string status = null;
+        BeginBake(data, importedTerrains, session, s => status = s)?.Invoke()?.Invoke();
+        return status;
+    }
 
-        if (data.PointCloudBoxSize.x < 1f || data.PointCloudBoxSize.y < 1f || data.PointCloudBoxSize.z < 1f)
-        {
-            FitBox(data, importedTerrains, out var origin, out var size);
-            data.PointCloudBoxOrigin = origin;
-            data.PointCloudBoxSize = size;
-        }
+    /// <summary>The background-thread form of <see cref="Bake"/>, for SC2BusyOverlay.RunInBackground. Call it on the main thread: it
+    /// reads the info model there and returns the heavy function, which returns the action that stores the volumes and must run on
+    /// the main thread. Null when there is nothing to bake, after reporting why through <paramref name="onFinished"/>, which also
+    /// receives the status line at the end.</summary>
+    public static System.Func<System.Action> BeginBake(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains,
+        SC2MapSession session, System.Action<string> onFinished)
+    {
+        if (data == null || !data.IsInitialized) { onFinished?.Invoke("No active terrain to bake."); return null; }
 
         var info = SC2TerrainExporter.BuildInfoModel(data, session, quiet: true);
         Vector3 toSun;
@@ -61,36 +68,61 @@ public static class SC2PointCloudBakeService
         }
         else toSun = data.RnmBakeOverrideSunDirection;
 
-        var settings = new SC2PointCloudBaker.Settings
+        return () =>
         {
-            Origin = data.PointCloudBoxOrigin,
-            Size = data.PointCloudBoxSize,
-            ToSun = toSun,
-            SkyColor = new Color(
-                Mathf.Clamp01(data.PointCloudSkyColor.r * data.PointCloudSkyIntensity),
-                Mathf.Clamp01(data.PointCloudSkyColor.g * data.PointCloudSkyIntensity),
-                Mathf.Clamp01(data.PointCloudSkyColor.b * data.PointCloudSkyIntensity)),
-            GroundReflection = data.PointCloudGroundReflection,
-            SkyInGround = data.PointCloudSkyInGround,
-            BlurTexels = data.PointCloudBlurTexels,
-            SunShadow = data.PointCloudSunShadow,
+            SC2BusyOverlay.Report("Building the terrain heightmap");
+            var heightAt = BuildHeightSampler(data, importedTerrains);
+
+            var origin = data.PointCloudBoxOrigin;
+            var size = data.PointCloudBoxSize;
+            var fitted = size.x < 1f || size.y < 1f || size.z < 1f;
+            if (fitted) FitBox(data, heightAt, out origin, out size);
+
+            var settings = new SC2PointCloudBaker.Settings
+            {
+                Origin = origin,
+                Size = size,
+                ToSun = toSun,
+                SkyColor = new Color(
+                    Mathf.Clamp01(data.PointCloudSkyColor.r * data.PointCloudSkyIntensity),
+                    Mathf.Clamp01(data.PointCloudSkyColor.g * data.PointCloudSkyIntensity),
+                    Mathf.Clamp01(data.PointCloudSkyColor.b * data.PointCloudSkyIntensity)),
+                GroundReflection = data.PointCloudGroundReflection,
+                SkyInGround = data.PointCloudSkyInGround,
+                BlurTexels = data.PointCloudBlurTexels,
+                SunShadow = data.PointCloudSunShadow,
+            };
+
+            SC2BusyOverlay.Report("Reading the baked ground lighting");
+            var groundLight = BuildGroundLight(data, settings.Origin, settings.Size);
+            SC2BusyOverlay.Report("Baking the volumes");
+            var result = SC2PointCloudBaker.Bake(heightAt, groundLight, settings);
+
+            SC2BusyOverlay.Report("Encoding the volumes");
+            var res = SC2PointCloudBaker.Res;
+            var depth = SC2PointCloudBaker.Depth;
+            var opaque = new byte[res * res];
+            for (var i = 0; i < opaque.Length; i++) opaque[i] = 255;
+            var opaqueSlices = new byte[depth][];
+            for (var k = 0; k < depth; k++) opaqueSlices[k] = opaque;
+            var upDds = SC2DdsEncoder.BuildDxt5Volume(res, res, depth, result.UpRgb, opaqueSlices);
+            var downDds = SC2DdsEncoder.BuildDxt5Volume(res, res, depth, result.DownRgb, result.DownAlpha);
+
+            var status = $"Baked the point cloud ({res}x{res}x{depth}): {result.SolidFraction * 100f:0}% of the voxels are inside the ground, " +
+                         $"{result.ShadowFraction * 100f:0}% in the sun's shadow; ground light from " +
+                         (groundLight != null ? "the baked RNM lighting." : "a flat value (run Bake Lighting first for the real one).");
+            return () =>
+            {
+                if (fitted)
+                {
+                    data.PointCloudBoxOrigin = origin;
+                    data.PointCloudBoxSize = size;
+                }
+                data.PointCloudUpDds = upDds;
+                data.PointCloudDownDds = downDds;
+                onFinished?.Invoke(status);
+            };
         };
-
-        var groundLight = BuildGroundLight(data, settings.Origin, settings.Size);
-        var result = SC2PointCloudBaker.Bake(BuildHeightSampler(data, importedTerrains), groundLight, settings);
-
-        var res = SC2PointCloudBaker.Res;
-        var depth = SC2PointCloudBaker.Depth;
-        var opaque = new byte[res * res];
-        for (var i = 0; i < opaque.Length; i++) opaque[i] = 255;
-        var opaqueSlices = new byte[depth][];
-        for (var k = 0; k < depth; k++) opaqueSlices[k] = opaque;
-        data.PointCloudUpDds = SC2DdsEncoder.BuildDxt5Volume(res, res, depth, result.UpRgb, opaqueSlices);
-        data.PointCloudDownDds = SC2DdsEncoder.BuildDxt5Volume(res, res, depth, result.DownRgb, result.DownAlpha);
-
-        return $"Baked the point cloud ({res}x{res}x{depth}): {result.SolidFraction * 100f:0}% of the voxels are inside the ground, " +
-               $"{result.ShadowFraction * 100f:0}% in the sun's shadow; ground light from " +
-               (groundLight != null ? "the baked RNM lighting." : "a flat value (run Bake Lighting first for the real one).");
     }
 
     // The terrain surface height at a world (x, z), bilinear over the unified shadow heightfield (core + background +

@@ -273,9 +273,21 @@ public sealed class SC2ExportPanel
         var smartBtnStyle = new GUIStyle(GUI.skin.button){ fontSize=11 };
         if (GUILayout.Button("Smart Export (new)", smartBtnStyle, GUILayout.Height(SC2UiScale.Pxf(22f))))
         {
-            _win.SaveTerrainState(writeAssets: false);
-            System.IO.Directory.CreateDirectory(_exportDir);
-            _lastExportResult = SC2TerrainExporter.ExportCorrectSmart(Data, _exportDir, importedTerrains, _win.Session, _exportAsArchives);
+            var smartData = Data;
+            var smartDir = _exportDir;
+            var smartArchives = _exportAsArchives;
+            var smartSession = _win.Session;
+            // The export runs on a worker thread behind the busy plate (see SC2BusyOverlay).
+            SC2BusyOverlay.RunInBackground("Exporting map", ExportDetail, () =>
+            {
+                _win.SaveTerrainState(writeAssets: false);
+                System.IO.Directory.CreateDirectory(smartDir);
+                return () =>
+                {
+                    var result = SC2TerrainExporter.ExportCorrectSmart(smartData, smartDir, importedTerrains, smartSession, smartArchives);
+                    return () => _lastExportResult = result;
+                };
+            }, ex => _lastExportResult = "Export failed: " + ex.Message);
         }
 
         if (!string.IsNullOrEmpty(_lastExportResult))
@@ -287,38 +299,67 @@ public sealed class SC2ExportPanel
 
     /// <summary>The "Export" button's action, also run by the Global.Export hotkey: saves the terrain state,
     /// renders the minimap and writes the map to the chosen output folder. Does nothing while a minimap
-    /// capture from an earlier export is still pending. <paramref name="onFinished"/> receives the result
-    /// text (the same one the panel shows), so a caller without the panel on screen can report it.</summary>
+    /// capture from an earlier export is still pending or another long job owns the busy plate.
+    /// <paramref name="onFinished"/> receives the result text (the same one the panel shows), so a caller
+    /// without the panel on screen can report it.</summary>
     public bool RunExport(System.Action<string> onFinished = null)
     {
-        if (SC2MapPreviewCapture.IsCapturePending) return false;
-        _win.SaveTerrainState(writeAssets: false);
-        System.IO.Directory.CreateDirectory(_exportDir);
-        _lastExportResult = "Rendering minimap...";
-        var data = Data;
-        var exportDir = _exportDir;
-        var debugSaveCostsImages = _debugSaveCostsImages;
-        var session = _win.Session;
-        var exportAsArchives = _exportAsArchives;
-        var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
-        // Minimap must be rendered fresh (see SC2MapPreviewCapture's own
-        // doc comment for why this can't be a synchronous call right
-        // here) before the real, otherwise-unchanged ExportCorrect call
-        // below — everything captured into this closure is a plain
-        // local, unaffected by DrawPanelContent running again next frame.
-        SC2MapPreviewCapture.RequestMinimapCapture(data, tex =>
+        if (SC2MapPreviewCapture.IsCapturePending || SC2BusyOverlay.IsActive) return false;
+        // The export runs on a worker thread behind the busy plate (see SC2BusyOverlay): the first function below runs on the main
+        // thread, the one it returns on the worker, and the one that returns on the main thread again.
+        return SC2BusyOverlay.RunInBackground("Exporting map", ExportDetail, () =>
         {
-            byte[] minimapDds = null;
-            if (tex != null)
+            _win.SaveTerrainState(writeAssets: false);
+            System.IO.Directory.CreateDirectory(_exportDir);
+            _lastExportResult = "Exporting...";
+            var data = Data;
+            var exportDir = _exportDir;
+            var debugSaveCostsImages = _debugSaveCostsImages;
+            var session = _win.Session;
+            var exportAsArchives = _exportAsArchives;
+            var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
+            return () =>
             {
-                minimapDds = SC2DdsEncoder.BuildDxt1SingleMip(SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.ToRgbBytes(tex));
+                var minimapDds = RenderMinimapDds(data);
+                var result = SC2TerrainExporter.ExportCorrect(data, exportDir, importedTerrains, debugSaveCostsImages, session, exportAsArchives, minimapDds);
+                return () =>
+                {
+                    _lastExportResult = result;
+                    onFinished?.Invoke(result);
+                };
+            };
+        }, ex =>
+        {
+            _lastExportResult = "Export failed: " + ex.Message;
+            onFinished?.Invoke(_lastExportResult);
+        });
+    }
+
+    /// <summary>The minimap, rendered fresh for the export (see SC2MapPreviewCapture's own doc comment for why it cannot be a
+    /// synchronous call from a button), encoded as DDS. Runs on the export's worker thread: the render and the pixel read happen on
+    /// the main thread, a few frames later; the encoding stays on the worker. Null when no minimap could be rendered.</summary>
+    private byte[] RenderMinimapDds(SC2TerrainData data)
+    {
+        SC2BusyOverlay.Report("Rendering the minimap");
+        byte[] rgb = null;
+        SC2BusyOverlay.OnMainAsync(done => SC2MapPreviewCapture.RequestMinimapCapture(data, tex =>
+        {
+            try
+            {
+                if (tex == null) return;
+                rgb = SC2MapPreviewCapture.ToRgbBytes(tex);
                 UnityEngine.Object.DestroyImmediate(tex);
             }
-            _lastExportResult = SC2TerrainExporter.ExportCorrect(data, exportDir, importedTerrains, debugSaveCostsImages, session, exportAsArchives, minimapDds);
-            onFinished?.Invoke(_lastExportResult);
-        }, _win);
-        return true;
+            finally { done(); }
+        }, _win), MinimapWaitMilliseconds);
+        if (rgb == null) return null;
+        SC2BusyOverlay.Report("Encoding the minimap");
+        return SC2DdsEncoder.BuildDxt1SingleMip(SC2MapPreviewCapture.MinimapSize, SC2MapPreviewCapture.MinimapSize, rgb);
     }
+
+    private const int MinimapWaitMilliseconds = 30_000;
+
+    private const string ExportDetail = "Rendering the minimap and writing the map files. This can take a while.";
 
     private static string PairTriStr(SC2TerrainData data, int pairIdx)
     {

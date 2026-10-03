@@ -1588,8 +1588,15 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUILayout.Space(6);
         if (GUILayout.Button("Bake Background Lighting", GUILayout.Height(SC2UiScale.Pxf(22f))))
         {
-            if (bg != null) RecordUndoCheckpointFor(bg, "Bake Background Lighting");
-            _bgBakeStatus = SC2RnmBakeService.BakeBackground(_data, GetImportedTerrainsForExport?.Invoke(), Session);
+            // The calculation runs on a worker thread behind the busy plate (see SC2BusyOverlay).
+            SC2BusyOverlay.RunInBackground("Baking background lighting",
+                "Calculating the lighting and shadows of the background terrain. This can take a while.", () =>
+                {
+                    if (_data == null) return null;
+                    if (bg != null) RecordUndoCheckpointFor(bg, "Bake Background Lighting");
+                    return SC2RnmBakeService.BeginBakeBackground(_data, GetImportedTerrainsForExport?.Invoke(), Session,
+                        status => _bgBakeStatus = status);
+                }, ex => _bgBakeStatus = "Bake failed: " + ex.Message);
         }
         if (!string.IsNullOrEmpty(_bgBakeStatus))
             EditorGUILayout.LabelField(_bgBakeStatus, EditorStyles.miniLabel);
@@ -1638,10 +1645,19 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUILayout.Space(6);
         if (GUILayout.Button("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
-            RecordUndoCheckpoint("Bake Lighting");
-            _bakeStatus = SC2RnmBakeService.Bake(_data, GetImportedTerrainsForExport?.Invoke(), Session, CommitImportedRnmMasks);
-            EditorUtility.SetDirty(_data);
-            MarkDirtyAndRepaint();
+            SC2BusyOverlay.RunInBackground("Baking lighting",
+                "Calculating the lighting and shadows of every texel of the terrain. This can take a while.", () =>
+                {
+                    if (_data == null) return null;
+                    RecordUndoCheckpoint("Bake Lighting");
+                    return SC2RnmBakeService.BeginBake(_data, GetImportedTerrainsForExport?.Invoke(), Session, CommitImportedRnmMasks,
+                        status =>
+                        {
+                            _bakeStatus = status;
+                            EditorUtility.SetDirty(_data);
+                            MarkDirtyAndRepaint();
+                        });
+                }, ex => _bakeStatus = "Bake failed: " + ex.Message);
         }
         if (!string.IsNullOrEmpty(_bakeStatus))
             EditorGUILayout.LabelField(_bakeStatus, EditorStyles.miniLabel);
@@ -1696,9 +1712,18 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUILayout.Space(4);
         if (GUILayout.Button("Bake Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
-            _pointCloudStatus = SC2PointCloudBakeService.Bake(_data, GetImportedTerrainsForExport?.Invoke(), Session);
-            EditorUtility.SetDirty(_data);
-            MarkDirtyAndRepaint();
+            SC2BusyOverlay.RunInBackground("Baking point cloud",
+                "Calculating the unit lighting volumes from the terrain. This can take a while.", () =>
+                {
+                    if (_data == null) return null;
+                    return SC2PointCloudBakeService.BeginBake(_data, GetImportedTerrainsForExport?.Invoke(), Session,
+                        status =>
+                        {
+                            _pointCloudStatus = status;
+                            EditorUtility.SetDirty(_data);
+                            MarkDirtyAndRepaint();
+                        });
+                }, ex => _pointCloudStatus = "Bake failed: " + ex.Message);
         }
         var baked = _data.PointCloudUpDds != null && _data.PointCloudDownDds != null;
         if (baked && GUILayout.Button("Remove Baked Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(20f))))
@@ -4383,7 +4408,7 @@ public class SC2TerrainShell : ScriptableObject
     /// pair map, RNM blend, Environment header) and calls
     /// EnsureSerializableState — everything a real Save needs BEFORE it
     /// writes anything to disk. Split out of SaveState so
-    /// RequestAutosaveBackup can reuse it: an autosave backup must reflect
+    /// BeginAutosaveBackup can reuse it: an autosave backup must reflect
     /// what's actually on screen right now, not stale in-memory data from
     /// the last explicit Save, even though (unlike SaveState) it never
     /// writes the canonical save files themselves.</summary>
@@ -4495,6 +4520,14 @@ public class SC2TerrainShell : ScriptableObject
         return true;
     }
 
+    /// <summary>False where autosave backups do not exist (the Editor), so the caller does not show a busy plate for nothing.</summary>
+    public const bool AutosaveBackupsSupported =
+#if UNITY_EDITOR
+        false;
+#else
+        true;
+#endif
+
     /// <summary>The autosave timer's entry point — writes a rotating backup
     /// snapshot from the current live data WITHOUT touching any canonical
     /// save file (never AssetDatabase.SaveAssets in the Editor, never the
@@ -4506,23 +4539,27 @@ public class SC2TerrainShell : ScriptableObject
     /// save — there was no way back to an hour-old state at all. Backups
     /// are a Build-only concept (see SC2SaveSettings' own doc comment: no
     /// equivalent recovery mechanism exists for the Editor's ScriptableObject
-    /// asset), so this is a no-op in the Editor.</summary>
-    public bool RequestAutosaveBackup()
+    /// asset), so this is a no-op in the Editor.
+    ///
+    /// Split for SC2BusyOverlay.RunInBackground: it pulls the live state into the data here on the main thread (that reads the
+    /// GPU) and returns the function that writes the backup on a worker, which returns the action that passes its outcome to
+    /// <paramref name="onFinished"/> on the main thread. Null when there is nothing to back up.</summary>
+    public System.Func<System.Action> BeginAutosaveBackup(System.Action<bool> onFinished)
     {
 #if UNITY_EDITOR
-        return false;
+        return null;
 #else
-        if (_data == null) return false;
+        if (_data == null) return null;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             SyncDataForSave(sw);
-            return SC2RuntimeTerrainPersistence.CreateAutosaveBackup(_data, Session);
+            return SC2RuntimeTerrainPersistence.BeginAutosaveBackup(_data, Session, onFinished);
         }
         catch (System.Exception ex)
         {
             SC2Log.LogException(ex);
-            return false;
+            return null;
         }
         finally
         {

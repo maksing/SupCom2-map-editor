@@ -37,23 +37,51 @@ public static class SC2RnmBakeService
     public static string Bake(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains, SC2MapSession session = null,
         Action<List<SC2RnmMaskSetDocument>> commitImportedMasks = null)
     {
-        if (data == null) return "No active terrain to bake.";
+        string status = null;
+        RunNow(BeginBake(data, importedTerrains, session, commitImportedMasks, s => status = s));
+        return status;
+    }
 
-        var model = BuildBakeGeometry(data, importedTerrains, out var pairIndexPerLayer, out var importedLayers);
-        if (model.Layers.Count == 0) return "Nothing to bake - no triangles are assigned to any pair.";
+    /// <summary>Runs a bake started with <see cref="BeginBake"/> / <see cref="BeginBakeBackground"/> right here, on the calling
+    /// thread (what <see cref="Bake"/> and <see cref="BakeBackground"/> do).</summary>
+    private static void RunNow(Func<Action> compute) => compute?.Invoke()?.Invoke();
 
-        // The shadow horizon-march runs against a UNIFIED heightmap
-        // covering both the core's own footprint and (when enabled) the
-        // decorative background's full extent — see BuildShadowHfield's
-        // own doc comment. This bake's OUTPUT still only ever writes into
-        // data.Pairs (core); only what can OCCLUDE the sun is unified.
-        var hfield = BuildShadowHfield(data, importedTerrains, out var hfieldOffset, out _, out _);
+    /// <summary>The background-thread form of <see cref="Bake"/>, for SC2BusyOverlay.RunInBackground. Call it on the main thread:
+    /// it reads what only the main thread may read (the info model, the imported materials' textures) and returns the heavy
+    /// function, which returns the action that stores the baked masks and must run on the main thread. Null when there is nothing
+    /// to bake, after reporting why through <paramref name="onFinished"/>, which also receives the status line at the end.</summary>
+    public static Func<Action> BeginBake(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains, SC2MapSession session,
+        Action<List<SC2RnmMaskSetDocument>> commitImportedMasks, Action<string> onFinished)
+    {
+        if (data == null) { onFinished?.Invoke("No active terrain to bake."); return null; }
 
         var info = SC2TerrainExporter.BuildInfoModel(data, session);
-        var imported = commitImportedMasks != null && session?.Document != null && session.BlobStore != null
-            ? new ImportedBake { Layers = importedLayers, Objects = importedTerrains, Session = session, Commit = commitImportedMasks }
+        var importedPlan = commitImportedMasks != null && session?.Document != null && session.BlobStore != null
+            ? new ImportedBake
+            {
+                Objects = importedTerrains, Session = session, Commit = commitImportedMasks,
+                BlendSamplers = BuildImportedBlendSamplers(importedTerrains),
+            }
             : null;
-        return BakeInternal(model, pairIndexPerLayer, data.Pairs, hfield, hfieldOffset, data, info, "RNM mask(s)", imported);
+
+        return () =>
+        {
+            SC2BusyOverlay.Report("Building the terrain geometry");
+            var model = BuildBakeGeometry(data, importedTerrains, out var pairIndexPerLayer, out var importedLayers);
+            if (model.Layers.Count == 0) return () => onFinished?.Invoke("Nothing to bake - no triangles are assigned to any pair.");
+
+            // The shadow horizon-march runs against a UNIFIED heightmap
+            // covering both the core's own footprint and (when enabled) the
+            // decorative background's full extent — see BuildShadowHfield's
+            // own doc comment. This bake's OUTPUT still only ever writes into
+            // data.Pairs (core); only what can OCCLUDE the sun is unified.
+            SC2BusyOverlay.Report("Building the shadow heightmap");
+            var hfield = BuildShadowHfield(data, importedTerrains, out var hfieldOffset, out _, out _, model);
+
+            if (importedPlan != null) importedPlan.Layers = importedLayers;
+            var outcome = BakeInternal(model, pairIndexPerLayer, data.Pairs, hfield, hfieldOffset, data, info, importedPlan);
+            return () => onFinished?.Invoke(ApplyBake(outcome, pairIndexPerLayer, data.Pairs, data, "RNM mask(s)", importedPlan));
+        };
     }
 
     /// <summary>Background equivalent of Bake — same real per-texel bake
@@ -68,27 +96,42 @@ public static class SC2RnmBakeService
     /// and vice versa.</summary>
     public static string BakeBackground(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains, SC2MapSession session = null)
     {
-        if (coreData == null) return "No active terrain to bake.";
+        string status = null;
+        RunNow(BeginBakeBackground(coreData, importedTerrains, session, s => status = s));
+        return status;
+    }
+
+    /// <summary>The background-thread form of <see cref="BakeBackground"/>; see <see cref="BeginBake"/> for how it is used.</summary>
+    public static Func<Action> BeginBakeBackground(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains,
+        SC2MapSession session, Action<string> onFinished)
+    {
+        if (coreData == null) { onFinished?.Invoke("No active terrain to bake."); return null; }
         var bg = coreData.BackgroundTerrainData;
-        if (!coreData.BackgroundTerrainEnabled || bg == null) return "Background terrain is not enabled.";
+        if (!coreData.BackgroundTerrainEnabled || bg == null) { onFinished?.Invoke("Background terrain is not enabled."); return null; }
 
-        var model = BuildBackgroundBakeGeometry(coreData, bg, out var pairIndexPerLayer, out _, out _);
-        if (model.Layers.Count == 0) return "Nothing to bake - background has no triangles assigned to any pair.";
-
-        // BuildBackgroundBakeGeometry's own `model` is already expressed in
-        // background-local space (worldPos - sharedOffset) — exactly the
-        // same frame BuildShadowHfield's own sharedOffset uses when
-        // background is enabled (it must be, here) — so no further shift
-        // is needed for THIS bake's own geometry (hfieldOffset passed as
-        // zero); BuildShadowHfield handles shifting the core's own absolute-
-        // world geometry into that shared frame internally.
-        var hfield = BuildShadowHfield(coreData, importedTerrains, out _, out _, out _);
         var info = SC2TerrainExporter.BuildInfoModel(coreData, session);
-        // bakeImportedWorldRnm: false — this bake's own model never merges imported terrain (see
-        // BuildBackgroundBakeGeometry), so without this it would see zero imported layers every
-        // time and wipe out whatever the core's own Bake() already baked.
-        return BakeInternal(model, pairIndexPerLayer, bg.Pairs, hfield, Vector3.zero, coreData, info, "background RNM mask(s)",
-            bakeImportedWorldRnm: false);
+        return () =>
+        {
+            SC2BusyOverlay.Report("Building the background geometry");
+            var model = BuildBackgroundBakeGeometry(coreData, bg, out var pairIndexPerLayer, out _, out _);
+            if (model.Layers.Count == 0) return () => onFinished?.Invoke("Nothing to bake - background has no triangles assigned to any pair.");
+
+            // BuildBackgroundBakeGeometry's own `model` is already expressed in
+            // background-local space (worldPos - sharedOffset) — exactly the
+            // same frame BuildShadowHfield's own sharedOffset uses when
+            // background is enabled (it must be, here) — so no further shift
+            // is needed for THIS bake's own geometry (hfieldOffset passed as
+            // zero); BuildShadowHfield handles shifting the core's own absolute-
+            // world geometry into that shared frame internally.
+            SC2BusyOverlay.Report("Building the shadow heightmap");
+            var hfield = BuildShadowHfield(coreData, importedTerrains, out _, out _, out _);
+            // bakeImportedWorldRnm: false — this bake's own model never merges imported terrain (see
+            // BuildBackgroundBakeGeometry), so without this it would see zero imported layers every
+            // time and wipe out whatever the core's own Bake() already baked.
+            var outcome = BakeInternal(model, pairIndexPerLayer, bg.Pairs, hfield, Vector3.zero, coreData, info, null,
+                bakeImportedWorldRnm: false);
+            return () => onFinished?.Invoke(ApplyBake(outcome, pairIndexPerLayer, bg.Pairs, coreData, "background RNM mask(s)", null));
+        };
     }
 
     /// <summary>Builds the heightmap used ONLY for the shadow horizon-
@@ -107,16 +150,17 @@ public static class SC2RnmBakeService
     /// before looking it up against this hfield; it's Vector3.zero when
     /// background is disabled (hfield stays core-only, exactly as before
     /// this fix) or for a caller (BakeBackground) whose own geometry is
-    /// already in that same local frame.</summary>
+    /// already in that same local frame. <paramref name="prebuiltCoreModel"/> is the core geometry a caller has already built with
+    /// BuildBakeGeometry (it is only read here), so it is not built a second time.</summary>
     internal static HfieldModel BuildShadowHfield(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains,
-        out Vector3 sharedOffset, out int mapX, out int mapY)
+        out Vector3 sharedOffset, out int mapX, out int mapY, TerrainModel prebuiltCoreModel = null)
     {
         if (!coreData.BackgroundTerrainEnabled || coreData.BackgroundTerrainData == null)
         {
             sharedOffset = Vector3.zero;
             mapX = coreData.CostsGridSize + 1;
             mapY = coreData.CostsGridSize + 1;
-            var coreOnly = BuildBakeGeometry(coreData, importedTerrains, out _, out _);
+            var coreOnly = prebuiltCoreModel ?? BuildBakeGeometry(coreData, importedTerrains, out _, out _);
             // No material exclusion - only Collision2's own separate
             // projection respects SC2TerrainData.Collision2ExcludedMaterialNames.
             return SC2HfieldProjectionService.Project(coreOnly, null, mapX, mapY);
@@ -134,7 +178,7 @@ public static class SC2RnmBakeService
 
         // Core (+ any imported terrain.bdf objects) — built in absolute
         // world space, shifted into the shared (background-local) frame.
-        var coreModel = BuildBakeGeometry(coreData, importedTerrains, out _, out _);
+        var coreModel = prebuiltCoreModel ?? BuildBakeGeometry(coreData, importedTerrains, out _, out _);
         AppendShifted(unified, coreModel, -sharedOffset);
 
         // Background's own kept mesh — BuildForExportOrPreview's vertices
@@ -216,11 +260,15 @@ public static class SC2RnmBakeService
     /// from each texel's world position before it's looked up against
     /// <paramref name="hfield"/> — nonzero exactly when `model`'s own
     /// coordinate frame doesn't already match the (possibly unified,
-    /// background-local) hfield's — see BuildShadowHfield.</summary>
-    private static string BakeInternal(TerrainModel model, List<int> pairIndexPerLayer, List<SC2MaterialPair> pairs,
-        HfieldModel hfield, Vector3 hfieldOffset, SC2TerrainData bakeSettingsSource, InfoModel info, string unitLabel,
+    /// background-local) hfield's — see BuildShadowHfield.
+    ///
+    /// Only computes: it returns the baked masks and touches neither <paramref name="pairs"/> nor the terrain data, so it can run on
+    /// a worker thread. <see cref="ApplyBake"/> stores the outcome and must run on the main thread.</summary>
+    private static BakeOutcome BakeInternal(TerrainModel model, List<int> pairIndexPerLayer, List<SC2MaterialPair> pairs,
+        HfieldModel hfield, Vector3 hfieldOffset, SC2TerrainData bakeSettingsSource, InfoModel info,
         ImportedBake imported = null, bool bakeImportedWorldRnm = true)
     {
+        SC2BusyOverlay.Report("Preparing the lighting bake");
         var tangents = SC2RnmMaskBaker.ComputeVertexTangents(model);
 
         // Sunlight refracts at the
@@ -292,30 +340,24 @@ public static class SC2RnmBakeService
             SunColor = sunColor, ShadowColor = shadowColor, SunIntensity = sunIntensity,
         };
 
-        var bakedCount = 0;
+        var outcome = new BakeOutcome();
+        var maskNumber = 0;
         foreach (var kv in maskGroups)
         {
             var layerIndices = kv.Value;
+            maskNumber++;
+            SC2BusyOverlay.Report($"Baking lighting: mask {maskNumber} of {maskGroups.Count}", (maskNumber - 1f) / maskGroups.Count);
             // All pairs sharing one mask name share one texture, so they must
             // share one resolution too - take the first as representative.
             var repPair = pairs[pairIndexPerLayer[layerIndices[0]]];
             var result = SC2RnmMaskBaker.BakeMaskGroup(model, tangents, layerIndices, repPair.MaskWidth, repPair.MaskHeight, settings);
-
-            foreach (var li in layerIndices)
-            {
-                var pair = pairs[pairIndexPerLayer[li]];
-                pair.RnmBakedRgb0 = result.Rgb0;
-                pair.RnmBakedRgb1 = result.Rgb1;
-                pair.RnmBakedRgb2 = result.Rgb2;
-                pair.RnmBakedShadowAlpha = result.ShadowAlpha;
-            }
-            bakedCount++;
+            outcome.PairMasks.Add((layerIndices, result));
         }
 
         // Imported terrain.bdf layers that were given a target mask
         // (Lighting Bake > Imported Objects) are baked by THEIR OWN UV2 into
         // masks of their own — a namespace apart from the pair masks above.
-        var importedCount = imported != null ? BakeImportedMasks(model, tangents, settings, imported) : 0;
+        if (imported != null) BakeImportedMasks(model, tangents, settings, imported, outcome);
 
         // Separate from the per-object masks above (and independent of
         // whether that feature's session/blob-store is even available) — a
@@ -330,9 +372,68 @@ public static class SC2RnmBakeService
         // bake would see zero imported layers and WIPE the real data an
         // earlier core Bake() already produced.
         if (bakeImportedWorldRnm)
-            BakeImportedWorldRnm(model, tangents, pairIndexPerLayer, settings, bakeSettingsSource);
+            outcome.World = BakeImportedWorldRnm(model, tangents, pairIndexPerLayer, settings);
 
-        bakeSettingsSource.RnmBakeGeneration++;
+        return outcome;
+    }
+
+    /// <summary>What a bake computed, waiting to be stored by <see cref="ApplyBake"/> on the main thread.</summary>
+    private sealed class BakeOutcome
+    {
+        public readonly List<(List<int> Layers, SC2RnmMaskBaker.MaskResult Result)> PairMasks =
+            new List<(List<int>, SC2RnmMaskBaker.MaskResult)>();
+        public readonly List<(string Name, SC2RnmMaskBaker.MaskResult Result)> ImportedMasks =
+            new List<(string, SC2RnmMaskBaker.MaskResult)>();
+        /// <summary>Null when this bake does not produce the world-space imported-terrain texture (the background's does not).</summary>
+        public WorldRnmResult World;
+    }
+
+    /// <summary>The single world-space RGBA texture of the imported terrain (see BakeImportedWorldRnm); an empty
+    /// <see cref="Rgba"/> clears it.</summary>
+    private sealed class WorldRnmResult
+    {
+        public byte[] Rgba = Array.Empty<byte>();
+        public int Width, Height;
+        public float OriginX, OriginZ, SpanX, SpanZ;
+        public bool KeepsPlacement; // true when the placement fields below hold real values
+    }
+
+    /// <summary>Stores a computed bake: the masks into <paramref name="pairs"/>, the imported masks through their commit callback,
+    /// and the world-space imported texture into <paramref name="coreData"/>. Main thread. Returns the status line.</summary>
+    private static string ApplyBake(BakeOutcome outcome, List<int> pairIndexPerLayer, List<SC2MaterialPair> pairs,
+        SC2TerrainData coreData, string unitLabel, ImportedBake imported)
+    {
+        foreach (var (layerIndices, result) in outcome.PairMasks)
+        {
+            foreach (var li in layerIndices)
+            {
+                var pair = pairs[pairIndexPerLayer[li]];
+                pair.RnmBakedRgb0 = result.Rgb0;
+                pair.RnmBakedRgb1 = result.Rgb1;
+                pair.RnmBakedRgb2 = result.Rgb2;
+                pair.RnmBakedShadowAlpha = result.ShadowAlpha;
+            }
+        }
+
+        var importedCount = imported != null ? StoreImportedMasks(outcome, imported) : 0;
+
+        if (outcome.World != null)
+        {
+            var world = outcome.World;
+            coreData.ImportedRnmBakedRgba = world.Rgba;
+            coreData.ImportedRnmWidth = world.Width;
+            coreData.ImportedRnmHeight = world.Height;
+            if (world.KeepsPlacement)
+            {
+                coreData.ImportedRnmWorldOriginX = world.OriginX;
+                coreData.ImportedRnmWorldOriginZ = world.OriginZ;
+                coreData.ImportedRnmWorldSpanX = world.SpanX;
+                coreData.ImportedRnmWorldSpanZ = world.SpanZ;
+            }
+        }
+
+        coreData.RnmBakeGeneration++;
+        var bakedCount = outcome.PairMasks.Count;
         return importedCount > 0
             ? $"Baked lighting for {bakedCount} {unitLabel} + {importedCount} imported mask(s)."
             : $"Baked lighting for {bakedCount} {unitLabel}.";
@@ -354,15 +455,39 @@ public static class SC2RnmBakeService
         public List<SC2ImportedTerrainExportData> Objects;
         public SC2MapSession Session;
         public Action<List<SC2RnmMaskSetDocument>> Commit;
+        /// <summary>(object index, layer index) -> the layer's slice-1 blend sampler, read from the material's texture up front on
+        /// the main thread (a texture can only be read there); a layer without one has no entry.</summary>
+        public Dictionary<(int Object, int Layer), Func<float, float, byte>> BlendSamplers;
+    }
+
+    /// <summary>Reads the blend sampler of every imported layer that is assigned a target mask. Main thread: it reads textures.</summary>
+    private static Dictionary<(int Object, int Layer), Func<float, float, byte>> BuildImportedBlendSamplers(
+        List<SC2ImportedTerrainExportData> importedTerrains)
+    {
+        var samplers = new Dictionary<(int, int), Func<float, float, byte>>();
+        if (importedTerrains == null) return samplers;
+        for (var oi = 0; oi < importedTerrains.Count; oi++)
+        {
+            var names = importedTerrains[oi].RnmBakeMaskNames;
+            var materials = importedTerrains[oi].Materials;
+            if (names == null || materials == null) continue;
+            for (var li = 0; li < names.Length && li < materials.Length; li++)
+            {
+                if (string.IsNullOrEmpty(names[li])) continue;
+                var sampler = BuildBlendSampler(materials[li]);
+                if (sampler != null) samplers[(oi, li)] = sampler;
+            }
+        }
+        return samplers;
     }
 
     /// <summary>Bakes every imported layer that targets an existing imported
     /// mask, one mask at a time (all layers sharing a mask in one pass, so they
-    /// end up in the same arrays), and hands the complete new mask list to
-    /// <see cref="ImportedBake.Commit"/>. Returns how many masks were baked.</summary>
-    private static int BakeImportedMasks(TerrainModel model, Vector3[] tangents, SC2RnmMaskBaker.Settings settings, ImportedBake imported)
+    /// end up in the same arrays). The results go into <paramref name="outcome"/>;
+    /// <see cref="StoreImportedMasks"/> stores them.</summary>
+    private static void BakeImportedMasks(TerrainModel model, Vector3[] tangents, SC2RnmMaskBaker.Settings settings, ImportedBake imported,
+        BakeOutcome outcome)
     {
-        var store = imported.Session.BlobStore;
         var rnm = imported.Session.Document.Terrain.ImportedRnm;
 
         var groups = new Dictionary<string, List<int>>();
@@ -374,24 +499,36 @@ public static class SC2RnmBakeService
             if (!groups.TryGetValue(layerRef.MaskName, out var list)) groups[layerRef.MaskName] = list = new List<int>();
             list.Add(li);
         }
-        if (groups.Count == 0) return 0;
+        if (groups.Count == 0) return;
 
-        var samplerCache = new Dictionary<int, Func<float, float, byte>>();
         Func<float, float, byte> SamplerFor(int li)
         {
-            if (samplerCache.TryGetValue(li, out var cached)) return cached;
             var layerRef = imported.Layers[li];
-            Material material = null;
-            var materials = layerRef.ObjectIndex < imported.Objects.Count ? imported.Objects[layerRef.ObjectIndex].Materials : null;
-            if (materials != null && layerRef.LayerIndex < materials.Length) material = materials[layerRef.LayerIndex];
-            return samplerCache[li] = BuildBlendSampler(material);
+            return imported.BlendSamplers != null && imported.BlendSamplers.TryGetValue((layerRef.ObjectIndex, layerRef.LayerIndex), out var sampler)
+                ? sampler : null;
         }
 
-        var next = rnm.CloneMaskSets();
+        var maskNumber = 0;
         foreach (var group in groups)
         {
-            var set = SC2ImportedRnmMasks.Find(new SC2RnmDocument { MaskSets = next }, group.Key);
+            maskNumber++;
+            SC2BusyOverlay.Report($"Baking imported masks: {maskNumber} of {groups.Count}");
+            var set = SC2ImportedRnmMasks.Find(rnm, group.Key);
             var result = SC2RnmMaskBaker.BakeMaskGroup(model, tangents, group.Value, set.Width, set.Height, settings, SamplerFor);
+            outcome.ImportedMasks.Add((group.Key, result));
+        }
+    }
+
+    /// <summary>Stores the imported masks a bake computed into the blob store and hands the complete new mask list to
+    /// <see cref="ImportedBake.Commit"/>. Main thread. Returns how many masks were stored.</summary>
+    private static int StoreImportedMasks(BakeOutcome outcome, ImportedBake imported)
+    {
+        if (outcome.ImportedMasks.Count == 0) return 0;
+        var store = imported.Session.BlobStore;
+        var next = imported.Session.Document.Terrain.ImportedRnm.CloneMaskSets();
+        foreach (var (name, result) in outcome.ImportedMasks)
+        {
+            var set = SC2ImportedRnmMasks.Find(new SC2RnmDocument { MaskSets = next }, name);
             set.BakedRgb0 = SC2ImportedRnmMasks.Put(store, result.Rgb0);
             set.BakedRgb1 = SC2ImportedRnmMasks.Put(store, result.Rgb1);
             set.BakedRgb2 = SC2ImportedRnmMasks.Put(store, result.Rgb2);
@@ -409,7 +546,7 @@ public static class SC2RnmBakeService
             set.MaskBytes = SC2ImportedRnmMasks.Put(store, rgba);
         }
         imported.Commit(next);
-        return groups.Count;
+        return outcome.ImportedMasks.Count;
     }
 
     /// <summary>Bakes ONE world-space RGBA texture covering the union of every imported-terrain
@@ -417,7 +554,7 @@ public static class SC2RnmBakeService
     /// mask", see BuildBakeGeometry's own tagging), storing the SAME combined-and-contrast-stretched
     /// value SC2TerrainView.shader's own PreviewMode==4 live-terrain preview already computes
     /// per-pixel at runtime — decals don't need the 3 separate basis layers any more than that
-    /// preview does. Writes into <paramref name="coreData"/>'s ImportedRnm* fields directly (no
+    /// preview does. The result is stored into the terrain data's ImportedRnm* fields by ApplyBake (no
     /// session/blob-store dependency at bake time — SC2RuntimeTerrainPersistence handles turning
     /// this in-memory byte array into a real saved blob separately). Reuses the exact same
     /// SC2RnmMaskBaker.BakeMaskGroup rasterizer the pair masks above use, by temporarily
@@ -425,19 +562,14 @@ public static class SC2RnmBakeService
     /// BakeMaskGroup rasterizes purely by each vertex's own UV2, so this one substitution is the
     /// only change needed to redirect it at a world-space domain instead of a per-object one. MUST
     /// run after BakeImportedMasks — see this method's own call site comment.</summary>
-    private static void BakeImportedWorldRnm(TerrainModel model, Vector3[] tangents, List<int> pairIndexPerLayer,
-        SC2RnmMaskBaker.Settings settings, SC2TerrainData coreData)
+    private static WorldRnmResult BakeImportedWorldRnm(TerrainModel model, Vector3[] tangents, List<int> pairIndexPerLayer,
+        SC2RnmMaskBaker.Settings settings)
     {
+        SC2BusyOverlay.Report("Baking the imported terrain's world lighting");
         var layerIndices = new List<int>();
         for (var li = 0; li < pairIndexPerLayer.Count; li++)
             if (pairIndexPerLayer[li] < 0) layerIndices.Add(li);
-        if (layerIndices.Count == 0)
-        {
-            coreData.ImportedRnmBakedRgba = Array.Empty<byte>();
-            coreData.ImportedRnmWidth = 0;
-            coreData.ImportedRnmHeight = 0;
-            return;
-        }
+        if (layerIndices.Count == 0) return new WorldRnmResult();
 
         var minX = float.MaxValue; var minZ = float.MaxValue;
         var maxX = float.MinValue; var maxZ = float.MinValue;
@@ -452,13 +584,7 @@ public static class SC2RnmBakeService
                 if (v.PosZ < minZ) minZ = v.PosZ; if (v.PosZ > maxZ) maxZ = v.PosZ;
             }
         }
-        if (minX > maxX)
-        {
-            coreData.ImportedRnmBakedRgba = Array.Empty<byte>();
-            coreData.ImportedRnmWidth = 0;
-            coreData.ImportedRnmHeight = 0;
-            return; // degenerate — layers tagged imported but with no actual vertices
-        }
+        if (minX > maxX) return new WorldRnmResult(); // degenerate — layers tagged imported but with no actual vertices
 
         const float pad = 8f; // world units, so real edge geometry isn't sampled exactly at the UV border
         minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
@@ -502,13 +628,11 @@ public static class SC2RnmBakeService
             rgba[i * 4 + 3] = result.Covered[i] ? (byte)255 : (byte)0; // real per-texel coverage, before gap-fill
         }
 
-        coreData.ImportedRnmBakedRgba = rgba;
-        coreData.ImportedRnmWidth = resolution;
-        coreData.ImportedRnmHeight = resolution;
-        coreData.ImportedRnmWorldOriginX = minX;
-        coreData.ImportedRnmWorldOriginZ = minZ;
-        coreData.ImportedRnmWorldSpanX = spanX;
-        coreData.ImportedRnmWorldSpanZ = spanZ;
+        return new WorldRnmResult
+        {
+            Rgba = rgba, Width = resolution, Height = resolution,
+            OriginX = minX, OriginZ = minZ, SpanX = spanX, SpanZ = spanZ, KeepsPlacement = true,
+        };
     }
 
     /// <summary>A (u, v) → alpha sampler over the material's current

@@ -28,7 +28,11 @@ public static class SC2RuntimeTerrainPersistence
 {
     private const int FormatVersion = 2;
 
-    public static string SaveDirectory => Path.Combine(Application.persistentDataPath, "SC2Terrains");
+    // Application.persistentDataPath may only be read on the main thread; read once there (PrimeMainThreadState) so the paths below
+    // also work from the autosave's worker thread.
+    private static string _saveDirectory;
+
+    public static string SaveDirectory => _saveDirectory ??= Path.Combine(Application.persistentDataPath, "SC2Terrains");
 
     private const string FileSuffix = ".sc2terrain.json";
 
@@ -192,16 +196,48 @@ public static class SC2RuntimeTerrainPersistence
     public static bool CreateAutosaveBackup(SC2TerrainData data, SC2MapSession session)
     {
         if (data == null || SC2SaveSettings.MaxBackupsPerMap <= 0) return false;
+        PrimeMainThreadState();
+        return WriteAutosaveBackup(data, session, ToDto(data));
+    }
+
+    /// <summary>The background-thread form of <see cref="CreateAutosaveBackup"/>, for SC2BusyOverlay.RunInBackground. Call it on the
+    /// main thread: it copies the data into the save DTO there (that reads texture names) and returns the function that writes the
+    /// backup, which returns the action that reports the outcome to <paramref name="onFinished"/> on the main thread. Null when
+    /// backups are off.</summary>
+    public static Func<Action> BeginAutosaveBackup(SC2TerrainData data, SC2MapSession session, Action<bool> onFinished)
+    {
+        if (data == null || SC2SaveSettings.MaxBackupsPerMap <= 0) return null;
+        PrimeMainThreadState();
+        var dto = ToDto(data);
+        return () =>
+        {
+            SC2BusyOverlay.Report("Writing the backup");
+            var ok = WriteAutosaveBackup(data, session, dto);
+            return () => onFinished?.Invoke(ok);
+        };
+    }
+
+    // Reads, on the main thread, everything the backup needs that only the main thread may read (the save folder, the setting that
+    // limits how many backups are kept), so that the writing itself can run on a worker.
+    private static void PrimeMainThreadState()
+    {
+        _ = SaveDirectory;
+        _ = SC2SaveSettings.MaxBackupsPerMap;
+    }
+
+    private static bool WriteAutosaveBackup(SC2TerrainData data, SC2MapSession session, Dto dto)
+    {
         try
         {
-            var json = JsonUtility.ToJson(ToDto(data));
+            var json = JsonUtility.ToJson(dto);
             var blobStore = CreateBlobStore();
             var document = BuildDocumentSnapshot(data, session, blobStore);
             var manifestJson = SC2MapDocumentSerializer.Serialize(document);
             CreateBackupSnapshot(data.MapName, json, manifestJson, blobStore);
             return true;
         }
-        catch (Exception ex)
+        // A UnityException is an API that only the main thread may call: let it out, so the busy overlay runs the backup there.
+        catch (Exception ex) when (!(ex is UnityException))
         {
             SC2Log.LogWarning($"[SC2RuntimeTerrainPersistence] Autosave backup failed: {ex}");
             return false;
@@ -473,7 +509,7 @@ public static class SC2RuntimeTerrainPersistence
     /// besides the directory itself) and avoids this Editor-agnostic file
     /// needing a live SC2MapSession reference just to save.</summary>
     private static ISC2BlobStore CreateBlobStore() =>
-        new SC2DirectoryBlobStore(Path.Combine(Application.persistentDataPath, "SC2Terrains", "Blobs"));
+        new SC2DirectoryBlobStore(Path.Combine(SaveDirectory, "Blobs"));
 
     public static string DocumentPackageDirectory(string mapName) =>
         Path.Combine(SaveDirectory, SanitizeFileName(string.IsNullOrWhiteSpace(mapName) ? "Untitled" : mapName) + ".sc2mapdoc");
