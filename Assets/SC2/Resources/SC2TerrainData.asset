@@ -96,6 +96,7 @@ MonoBehaviour:
     RnmBakedShadowAlpha: 
     TilingScale: 4
     SimplifyRatio: 0
+  BlendLayerStacks: []
   Heights:
   - 100
   - 100
