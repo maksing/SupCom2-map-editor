@@ -865,6 +865,22 @@ public class SC2TerrainShell : ScriptableObject
     /// why this is a separate channel from RecordUndoCheckpoint.</summary>
     public void RecordRnmBlendCheckpoint() => CombinedUndo.RecordRnmBlendCheckpoint();
 
+    /// <summary>Paints a band of the pair's second material along the inside of the pair's border into the active
+    /// blend mask layer (see SC2PaintMode.OutlinePairBorder). Returns a one-line result for the panel.</summary>
+    public string OutlinePairBorder(SC2TerrainData data, int pairIndex, float widthWorld, float softness, float blendValue, float smoothingCells = 1f, float spreadWorld = 0f)
+        => _paintMode == null ? "Outline not applied: the paint tools are not ready." : _paintMode.OutlinePairBorder(data, pairIndex, widthWorld, softness, blendValue, smoothingCells, spreadWorld);
+
+    /// <summary>The smallest outline Width, Spread and Smoothing for this map (see SC2PaintMode.GetOutlineMinimums).</summary>
+    public void GetOutlineMinimums(SC2TerrainData data, out float width, out float spread, out float smoothing)
+    {
+        if (_paintMode != null) { _paintMode.GetOutlineMinimums(data, out width, out spread, out smoothing); return; }
+        width = 0.5f; spread = 0f; smoothing = 0f;
+    }
+
+    /// <summary>Removes outline-layer pixels that are no longer along a pair border after the assignments changed from
+    /// <paramref name="before"/> to the current ones (see SC2PaintMode.PruneOutlines).</summary>
+    public void PruneOutlines(SC2TerrainData data, short[] before) => _paintMode?.PruneOutlines(data, before);
+
     /// <summary>Executes a real ISC2DocumentCommand (e.g. a Material/Pair
     /// rename) and records it in the same combined undo order as legacy
     /// checkpoints. Returns false without effect if no Session is wired.</summary>
@@ -917,6 +933,7 @@ public class SC2TerrainShell : ScriptableObject
         // painting background even once after painting core would make
         // Ctrl+Z permanently unable to reach the core's own CombinedUndo
         // history the moment _bgUndoStack ran dry.
+        _paintMode?.FlushOutlineJob();
         if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
             && _bgUndoStack.Undo(_data.BackgroundTerrainData))
         {
@@ -934,6 +951,7 @@ public class SC2TerrainShell : ScriptableObject
 
     public bool Redo()
     {
+        _paintMode?.FlushOutlineJob();
         // See Undo()'s own comment on why this falls through instead of
         // returning false the moment _bgUndoStack has nothing left to redo.
         if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
@@ -2041,12 +2059,17 @@ public class SC2TerrainShell : ScriptableObject
             _previewBuildQueued = false;
             if (_data != null && _data.IsInitialized)
             {
+                var swBuild = System.Diagnostics.Stopwatch.StartNew();
                 EnsurePreview();
+                var swEnsure = swBuild.ElapsedMilliseconds;
                 ApplyPreviewModeToChunks();
+                var swApply = swBuild.ElapsedMilliseconds - swEnsure;
                 // Warm the live height grid here too, same debounce timing
                 // as the preview mesh - so the first paint click after an
                 // edit doesn't pay the rebuild cost synchronously mid-drag.
                 _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport);
+                if (swBuild.ElapsedMilliseconds > 30)
+                    SC2Log.Log($"[SC2TerrainShell] Queued preview build: EnsurePreview={swEnsure}ms, ApplyPreviewModeToChunks={swApply}ms, live height grid={swBuild.ElapsedMilliseconds - swEnsure - swApply}ms.");
                 Repaint();
 #if UNITY_EDITOR
                 SceneView.RepaintAll();
@@ -2057,8 +2080,11 @@ public class SC2TerrainShell : ScriptableObject
         if (!_previewDirty) return;
         if (_data == null || !_data.IsInitialized || _runtime == null) return;
         _previewDirty = false;
+        var swDirty = System.Diagnostics.Stopwatch.StartNew();
         ApplyPreviewModeToChunks();
         DestroyLegacyPreviewMesh();
+        if (swDirty.ElapsedMilliseconds > 30)
+            SC2Log.Log($"[SC2TerrainShell] Dirty preview refresh (ApplyPreviewModeToChunks + legacy mesh) took {swDirty.ElapsedMilliseconds}ms.");
         Repaint();
 #if UNITY_EDITOR
         SceneView.RepaintAll();
@@ -2078,6 +2104,7 @@ public class SC2TerrainShell : ScriptableObject
     public void EnsurePairSyncPublic() => EnsurePairSync();
     public void FlushPaintToCPU()
     {
+        _paintMode?.FlushOutlineJob();
         EnsurePairSync(force: true);
         MarkPairCpuDataSynced();
     }
@@ -2108,12 +2135,17 @@ public class SC2TerrainShell : ScriptableObject
     /// (repaint/visibility) side effects re-running mid-stroke.</summary>
     public static void BumpTerrainGeometryVersion() => s_terrainGeometryVersion++;
 
-    public void MarkDirtyAndRepaint()
+    public void MarkDirtyAndRepaint() => MarkDirtyAndRepaint(geometryChanged: true);
+
+    /// <summary>As MarkDirtyAndRepaint, but without bumping <see cref="TerrainGeometryVersion"/> when the edit did not change anything
+    /// the terrain's shape or its height projection depends on (a pair assignment away from the water pairs): that version makes
+    /// the decals preview force a synchronous rebuild of the live height grid, about 300 ms on a large map, on the next frame.</summary>
+    public void MarkDirtyAndRepaint(bool geometryChanged)
     {
         if (_data != null) EditorUtility.SetDirty(_data);
         _simplifiedMode?.MarkDirty();
         _previewDirty = true;
-        s_terrainGeometryVersion++;
+        if (geometryChanged) s_terrainGeometryVersion++;
         // Cheap (one SetActive call) and idempotent - resyncing here means
         // any setter that flips ImportOnlyMode (or anything else
         // ApplyRuntimeVisibility depends on) doesn't also need to remember
@@ -4357,6 +4389,7 @@ public class SC2TerrainShell : ScriptableObject
     /// writes the canonical save files themselves.</summary>
     private void SyncDataForSave(System.Diagnostics.Stopwatch sw)
     {
+        _paintMode?.FlushOutlineJob();
         PreSaveSync?.Invoke();
         SC2Log.Log($"[SC2TerrainShell] Save: PreSaveSync done ({sw.ElapsedMilliseconds}ms).");
 
@@ -4373,6 +4406,9 @@ public class SC2TerrainShell : ScriptableObject
                 MarkPairCpuDataSynced();
             }
             _runtime.FlushActiveBlendGroup(_data);
+            // The background's mask is only flushed lazily after an outline update; a save must not miss it.
+            if (_bgRuntime != null && _data.BackgroundTerrainData != null && _bgRuntime.CompositeFlushPending)
+                _bgRuntime.FlushActiveBlendGroup(_data.BackgroundTerrainData);
             SC2Log.Log($"[SC2TerrainShell] Save: runtime->CPU sync done ({sw.ElapsedMilliseconds}ms).");
         }
         // The ONLY place that used to push Environment

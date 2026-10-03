@@ -116,6 +116,7 @@ public partial class SC2TerrainRuntime : IDisposable
         // Layers: finish any pending paint (flatten, then copy the painted layer back into the stack) first, so
         // BlendRT below is the up-to-date composite of the stack.
         CommitLayerEdits();
+        CompositeFlushPending = false;
         var bytes = ReadBlendBytes(BlendRT);
         for (var i = 0; i < data.Pairs.Count; i++)
             if (NormalizeMaskName(data.Pairs[i].RnmMaskName) == maskName)

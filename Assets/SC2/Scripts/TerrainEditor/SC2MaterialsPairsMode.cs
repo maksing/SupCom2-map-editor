@@ -333,6 +333,15 @@ public class SC2PairsMode
     private readonly Dictionary<int, Rect> _rowRects = new();
     private int _presetPickIndex;
 
+    // Border outline settings (shared by every pair's panel) and the result line of the last outline.
+    private float _outlineWidth = 8f;
+    private float _outlineSoftness = 0.5f;
+    private float _outlineSmoothing = 1f;
+    private float _outlineSpread = 4f;
+    // The blend alpha of an outline is always full: the outline is the pair's D2 itself.
+    private const float _outlineBlend = 1f;
+    private string _outlineStatus = "";
+
     // Default SC2 shader flags — the real, complete 12-flag set confirmed by
     // a direct probe of all 56 vanilla maps' terrain.bdf ShaderSetup entries
     // (no other flag names exist anywhere in the corpus). ALPHA_TEST's
@@ -514,6 +523,11 @@ public class SC2PairsMode
             _win.RecordUndoCheckpointFor(Data, "Remove Pair");
             // Clear pair from index array and shift higher indices down
             var counts = new int[Data.Pairs.Count - 1];
+            // The assignments as they will be after the shift, except that the removed pair's cells still hold it: the
+            // difference to the result is exactly the cells that lost their pair.
+            var assignmentsBefore = (short[])Data.TrianglePairIndex.Clone();
+            for (var t = 0; t < assignmentsBefore.Length; t++)
+                if (assignmentsBefore[t] > i) assignmentsBefore[t]--;
             for (var t=0;t<Data.TrianglePairIndex.Length;t++)
             {
                 if (Data.TrianglePairIndex[t]==i) Data.TrianglePairIndex[t]=-1;
@@ -540,6 +554,7 @@ public class SC2PairsMode
             // own comment calls out for Undo/Redo) and need their own refresh.
             if (Data == _win.Data) _win.ApplyPreviewModeToChunks();
             else _win.RefreshBackgroundRuntime();
+            _win.PruneOutlines(Data, assignmentsBefore);
             EditorUtility.SetDirty(Data); _win.MarkDirtyAndRepaint();
         }
         EditorGUILayout.EndHorizontal();
@@ -552,6 +567,25 @@ public class SC2PairsMode
         // content this same row just drew.
         if (Event.current.type == EventType.Repaint)
             _rowRects[i] = GUILayoutUtility.GetLastRect();
+    }
+
+    /// <summary>"Outline border": a band of the pair's second material (D2, blend alpha) along the inside of its border,
+    /// painted into the active layer of the pair's Blend Mask — see SC2PaintMode.OutlinePairBorder.</summary>
+    private void DrawOutlineSection(int i)
+    {
+        EditorGUILayout.LabelField("Border outline", EditorStyles.boldLabel);
+        var key = $"pair-outline-{Data.GetInstanceID()}-{i}";
+        _win.GetOutlineMinimums(Data, out var minWidth, out var minSpread, out var minSmoothing);
+        _outlineWidth = SC2TerrainShell.DrawCompactSlider("Width (units)", _outlineWidth, minWidth, 64f, key);
+        _outlineSoftness = SC2TerrainShell.DrawCompactSlider("Softness", _outlineSoftness, 0f, 1f, key);
+        _outlineSmoothing = SC2TerrainShell.DrawCompactSlider("Smoothing (cells)", _outlineSmoothing, 0f, SC2PairOutlineUpdater.MaximumSmoothingCells, key);
+        _outlineSpread = SC2TerrainShell.DrawCompactSlider("Spread onto neighbors (units)", _outlineSpread, 0f, 32f, key);
+        if (_outlineSpread > 0f && _outlineSpread < minSpread) _outlineSpread = minSpread;
+        if (_outlineSmoothing > 0f && _outlineSmoothing < minSmoothing) _outlineSmoothing = minSmoothing;
+        if (GUILayout.Button("Outline border with D2", GUILayout.Height(SC2UiScale.Pxf(22f))))
+            _outlineStatus = _win.OutlinePairBorder(Data, i, _outlineWidth, _outlineSoftness, _outlineBlend, _outlineSmoothing, _outlineSpread);
+        SC2TerrainShell.DrawUnifiedNote("Paints a band of this pair's D2 along its border onto the \"Outline\" Blend Mask layer (Paint > Blend Mask): inside the pair and, with Spread, a little onto the neighbouring pairs. Outlines that are no longer along a pair border are removed from that layer.");
+        if (!string.IsNullOrEmpty(_outlineStatus)) SC2TerrainShell.DrawUnifiedNote(_outlineStatus);
     }
 
     private void DrawDetails(int i)
@@ -688,6 +722,8 @@ public class SC2PairsMode
         pair.Mat1Id = pair.Mat1Index >= 0 && pair.Mat1Index < Data.Materials.Count ? Data.Materials[pair.Mat1Index].Id : "";
         pair.Mat2Id = pair.Mat2Index >= 0 && pair.Mat2Index < Data.Materials.Count ? Data.Materials[pair.Mat2Index].Id : "";
 
+        EditorGUILayout.Space(6);
+        DrawOutlineSection(i);
         EditorGUILayout.Space(6);
         // ── Shader flags ──────────────────────────────────────────────────
         EditorGUILayout.LabelField("Shader Flags", EditorStyles.boldLabel);

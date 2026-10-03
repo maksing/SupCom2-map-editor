@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEditor;
 using SC2.MapEditor.SmartExport;
@@ -59,6 +60,26 @@ public class SC2PaintMode
     private readonly Queue<System.Action> _pendingLayerActions = new();
     private bool   _layerSettingsNeedFlush;
     private double _layerSettingsChangedAt;
+    // ── Auto outline (Assign Pairs) ──
+    // While on, a finished stroke outlines the border of the cells it newly gave to the pair, on the group's "Outline"
+    // blend mask layer, and clears outlines that are no longer along a pair border. Only cells that changed to the pair in
+    // this stroke are outlined, so repainting existing areas draws nothing new.
+    private bool  _autoOutline = false;
+    private float _outlineWidth = 8f;
+    private float _outlineSoftness = 0.5f;
+    // How far the cell-shaped region border is rounded off before the band is measured from it, in grid cells.
+    private float _outlineSmoothing = 1f;
+    // How far the outline continues onto the neighbouring pairs, in world units (0 = inside the pair only).
+    private float _outlineSpread = 4f;
+    // The blend alpha of an outline is always full: the outline is the pair's D2 itself.
+    private const float _outlineBlend = 1f;
+    private string _outlineStatus = "";
+    // Pair assignments (per triangle) as they were when the current stroke began.
+    private short[] _strokeBefore;
+    // While set, the undo snapshot captures this surface and pair instead of the brush's own (see OutlinePairBorder).
+    private SC2TerrainData _captureData;
+    private SC2TerrainRuntime _captureRuntime;
+    private int _capturePairIndex;
 
     // Cached CPU snapshot of BlendRT for the preview swatch (see DrawRnm) —
     // deliberately a Texture2D, never the live RenderTexture, and throttled.
@@ -131,16 +152,13 @@ public class SC2PaintMode
         EditorGUILayout.EndVertical();
     }
 
-    void DrawAssign()
+    /// <summary>The pair chooser (with its colour swatch) used by the Assign Pairs panel.</summary>
+    void DrawAssignPairPopup(float w)
     {
-        if (Data.Pairs.Count == 0)
-        { SC2TerrainShell.DrawUnifiedNote("Create pairs in the Pairs tab first."); return; }
-
         // Pair selector with colour swatches
         var names = new string[Data.Pairs.Count + 1];
         names[0] = "(Unassign)";
         for (var i = 0; i < Data.Pairs.Count; i++) names[i+1] = Data.Pairs[i].Name;
-        var w = SC2TerrainShell.GetPanelContentWidth();
         EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (_assignPair >= 0 && _assignPair < Data.Pairs.Count)
         {
@@ -149,6 +167,31 @@ public class SC2PaintMode
         }
         _assignPair = EditorGUILayout.Popup("paint-assign-pair", _assignPair + 1, names, SC2UiScale.PopupStyle(), GUILayout.Width(Mathf.Max(60f, w - 20f)), GUILayout.MaxWidth(Mathf.Max(60f, w - 20f))) - 1;
         EditorGUILayout.EndHorizontal();
+    }
+
+    void DrawAssign()
+    {
+        if (Data.Pairs.Count == 0)
+        { SC2TerrainShell.DrawUnifiedNote("Create pairs in the Pairs tab first."); return; }
+
+        var w = SC2TerrainShell.GetPanelContentWidth();
+        DrawAssignPairPopup(w);
+
+        _autoOutline = EditorGUILayout.Toggle("Auto outline (D2)", _autoOutline, GUILayout.Width(w), GUILayout.MaxWidth(w));
+        if (_autoOutline)
+        {
+            GetOutlineMinimums(Data, out var minWidth, out var minSpread, out var minSmoothing);
+            _outlineWidth = SC2TerrainShell.DrawCompactSlider("Outline width (units)", _outlineWidth, minWidth, 64f, "auto-outline");
+            _outlineSoftness = SC2TerrainShell.DrawCompactSlider("Outline softness", _outlineSoftness, 0f, 1f, "auto-outline");
+            _outlineSmoothing = SC2TerrainShell.DrawCompactSlider("Outline smoothing (cells)", _outlineSmoothing, 0f, SC2PairOutlineUpdater.MaximumSmoothingCells, "auto-outline");
+            _outlineSpread = SC2TerrainShell.DrawCompactSlider("Spread onto neighbors (units)", _outlineSpread, 0f, 32f, "auto-outline");
+            // Below the smallest values the outline is thinner than the mask can show: a spread or smoothing above zero is raised to it.
+            if (_outlineSpread > 0f && _outlineSpread < minSpread) _outlineSpread = minSpread;
+            if (_outlineSmoothing > 0f && _outlineSmoothing < minSmoothing) _outlineSmoothing = minSmoothing;
+            SC2TerrainShell.DrawUnifiedNote($"Smallest values for this map: width {minWidth:0.##} units, spread {minSpread:0.##} units, smoothing {minSmoothing:0.##} cells (two mask pixels; spread and smoothing can also be 0).");
+            SC2TerrainShell.DrawUnifiedNote("After each stroke, the closed region of this pair that the stroke touched is outlined with the pair's D2, inside the region and (Spread) a little onto the neighbouring pairs. All outlines go on one Blend Mask layer, \"Outline\"; the region's previous outline is replaced, and outlines that are no longer along a pair border are removed.");
+            if (!string.IsNullOrEmpty(_outlineStatus)) SC2TerrainShell.DrawUnifiedNote(_outlineStatus);
+        }
 
         _selectMode = EditorGUILayout.Toggle("Select+Assign", _selectMode, GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (_selectMode)
@@ -176,7 +219,9 @@ public class SC2PaintMode
                 GL.Clear(false, true, new Color(_assignPair / 255f, 0, 0, 1));
                 RenderTexture.active = prev;
             }
+            var assignAllBefore = (short[])Data.TrianglePairIndex.Clone();
             Data.AssignAllTrianglesToPair(_assignPair);
+            OutlineNewlyPaintedCells(Data, _assignPair, assignAllBefore, syncFirst: false);
             _win.MarkDirtyAndRepaint();
         }
 
@@ -191,8 +236,10 @@ public class SC2PaintMode
                 GL.Clear(false, true, new Color(255f/255f, 0, 0, 1)); // 255 = unassigned (-1)
                 RenderTexture.active = prev;
             }
+            var clearBefore = (short[])Data.TrianglePairIndex.Clone();
             var n = Data.TrianglePairIndex.Length;
             for (var i = 0; i < n; i++) Data.TrianglePairIndex[i] = -1;
+            OutlineNewlyPaintedCells(Data, -1, clearBefore, syncFirst: false);
             foreach (var p in Data.Pairs) p.InvalidateTriCount();
             _win.MarkDirtyAndRepaint();
         }
@@ -359,19 +406,388 @@ public class SC2PaintMode
         FinishLayerEdit(runtime);
     }
 
-    private void FinishLayerEdit(SC2TerrainRuntime runtime)
+    private void FinishLayerEdit(SC2TerrainRuntime runtime) => FinishLayerEdit(runtime, Data);
+
+    private void FinishLayerEdit(SC2TerrainRuntime runtime, SC2TerrainData data, bool flushComposite = true)
     {
         runtime.CommitLayerEdits();
-        runtime.FlushActiveBlendGroup(Data);
+        // The flush is a full-size GPU readback; an outline update leaves it for later (see TryFlushPendingComposite).
+        if (flushComposite) runtime.FlushActiveBlendGroup(data);
+        else runtime.MarkCompositeUnflushed();
         _layerSettingsNeedFlush = false;
         _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
-        EditorUtility.SetDirty(Data);
-        if (Data != _win.Data) _win.RefreshBackgroundRuntime();
-        _win.MarkDirtyAndRepaint();
+        EditorUtility.SetDirty(data);
+        if (data != _win.Data) _win.RefreshBackgroundRuntime();
+        _win.MarkDirtyAndRepaint(geometryChanged: false);
+    }
+
+    /// <summary>Writes pending composites to the pairs once painting has paused (see SC2TerrainRuntime.TryFlushPendingComposite).</summary>
+    private void FlushPendingComposites()
+    {
+        if (_isPainting) return;
+        PollOutlineJob();
+        if (_win.Runtime != null && _win.Data != null) _win.Runtime.TryFlushPendingComposite(_win.Data, 0.6f);
+        var background = _win.Data != null ? _win.Data.BackgroundTerrainData : null;
+        if (_win.BackgroundRuntime != null && background != null) _win.BackgroundRuntime.TryFlushPendingComposite(background, 0.6f);
+    }
+
+    /// <summary>Id of the blend mask layer that holds every pair outline of a mask group.</summary>
+    private const string OutlineLayerId = "pair-outline";
+
+    private static SC2BlendMaskLayer FindOutlineLayer(SC2BlendMaskLayerStack stack) => stack.Layers.Find(l => l.Id == OutlineLayerId);
+
+    /// <summary>The group's Outline layer, created (empty, on top of the stack) the first time an outline is drawn.</summary>
+    private static SC2BlendMaskLayer GetOrCreateOutlineLayer(SC2BlendMaskLayerStack stack)
+    {
+        var layer = FindOutlineLayer(stack);
+        if (layer != null) return layer;
+        layer = new SC2BlendMaskLayer { Id = OutlineLayerId, Name = "Outline" };
+        stack.Layers.Add(layer);
+        return layer;
+    }
+
+    // The largest outline settings used so far this session. Outlines drawn earlier may be wider than the sliders say now, so
+    // finding and judging the outline that is left behind uses these, not the current slider values.
+    private static float s_widthUsed = 8f, s_spreadUsed = 4f, s_smoothingUsed = 1f;
+
+    private static void NoteOutlineExtents(float widthWorld, float spreadWorld, float smoothingCells)
+    {
+        s_widthUsed = System.Math.Max(s_widthUsed, widthWorld);
+        s_spreadUsed = System.Math.Max(s_spreadUsed, spreadWorld);
+        s_smoothingUsed = System.Math.Max(s_smoothingUsed, smoothingCells);
+    }
+
+    private static bool HasAnyOutlineLayer(SC2TerrainData data)
+    {
+        foreach (var stack in data.BlendLayerStacks)
+            if (stack != null && FindOutlineLayer(stack) != null) return true;
+        return false;
+    }
+
+    /// <summary>The smallest outline Width and Spread (world units) and Smoothing (cells) that still show on this map's mask:
+    /// see SC2PairOutlineUpdater.Minimum. Rounded up to the two decimals the sliders show.</summary>
+    public void GetOutlineMinimums(SC2TerrainData data, out float width, out float spread, out float smoothing)
+    {
+        width = 0.5f; spread = 0f; smoothing = 0f;
+        if (data == null || data.GridWidth < 1 || data.CellSize <= 0f) return;
+        var runtime = data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+        var maskWidth = runtime != null && runtime.BlendRT != null ? runtime.BlendRT.width : 2048;
+        var minimum = SC2PairOutlineUpdater.Minimum(new SC2PairOutlineUpdater.Geometry(maskWidth, maskWidth, data.GridWidth, data.GridHeight, data.CellSize));
+        float Up(float v) => Mathf.Ceil(v * 100f) / 100f;
+        width = Up(minimum.Width);
+        spread = Up(minimum.Spread);
+        smoothing = Up(minimum.Smoothing);
+    }
+
+    private SC2PairOutlineUpdater.Settings CurrentOutlineSettings() =>
+        new SC2PairOutlineUpdater.Settings(_outlineWidth, _outlineSpread, _outlineSmoothing, _outlineSoftness, _outlineBlend);
+
+    private static SC2PairOutlineUpdater.Settings UsedOutlineSettings() =>
+        new SC2PairOutlineUpdater.Settings(s_widthUsed, s_spreadUsed, s_smoothingUsed, 0f, 1f);
+
+    private static SC2PairOutlineUpdater.Geometry OutlineGeometry(SC2TerrainData data, SC2BlendMaskLayerStack stack) =>
+        new SC2PairOutlineUpdater.Geometry(stack.Width, stack.Height, data.GridWidth, data.GridHeight, data.CellSize);
+
+    /// <summary>Lets <paramref name="edit"/> change a private copy of the group's Outline layer (creating the layer when it does
+    /// not exist yet) and, when it reports a change, stores the copy as one undo step. Only the Outline layer's texture is
+    /// re-uploaded, and the composite is not read back into the pairs yet. Returns whether anything changed.</summary>
+    private bool UpdateOutlineLayer(SC2TerrainData data, SC2TerrainRuntime runtime, SC2BlendMaskLayerStack stack, int pairIndex,
+        System.Func<byte[], bool> edit)
+    {
+        runtime.CommitLayerEdits();
+        var existing = FindOutlineLayer(stack);
+        var length = stack.PixelCount * SC2BlendMaskLayerMath.BytesPerPixel;
+        // A private copy: layer arrays are shared with undo snapshots and are never changed in place.
+        var edited = existing != null && existing.Data != null && existing.Data.Length == length ? (byte[])existing.Data.Clone() : new byte[length];
+        if (!edit(edited)) return false;
+
+        _captureData = data;
+        _captureRuntime = runtime;
+        _capturePairIndex = System.Math.Max(0, pairIndex);
+        try
+        {
+            if (data == _win.Data) _win.RecordRnmBlendCheckpoint();
+            else _win.RecordUndoCheckpointFor(data, "Outline Pair Border");
+        }
+        finally
+        {
+            _captureData = null;
+            _captureRuntime = null;
+        }
+
+        var created = existing == null;
+        var layer = GetOrCreateOutlineLayer(stack);
+        layer.Data = edited;
+        if (created) runtime.RefreshLayersFromStack();   // a new layer needs its texture (and the others are rebuilt with it, once)
+        else runtime.RefreshLayer(stack.Layers.IndexOf(layer));
+        FinishLayerEdit(runtime, data, flushComposite: false);
+        return true;
+    }
+
+    /// <summary>One mask group's share of an outline update: the layer it started from, and what the background thread made of it.</summary>
+    private sealed class OutlineWork
+    {
+        public SC2BlendMaskLayerStack Stack;
+        public byte[] Input;            // the Outline layer's data when the job started (null: no such layer yet)
+        public int PairIndex;           // the pair to outline, or -1 for only removing what is stale
+        public bool Draw;
+        public SC2PairOutlineUpdater.Geometry Geometry;
+        public byte[] Result;
+        public bool Changed;
+    }
+
+    /// <summary>An outline update running on a background thread (the computation is pure): the heavy part of finishing a
+    /// stroke does not block the editor. It is applied on the main thread by <see cref="PollOutlineJob"/> when done, or
+    /// <see cref="FlushOutlineJob"/> waits for it before anything that reads or changes the layers.</summary>
+    private sealed class OutlineJob
+    {
+        public SC2TerrainData Data;
+        public SC2TerrainRuntime Runtime;
+        public readonly List<OutlineWork> Works = new List<OutlineWork>();
+        public Task Task;
+        public long StartedMs;          // main-thread time spent starting it
+        public long ThreadMs;           // time the thread took
+    }
+
+    private OutlineJob _outlineJob;
+
+    /// <summary>A finished stroke waiting for its pair-map readback before its follow-up work (see CompleteStroke) can run.</summary>
+    private sealed class StrokeRequest
+    {
+        public SC2TerrainData Data;
+        public int PairIndex;
+        public short[] Before;
+    }
+
+    private StrokeRequest _strokeRequest;
+
+    /// <summary>Reads the GPU pair map back without stalling the GPU (a synchronous readback waits for all the painting still queued),
+    /// then runs <see cref="CompleteStroke"/>.</summary>
+    private void RequestStrokeCompletion(SC2TerrainData data, int pairIndex, short[] before)
+    {
+        FlushOutlineJob();
+        var runtime = data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+        if (data == null || before == null || runtime == null || runtime.BlendRT == null) return;
+        var request = new StrokeRequest { Data = data, PairIndex = pairIndex, Before = before };
+        _strokeRequest = request;
+        var hole = runtime.HoleTriPairIndex;
+        var generation = ++_pairSyncGeneration;
+        runtime.ReadPairIndexCPUAsync(bytes =>
+        {
+            // Something else (the next stroke, an undo, a save) already needed the request and ran it.
+            if (_strokeRequest != request) return;
+            // Another readback since this one was issued has brought the CPU copy up to date already.
+            if (generation == _pairSyncGeneration)
+            {
+                var swCallback = System.Diagnostics.Stopwatch.StartNew();
+                ApplyPairBytes(bytes, data, hole);
+                _win.MarkPairCpuDataSynced();
+                SC2Log.Log($"[SC2PaintMode] Pair map readback applied in {swCallback.ElapsedMilliseconds}ms.");
+            }
+            _strokeRequest = null;
+            CompleteStroke(request);
+        });
+    }
+
+    /// <summary>Follow-up of a finished paint stroke, once the CPU pair map is current: tells the height projection about it when the
+    /// change involves a water pair (the only way a pair assignment moves it), and starts the outline update.</summary>
+    private void CompleteStroke(StrokeRequest request)
+    {
+        var data = request.Data;
+        var waterInvolved = WaterPairChanged(data, request.Before);
+        _win.MarkDirtyAndRepaint(geometryChanged: waterInvolved);
+        if (waterInvolved) _win.InvalidateLiveHeightGrid();
+        OutlineNewlyPaintedCells(data, request.PairIndex, request.Before, syncFirst: false);
+    }
+
+    /// <summary>Whether a cell that changed between <paramref name="before"/> and the current assignments was, or is now, of a water
+    /// pair (SC2HfieldProjectionService.IsWaterMaterial applied to the pair): the height projection leaves those out.</summary>
+    private static bool WaterPairChanged(SC2TerrainData data, short[] before)
+    {
+        var after = data.TrianglePairIndex;
+        if (after == null || before == null || after.Length != before.Length) return true;   // unknown: assume it did
+        var water = new bool[data.Pairs.Count];
+        var anyWater = false;
+        for (var i = 0; i < water.Length; i++)
+        {
+            var pair = data.Pairs[i];
+            water[i] = (pair.ShaderFile?.IndexOf("water", System.StringComparison.OrdinalIgnoreCase) ?? -1) >= 0
+                || (pair.Name?.IndexOf("water", System.StringComparison.OrdinalIgnoreCase) ?? -1) >= 0;
+            anyWater |= water[i];
+        }
+        if (!anyWater) return false;
+        for (var i = 0; i < after.Length; i += 2)
+        {
+            if (after[i] == before[i]) continue;
+            if ((before[i] >= 0 && before[i] < water.Length && water[before[i]]) || (after[i] >= 0 && after[i] < water.Length && water[after[i]]))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Applies the running outline update (waiting for it to finish) so the layers are up to date. Cheap when there is none.</summary>
+    public void FlushOutlineJob()
+    {
+        if (_strokeRequest != null)
+        {
+            // The stroke's readback has not come back yet: do it now, synchronously, and finish the stroke.
+            var request = _strokeRequest;
+            _strokeRequest = null;
+            var runtime = request.Data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+            if (runtime != null && runtime.BlendRT != null) SyncPairMapToCPU(runtime, request.Data);
+            CompleteStroke(request);
+        }
+        if (_outlineJob == null) return;
+        try { _outlineJob.Task.Wait(); } catch (System.AggregateException) { /* reported in ApplyOutlineJob */ }
+        ApplyOutlineJob();
+    }
+
+    /// <summary>Applies the outline update once the background thread has finished; asks for another frame while it runs.</summary>
+    private void PollOutlineJob()
+    {
+        if (_outlineJob == null || _isPainting) return;
+        if (_outlineJob.Task.IsCompleted) ApplyOutlineJob();
+        else _win.Repaint();
+    }
+
+    private void ApplyOutlineJob()
+    {
+        var job = _outlineJob;
+        _outlineJob = null;
+        if (job == null) return;
+        if (job.Task.IsFaulted)
+        {
+            SC2Log.Log($"[SC2PaintMode] Outline update failed: {job.Task.Exception?.GetBaseException().Message}");
+            return;
+        }
+        var data = job.Data;
+        var runtime = job.Runtime;
+        if (data == null || runtime == null || runtime.BlendRT == null) return;
+
+        var swApply = System.Diagnostics.Stopwatch.StartNew();
+        var changedAny = false;
+        foreach (var work in job.Works)
+        {
+            if (!work.Changed || !data.BlendLayerStacks.Contains(work.Stack)) continue;
+            runtime.SetActiveRnmMaskGroup(work.Stack.MaskName, data);
+            var stack = runtime.ActiveBlendStack;
+            if (stack != work.Stack || !runtime.HasActiveLayers) continue;
+            // The layer was edited by something else meanwhile: this result no longer fits it.
+            var existing = FindOutlineLayer(stack);
+            if ((existing != null ? existing.Data : null) != work.Input) continue;
+            var result = work.Result;
+            changedAny |= UpdateOutlineLayer(data, runtime, stack, work.PairIndex, layer => { System.Array.Copy(result, layer, result.Length); return true; });
+        }
+        _outlineStatus = changedAny ? "Outline layer updated." : "";
+        SC2Log.Log($"[SC2PaintMode] Outline update: start on the main thread {job.StartedMs}ms, computed on the thread in {job.ThreadMs}ms, applied on the main thread in {swApply.ElapsedMilliseconds}ms.");
+    }
+
+    /// <summary>After an assignment: outlines the closed region(s) of <paramref name="pairIndex"/> that the cells changed since
+    /// <paramref name="before"/> belong to afresh (the region's previous outline is removed first) and clears every outline that
+    /// is no longer along a pair border (see SC2PairOutlineUpdater). The outlines of all pairs live on one layer per mask group,
+    /// "Outline".
+    /// <paramref name="pairIndex"/> below 0 only removes stale outlines. <paramref name="syncFirst"/> reads the pair map back
+    /// from the GPU first (needed right after a brush stroke).
+    ///
+    /// The computation runs on a background thread; the result is applied a moment later (see OutlineJob).</summary>
+    private void OutlineNewlyPaintedCells(SC2TerrainData data, int pairIndex, short[] before, bool syncFirst)
+    {
+        FlushOutlineJob();
+        var swStart = System.Diagnostics.Stopwatch.StartNew();
+        if (data == null || before == null) return;
+        // Without Auto outline nothing is drawn, but outlines that stopped being borders are still removed.
+        var draw = _autoOutline;
+        if (!draw && !HasAnyOutlineLayer(data)) return;
+        var runtime = data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+        if (runtime == null || runtime.BlendRT == null || pairIndex >= data.Pairs.Count) return;
+        if (syncFirst) SyncPairMapToCPU(runtime, data);
+        if (data.TrianglePairIndex == null || data.TrianglePairIndex.Length != before.Length) return;
+        var after = (short[])data.TrianglePairIndex.Clone();   // the thread must not see later changes
+
+        NoteOutlineExtents(_outlineWidth, _outlineSpread, _outlineSmoothing);
+        var current = CurrentOutlineSettings();
+        var used = UsedOutlineSettings();
+        var job = new OutlineJob { Data = data, Runtime = runtime };
+        string handledMask = null;
+        if (draw && pairIndex >= 0)
+        {
+            runtime.SetActiveRnmMaskGroup(data.Pairs[pairIndex].RnmMaskName, data);
+            var stack = runtime.ActiveBlendStack;
+            if (stack != null && runtime.HasActiveLayers)
+            {
+                handledMask = stack.MaskName;
+                job.Works.Add(new OutlineWork { Stack = stack, Input = FindOutlineLayer(stack)?.Data, PairIndex = pairIndex, Draw = true, Geometry = OutlineGeometry(data, stack) });
+            }
+        }
+        // Every other mask group that has an Outline layer loses the outlines that are no longer along a border.
+        foreach (var other in data.BlendLayerStacks)
+        {
+            var outline = other != null ? FindOutlineLayer(other) : null;
+            if (outline == null || other.MaskName == handledMask) continue;
+            job.Works.Add(new OutlineWork { Stack = other, Input = outline.Data, PairIndex = -1, Draw = draw, Geometry = OutlineGeometry(data, other) });
+        }
+        if (job.Works.Count == 0) return;
+
+        job.Task = Task.Run(() =>
+        {
+            var swThread = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var work in job.Works)
+            {
+                var length = work.Geometry.MaskWidth * work.Geometry.MaskHeight * SC2BlendMaskLayerMath.BytesPerPixel;
+                var edited = work.Input != null && work.Input.Length == length ? (byte[])work.Input.Clone() : new byte[length];
+                work.Changed = SC2PairOutlineUpdater.Update(edited, work.Geometry, before, after, work.PairIndex, work.Draw, current, used);
+                work.Result = edited;
+            }
+            job.ThreadMs = swThread.ElapsedMilliseconds;
+        });
+        job.StartedMs = swStart.ElapsedMilliseconds;
+        _outlineJob = job;
+        _win.MarkDirtyAndRepaint(geometryChanged: false);
+    }
+
+    /// <summary>Removes the outlines that are no longer along a pair border after the assignments changed from
+    /// <paramref name="before"/> (same cell layout as TrianglePairIndex) to the current ones.</summary>
+    public void PruneOutlines(SC2TerrainData data, short[] before)
+        => OutlineNewlyPaintedCells(data, -1, before, syncFirst: false);
+
+    /// <summary>Paints a band of the pair's second material (blend alpha <paramref name="blendValue"/>) along the border of pair
+    /// <paramref name="pairIndex"/> of <paramref name="data"/>, inside the pair and (<paramref name="spreadWorld"/>) onto its
+    /// neighbours, into the "Outline" layer of the pair's mask group (the pair's own surface, core or background), and clears the
+    /// outlines on that layer that are no longer along a pair border. One undo step. Returns a one-line result for the panel.</summary>
+    public string OutlinePairBorder(SC2TerrainData data, int pairIndex, float widthWorld, float softness, float blendValue, float smoothingCells = 1f, float spreadWorld = 0f)
+    {
+        FlushOutlineJob();
+        var runtime = data == _win.Data ? _win.Runtime : _win.BackgroundRuntime;
+        if (data == null || runtime == null || runtime.BlendRT == null || pairIndex < 0 || pairIndex >= data.Pairs.Count)
+            return "Outline not applied: the terrain is not ready.";
+
+        NoteOutlineExtents(widthWorld, spreadWorld, smoothingCells);
+        // The assignments on screen live on the GPU; bring the CPU copy up to date before reading it.
+        SyncPairMapToCPU(runtime, data);
+        var pair = data.Pairs[pairIndex];
+        runtime.SetActiveRnmMaskGroup(pair.RnmMaskName, data);
+        var stack = runtime.ActiveBlendStack;
+        if (stack == null || !runtime.HasActiveLayers) return "Outline not applied: the blend mask has no layers yet.";
+
+        var assignments = data.TrianglePairIndex;
+        var any = false;
+        for (var i = 0; i < assignments.Length && !any; i++) any = assignments[i] == pairIndex;
+        if (!any) return $"Outline not applied: '{pair.Name}' has no triangles assigned.";
+
+        // The whole pair is outlined, so the work area is the whole mask and every border counts as unchanged.
+        var geometry = OutlineGeometry(data, stack);
+        var current = new SC2PairOutlineUpdater.Settings(widthWorld, spreadWorld, smoothingCells, softness, blendValue);
+        var support = SC2PairOutlineUpdater.SupportReachPixels(geometry, s_widthUsed, s_spreadUsed, s_smoothingUsed);
+        var ring = new List<int>();
+        for (var cell = 0; cell * 2 < assignments.Length; cell++) if (assignments[cell * 2] == pairIndex) ring.Add(cell);
+        UpdateOutlineLayer(data, runtime, stack, pairIndex,
+            layer => SC2PairOutlineUpdater.UpdateIn(layer, geometry, SC2PairOutlineUpdater.Work.Whole(geometry), null, assignments, pairIndex, ring, null, current, support));
+        return $"Outlined '{pair.Name}' on layer 'Outline'.";
     }
 
     private void RunPendingLayerActions()
     {
+        if (_pendingLayerActions.Count > 0) FlushOutlineJob();
         while (_pendingLayerActions.Count > 0) _pendingLayerActions.Dequeue().Invoke();
         // An opacity drag re-flattens on the GPU every change but only writes the composite back to the pairs once the
         // value has stopped changing (the readback is a full 2048x2048 copy).
@@ -406,7 +822,7 @@ public class SC2PaintMode
             if (selected) GUI.backgroundColor = new Color(0.45f, 0.7f, 1f, 1f);
             if (!wasVisible) GUI.contentColor = new Color(1f, 1f, 1f, 0.45f);
             if (GUILayout.Button(layer.Name, GUILayout.Height(rowHeight), GUILayout.ExpandWidth(true)) && !selected)
-                _pendingLayerActions.Enqueue(() => { runtime.SelectBlendLayer(index); _win.MarkDirtyAndRepaint(); });
+                _pendingLayerActions.Enqueue(() => { runtime.SelectBlendLayer(index); _win.MarkDirtyAndRepaint(geometryChanged: false); });
             GUI.backgroundColor = previousColor;
             GUI.contentColor = previousContent;
             if (GUILayout.Button("Up", GUILayout.Width(smallButton), GUILayout.Height(rowHeight)) && index < stack.Layers.Count - 1)
@@ -441,7 +857,7 @@ public class SC2PaintMode
                 runtime.RecompositeBlend();
                 _layerSettingsChangedAt = EditorApplication.timeSinceStartup;
                 _layerSettingsNeedFlush = true;
-                _win.MarkDirtyAndRepaint();
+                _win.MarkDirtyAndRepaint(geometryChanged: false);
             }
         }
 
@@ -505,6 +921,7 @@ public class SC2PaintMode
 #if UNITY_EDITOR
     public void OnSceneGUI(SceneView sv)
     {
+        FlushPendingComposites();
         HandleScroll(Event.current);
         RaycastTerrain();
         DrawGizmo();
@@ -521,6 +938,7 @@ public class SC2PaintMode
         var e = Event.current;
         if (e == null || camera == null)
             return;
+        FlushPendingComposites();
         if (!viewportRect.Contains(mousePosition) && !_isPainting)
             return;
 
@@ -713,23 +1131,35 @@ public class SC2PaintMode
                 // a Water-shaded pair over previously-dry ground, or vice
                 // versa) — same staleness class as SC2GeometryMode's own
                 // matching fix, just for the material/pair axis instead of
-                // raw height.
-                _win.InvalidateLiveHeightGrid();
+                // raw height. Decided once the stroke's cells are known (CompleteStroke): only a change that involves a water pair
+                // can move the projection.
             }
             var swAfterDirty = swMouseUp.ElapsedMilliseconds;
             _isPainting = false;
-            // Non-blocking readback — async GPU request, no SceneView hang.
+            // Non-blocking readback — async GPU request, no SceneView hang. A paint stroke has its own (see CompleteStroke).
             var swSync = System.Diagnostics.Stopwatch.StartNew();
-            var syncNow = EditorApplication.timeSinceStartup;
-            if (syncNow - _lastSyncTime >= kSyncThrottle)
+            var strokeBefore = _strokeBefore;
+            if (strokeBefore == null)
             {
-                _lastSyncTime = syncNow;
-                SyncPairMapToCPUAsync();
+                var syncNow = EditorApplication.timeSinceStartup;
+                if (syncNow - _lastSyncTime >= kSyncThrottle)
+                {
+                    _lastSyncTime = syncNow;
+                    SyncPairMapToCPUAsync();
+                }
             }
             var swSyncMs = swSync.ElapsedMilliseconds;
 
+            // The stroke is finished: once the pair map has been read back from the GPU (without stalling it) the water check,
+            // the outline and the refresh follow.
+            var swOutline = System.Diagnostics.Stopwatch.StartNew();
+            if (!_selectMode && strokeBefore != null)
+                RequestStrokeCompletion(Data, _assignPair, strokeBefore);
+            _strokeBefore = null;
+            var swOutlineMs = swOutline.ElapsedMilliseconds;
+
             var swMarkDirty = System.Diagnostics.Stopwatch.StartNew();
-            _win.MarkDirtyAndRepaint();
+            _win.MarkDirtyAndRepaint(geometryChanged: false);
             var swMarkDirtyMs = swMarkDirty.ElapsedMilliseconds;
 
             // Same as SC2GeometryMode's own MouseUp — keeps the background's
@@ -737,20 +1167,25 @@ public class SC2PaintMode
             // no-op when the active surface is the core. Logs its own
             // internal breakdown separately (see its own doc comment).
             if (Data != _win.Data) _win.RefreshBackgroundRuntime();
-            SC2Log.Log($"[SC2PaintMode] HandleAssign MouseUp: MarkDirty+InvalidateLiveHeightGrid={swAfterDirty}ms, SyncPairMapToCPUAsync={swSyncMs}ms, MarkDirtyAndRepaint={swMarkDirtyMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
+            SC2Log.Log($"[SC2PaintMode] HandleAssign MouseUp: MarkDirty+InvalidateLiveHeightGrid={swAfterDirty}ms, SyncPairMapToCPUAsync={swSyncMs}ms, MarkDirtyAndRepaint={swMarkDirtyMs}ms, outlineRequest={swOutlineMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
             return;
         }
         if (down)
         {
             _isPainting = true;
+            FlushOutlineJob();
             if (!_selectMode)
             {
                 // GPU paint is authoritative for TrianglePairIndex during a stroke;
                 // sync it to CPU before snapshotting so undo captures the true
                 // pre-stroke state (not a stale value from the last throttled
                 // async readback).
+                var swDown = System.Diagnostics.Stopwatch.StartNew();
                 SyncPairMapToCPU();
+                var swDownSync = swDown.ElapsedMilliseconds;
                 _win.RecordUndoCheckpointFor(Data, "Paint Pair");
+                SC2Log.Log($"[SC2PaintMode] HandleAssign MouseDown: SyncPairMapToCPU={swDownSync}ms, RecordUndoCheckpointFor={swDown.ElapsedMilliseconds - swDownSync}ms");
+                _strokeBefore = Data.TrianglePairIndex != null ? (short[])Data.TrianglePairIndex.Clone() : null;
             }
         }
         if (!_isPainting || (!down && !drag)) return;
@@ -843,6 +1278,7 @@ public class SC2PaintMode
         }
         if (down)
         {
+            FlushOutlineJob();
             _isPainting = true;
             // Roll a fresh stamp rotation for this stroke only —
             // see _rnmBrushRotationRad's own doc comment.
@@ -904,8 +1340,10 @@ public class SC2PaintMode
     void ApplySelection()
     {
         _win.RecordUndoCheckpointFor(Data, "Assign Selection");
+        var selectionBefore = (short[])Data.TrianglePairIndex.Clone();
         foreach (var ti in _sel) Data.AssignTriangleToPair(ti, _assignPair);
         _sel.Clear();
+        OutlineNewlyPaintedCells(Data, _assignPair, selectionBefore, syncFirst: false);
         _win.MarkDirtyAndRepaint();
     }
 
@@ -930,7 +1368,7 @@ public class SC2PaintMode
 
     public object CaptureActiveBlendState()
     {
-        var runtime = _win.ActiveRuntime;
+        var runtime = _captureRuntime ?? _win.ActiveRuntime;
         if (runtime == null || runtime.BlendRT == null)
             return null;
         // Copies the active layer's pending paint into the stack first, so the snapshot has its current pixels.
@@ -938,8 +1376,8 @@ public class SC2PaintMode
         var stack = runtime.ActiveBlendStack;
         return new RnmBlendSnapshot
         {
-            Data = Data,
-            PairIndex = _rnmPair,
+            Data = _captureData ?? Data,
+            PairIndex = _captureData != null ? _capturePairIndex : _rnmPair,
             Stack = stack?.Clone(),
             Bytes = stack == null ? runtime.ReadBlendCPU() : null,
         };
@@ -962,7 +1400,7 @@ public class SC2PaintMode
         if (snap.Stack != null) runtime.ReplaceActiveBlendStack(snap.Data, snap.Stack);
         else runtime.UploadBlendCPU(snap.Bytes);
         runtime.FlushActiveBlendGroup(snap.Data);
-        _win.MarkDirtyAndRepaint();
+        _win.MarkDirtyAndRepaint(geometryChanged: false);
     }
 
     // ── CPU sync ──────────────────────────────────────────────
@@ -1004,9 +1442,11 @@ public class SC2PaintMode
             // silently reintroduce whatever it was that got undone.
             if (generation != _pairSyncGeneration)
                 return;
+            var swCallback = System.Diagnostics.Stopwatch.StartNew();
             ApplyPairBytes(bytes, data, hole);
             _win.MarkPairCpuDataSynced();
             _win.MarkDirtyAndRepaint();
+            SC2Log.Log($"[SC2PaintMode] Pair map readback applied in {swCallback.ElapsedMilliseconds}ms.");
         });
     }
 

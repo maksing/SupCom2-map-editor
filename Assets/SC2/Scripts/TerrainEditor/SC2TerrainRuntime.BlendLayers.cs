@@ -179,6 +179,38 @@ public partial class SC2TerrainRuntime
         RenderTexture.ReleaseTemporary(tmp);
     }
 
+    // The flattened mask is copied back into the pairs' RnmMaskBytes with a full-size GPU readback; an outline update after a
+    // brush stroke skips that readback and leaves it pending, to run once the user has paused (see TryFlushPendingComposite),
+    // on save/export, or when the mask group changes.
+    private float _compositeUnflushedAt;
+
+    /// <summary>True while BlendRT (the composite) has changes the pairs' RnmMaskBytes do not have yet.</summary>
+    public bool CompositeFlushPending { get; private set; }
+
+    public void MarkCompositeUnflushed()
+    {
+        CompositeFlushPending = true;
+        _compositeUnflushedAt = Time.realtimeSinceStartup;
+    }
+
+    /// <summary>Writes the composite to the pairs if it is pending and nothing has changed for
+    /// <paramref name="minIdleSeconds"/>. Returns whether it flushed.</summary>
+    public bool TryFlushPendingComposite(SC2TerrainData data, float minIdleSeconds)
+    {
+        if (!CompositeFlushPending || Time.realtimeSinceStartup - _compositeUnflushedAt < minIdleSeconds) return false;
+        FlushActiveBlendGroup(data);
+        return true;
+    }
+
+    /// <summary>Re-uploads ONE layer's pixels to its render texture and re-flattens, instead of rebuilding every layer's texture
+    /// (what RefreshLayersFromStack does). For an edit that changed a single layer's data and nothing else.</summary>
+    public void RefreshLayer(int index)
+    {
+        if (!HasActiveLayers || index < 0 || index >= _layerRTs.Count) { RefreshLayersFromStack(); return; }
+        UploadLayer(_activeStack.Layers[index], _layerRTs[index]);
+        RecompositeBlend();
+    }
+
     /// <summary>Called after a paint tick (all symmetry copies painted) so the layers are flattened once per tick.</summary>
     public void RecompositeBlendIfDirty()
     {

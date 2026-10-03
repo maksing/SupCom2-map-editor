@@ -210,6 +210,106 @@ public static class SC2BlendMaskLayerMath
         return result;
     }
 
+    /// <summary>Draws a band into layer data so that drawing the same band again changes nothing (an outline must not get
+    /// thicker each time it is applied). With band strength a (0..1) and target value T (0..1): where the band is stronger
+    /// than the layer's coverage the pixel becomes value T at coverage a; where the layer already covers the pixel at
+    /// least as much, its value is only pulled toward T as far as the band asks (<c>max(v, T*a)</c> when T is above the
+    /// value, <c>min(v, 1-(1-T)*a)</c> when below), never past it. Returns a NEW array (layer arrays are never changed in
+    /// place); null or wrongly sized layer data counts as fully transparent.</summary>
+    public static byte[] ApplyBand(byte[] layerData, byte[] band, float targetValue, int pixelCount)
+    {
+        if (band == null || band.Length != pixelCount) throw new ArgumentException("Band size does not match the layer size.", nameof(band));
+        var result = new byte[pixelCount * BytesPerPixel];
+        if (layerData != null && layerData.Length == result.Length) Array.Copy(layerData, result, result.Length);
+        var target = Math.Max(0f, Math.Min(1f, targetValue));
+        for (var i = 0; i < pixelCount; i++)
+        {
+            if (band[i] == 0) continue;
+            var strength = band[i] * (1f / 255f);
+            var value = result[i * BytesPerPixel] * (1f / 255f);
+            var coverage = result[i * BytesPerPixel + 1] * (1f / 255f);
+            if (strength > coverage)
+            {
+                value = target;
+                coverage = strength;
+            }
+            else
+            {
+                value = target >= value ? Math.Max(value, target * strength) : Math.Min(value, 1f - (1f - target) * strength);
+            }
+            result[i * BytesPerPixel] = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(value * 255f)));
+            result[i * BytesPerPixel + 1] = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(coverage * 255f)));
+        }
+        return result;
+    }
+
+    /// <summary>Layer data with every pixel outside <paramref name="zone"/> (0 there) cleared to value 0 and coverage 0, i.e. fully
+    /// transparent; pixels inside the zone are copied. Returns a NEW array. Used to drop outline pixels that no longer lie along a
+    /// pair border.</summary>
+    public static byte[] ClearOutsideZone(byte[] layerData, byte[] zone, int pixelCount)
+    {
+        if (zone == null || zone.Length != pixelCount) throw new ArgumentException("Zone size does not match the layer size.", nameof(zone));
+        var result = new byte[pixelCount * BytesPerPixel];
+        if (layerData == null || layerData.Length != result.Length) return result;
+        for (var i = 0; i < pixelCount; i++)
+        {
+            if (zone[i] == 0) continue;
+            result[i * BytesPerPixel] = layerData[i * BytesPerPixel];
+            result[i * BytesPerPixel + 1] = layerData[i * BytesPerPixel + 1];
+        }
+        return result;
+    }
+
+    /// <summary><see cref="ApplyBand"/> on the pixels of <paramref name="rect"/> only, changing <paramref name="layerData"/>
+    /// IN PLACE (the caller passes a private copy). <paramref name="band"/> holds the rectangle's pixels, row by row. Returns
+    /// whether any byte changed.</summary>
+    public static bool ApplyBandInPlace(byte[] layerData, int maskWidth, SC2PairOutlineMath.MaskRect rect, byte[] band, float targetValue)
+    {
+        if (band == null || band.Length != rect.Width * rect.Height) throw new ArgumentException("Band size does not match the rectangle.", nameof(band));
+        var changed = false;
+        var target = Math.Max(0f, Math.Min(1f, targetValue));
+        for (var y = 0; y < rect.Height; y++)
+        for (var x = 0; x < rect.Width; x++)
+        {
+            var bandValue = band[y * rect.Width + x];
+            if (bandValue == 0) continue;
+            var index = ((rect.Y + y) * maskWidth + rect.X + x) * BytesPerPixel;
+            var strength = bandValue * (1f / 255f);
+            var value = layerData[index] * (1f / 255f);
+            var coverage = layerData[index + 1] * (1f / 255f);
+            if (strength > coverage) { value = target; coverage = strength; }
+            else value = target >= value ? Math.Max(value, target * strength) : Math.Min(value, 1f - (1f - target) * strength);
+            var newValue = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(value * 255f)));
+            var newCoverage = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(coverage * 255f)));
+            if (newValue != layerData[index] || newCoverage != layerData[index + 1]) changed = true;
+            layerData[index] = newValue;
+            layerData[index + 1] = newCoverage;
+        }
+        return changed;
+    }
+
+    /// <summary><see cref="ClearOutsideZone"/> restricted to <paramref name="applyRect"/> (inside <paramref name="zoneRect"/>, which
+    /// the <paramref name="zone"/> mask covers row by row), changing <paramref name="layerData"/> IN PLACE. Pixels of the layer
+    /// outside <paramref name="applyRect"/> are left as they are. Returns whether any pixel was cleared.</summary>
+    public static bool ClearOutsideZoneInPlace(byte[] layerData, int maskWidth, SC2PairOutlineMath.MaskRect zoneRect, byte[] zone, SC2PairOutlineMath.MaskRect applyRect)
+    {
+        if (zone == null || zone.Length != zoneRect.Width * zoneRect.Height) throw new ArgumentException("Zone size does not match the rectangle.", nameof(zone));
+        var x0 = Math.Max(zoneRect.X, applyRect.X); var x1 = Math.Min(zoneRect.Right, applyRect.Right);
+        var y0 = Math.Max(zoneRect.Y, applyRect.Y); var y1 = Math.Min(zoneRect.Bottom, applyRect.Bottom);
+        var changed = false;
+        for (var y = y0; y < y1; y++)
+        for (var x = x0; x < x1; x++)
+        {
+            if (zone[(y - zoneRect.Y) * zoneRect.Width + (x - zoneRect.X)] != 0) continue;
+            var index = (y * maskWidth + x) * BytesPerPixel;
+            if (layerData[index] == 0 && layerData[index + 1] == 0) continue;
+            layerData[index] = 0;
+            layerData[index + 1] = 0;
+            changed = true;
+        }
+        return changed;
+    }
+
     private static byte[] EffectiveOrNull(SC2BlendMaskLayer layer, int pixelCount) =>
         layer.Data != null && layer.Data.Length == pixelCount * BytesPerPixel ? layer.Data : null;
 }
