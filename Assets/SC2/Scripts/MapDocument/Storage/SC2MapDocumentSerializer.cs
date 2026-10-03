@@ -377,6 +377,7 @@ namespace SC2.MapEditor.Document
             o.Set("useCustomMesh", SC2JsonValue.Of(c.UseCustomMesh));
             o.Set("hidePreview", SC2JsonValue.Of(c.HidePreview));
             o.Set("wireframe", SC2JsonValue.Of(c.Wireframe));
+            o.Set("excludedMaterialNames", WriteStringList(c.ExcludedMaterialNames));
             return o;
         }
 
@@ -399,6 +400,7 @@ namespace SC2.MapEditor.Document
                 UseCustomMesh = o.Get("useCustomMesh").AsBool(false),
                 HidePreview = o.Get("hidePreview").AsBool(false),
                 Wireframe = o.Get("wireframe").AsBool(false),
+                ExcludedMaterialNames = ReadStringList(o.Get("excludedMaterialNames")),
             };
         }
 

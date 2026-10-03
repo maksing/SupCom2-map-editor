@@ -6445,6 +6445,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                         _terrainShell.RecordUndoCheckpoint("Toggle Collision2 Material Exclusion");
                         if (nextExcluded) data2.Collision2ExcludedMaterialNames.Add(matName);
                         else data2.Collision2ExcludedMaterialNames.Remove(matName);
+                        // The exported Collision2 mesh depends on this list: a smart export must regenerate it.
+                        _terrainShell.Session?.MarkDirty(SC2.MapEditor.SmartExport.SC2DirtyFlags.Collision2);
                         _terrainShell.MarkDirtyAndRepaint();
                     }
                 }

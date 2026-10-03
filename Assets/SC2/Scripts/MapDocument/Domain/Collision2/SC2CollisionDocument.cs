@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 namespace SC2.MapEditor.Document
 {
     public enum SC2CollisionSourceMode
@@ -38,5 +39,9 @@ namespace SC2.MapEditor.Document
         public bool UseCustomMesh;
         public bool HidePreview;
         public bool Wireframe;
+
+        /// <summary>Names of the materials the Collision2 tab leaves out of the generated mesh ("Exclude from Collision2": decorative
+        /// geometry that is not walkable ground).</summary>
+        public List<string> ExcludedMaterialNames = new();
     }
 }

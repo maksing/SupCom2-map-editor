@@ -103,6 +103,8 @@ namespace SC2.MapEditor.Document
             data.UseCustomCollision2 = document.Collision2.UseCustomMesh && data.CustomCollision2Bytes != null;
             data.Collision2HidePreview = document.Collision2.HidePreview;
             data.Collision2Wireframe = document.Collision2.Wireframe;
+            data.Collision2ExcludedMaterialNames = document.Collision2.ExcludedMaterialNames != null
+                ? new List<string>(document.Collision2.ExcludedMaterialNames) : new List<string>();
 
             if (document.Scenario != null)
             {

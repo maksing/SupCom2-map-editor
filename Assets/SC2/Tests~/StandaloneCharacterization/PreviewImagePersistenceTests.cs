@@ -31,6 +31,18 @@ public class PreviewImagePersistenceTests
     }
 
     [Fact]
+    public void Serializer_RoundTripsTheMaterialsExcludedFromCollision2()
+    {
+        var doc = new SC2MapDocument();
+        doc.Collision2.ExcludedMaterialNames = new System.Collections.Generic.List<string> { "Cube", "crystal_decor" };
+
+        var restored = SC2MapDocumentSerializer.Deserialize(SC2MapDocumentSerializer.Serialize(doc));
+
+        Assert.Equal(new[] { "Cube", "crystal_decor" }, restored.Collision2.ExcludedMaterialNames);
+        Assert.Empty(SC2MapDocumentSerializer.Deserialize(SC2MapDocumentSerializer.Serialize(new SC2MapDocument())).Collision2.ExcludedMaterialNames);
+    }
+
+    [Fact]
     public void Serializer_ReadsADocumentWithoutTheKeysAsEmpty()
     {
         var restored = SC2MapDocumentSerializer.Deserialize(SC2MapDocumentSerializer.Serialize(new SC2MapDocument()));

@@ -569,6 +569,8 @@ public static class SC2RuntimeTerrainPersistence
         doc.Collision2.UseCustomMesh = data.UseCustomCollision2;
         doc.Collision2.HidePreview = data.Collision2HidePreview;
         doc.Collision2.Wireframe = data.Collision2Wireframe;
+        doc.Collision2.ExcludedMaterialNames = data.Collision2ExcludedMaterialNames != null
+            ? new List<string>(data.Collision2ExcludedMaterialNames) : new List<string>();
 
         // Prefer the ACTIVE session's Decals document when one exists —
         // SC2DecalsShell has no legacy SC2TerrainData field to fall back to
@@ -930,6 +932,8 @@ public static class SC2RuntimeTerrainPersistence
         public byte[] Collision2PreviewBytes;
         public bool Collision2HidePreview;
         public bool Collision2Wireframe;
+        // Collision2 tab > Exclude from Collision2: material names left out of the generated mesh. Absent in older saves.
+        public string[] Collision2ExcludedMaterialNames;
         public string DisplayName;
         // Scenario > Preview: the map-select preview pixels and an imported custom minimap.
         public byte[] MapShotBgraPixels;
@@ -1139,6 +1143,7 @@ public static class SC2RuntimeTerrainPersistence
         dto.Collision2PreviewBytes = data.Collision2PreviewBytes ?? Array.Empty<byte>();
         dto.Collision2HidePreview = data.Collision2HidePreview;
         dto.Collision2Wireframe = data.Collision2Wireframe;
+        dto.Collision2ExcludedMaterialNames = data.Collision2ExcludedMaterialNames != null ? data.Collision2ExcludedMaterialNames.ToArray() : Array.Empty<string>();
         dto.DisplayName = data.DisplayName ?? "";
         dto.MapShotBgraPixels = data.MapShotBgraPixels ?? Array.Empty<byte>();
         dto.CustomMinimapPng = data.CustomMinimapPng ?? Array.Empty<byte>();
@@ -1367,6 +1372,7 @@ public static class SC2RuntimeTerrainPersistence
         data.Collision2PreviewBytes = dto.Collision2PreviewBytes is { Length: > 0 } ? dto.Collision2PreviewBytes : null;
         data.Collision2HidePreview = dto.Collision2HidePreview;
         data.Collision2Wireframe = dto.Collision2Wireframe;
+        data.Collision2ExcludedMaterialNames = dto.Collision2ExcludedMaterialNames != null ? new List<string>(dto.Collision2ExcludedMaterialNames) : new List<string>();
         data.DisplayName = dto.DisplayName ?? "";
         data.MapShotBgraPixels = dto.MapShotBgraPixels is { Length: > 0 } ? dto.MapShotBgraPixels : null;
         data.CustomMinimapPng = dto.CustomMinimapPng is { Length: > 0 } ? dto.CustomMinimapPng : null;
