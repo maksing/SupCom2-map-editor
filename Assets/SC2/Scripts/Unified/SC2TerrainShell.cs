@@ -199,58 +199,61 @@ public class SC2TerrainShell : ScriptableObject
     public SC2TerrainRuntime BackgroundRuntime => _bgRuntime;
     private SC2TerrainRuntime _bgRuntime;
 
-    /// <summary>(Re)builds _bgRuntime if it doesn't exist yet, or its
-    /// topology no longer matches the background data (e.g. Footprint Size
-    /// changed and SC2BackgroundTerrain.EnsureGenerated just silently
-    /// regenerated it) — same "grid dimensions changed, tear down and
-    /// rebuild" pattern HandleUndoRedo's own ApplyRestoredSnapshot already
-    /// uses for the core's _runtime. Cheap no-op on the steady-state path
-    /// (background already built, topology unchanged). Also (re)builds the
-    /// seam-stitching skirt whenever the runtime itself was just rebuilt —
-    /// see SC2BackgroundSeamSkirt's own doc comment for why that one stays
-    /// a separate mesh rather than becoming more chunks.</summary>
-    /// <summary>Wired once, lazily (same pattern as CombinedUndo's own
-    /// lazy getter) — rebuilds the seam skirt whenever a CORE height stamp
-    /// (Geometry mode, core-targeted brush) reaches the core's own
-    /// boundary, so sculpting the CORE side of the seam stays glued too.
-    /// The background's own side already refreshes it directly from
-    /// SC2GeometryMode/SC2PaintMode's own MouseUp handler (RefreshBackgroundRuntime)
-    /// — this closes the other direction, which had no equivalent hook at
-    /// all before (core sculpting never touched anything background-side).</summary>
-    private bool _seamSkirtHeightHookWired;
+    /// <summary>Wired once, lazily - keeps the background's rim glued to the core's perimeter whenever a CORE height stamp
+    /// (Geometry mode, core-targeted brush) reaches the core's own boundary. The background's own side is covered by
+    /// RefreshBackgroundRuntime, which every background stroke ends with.</summary>
+    private bool _backgroundRingHookWired;
 
-    /// <summary>Set when the seam skirt's very first Rebuild (from
-    /// EnsureBackgroundRuntime's own "just created _bgRuntime" branch) ran
-    /// before the CORE's own _runtime existed yet — SampleLiveRuntimeHeight
-    /// silently returns 0 for a null Runtime, so every core-side seam vertex
-    /// sank to world Y=0 on map load, self-correcting only once something
-    /// else (any later Rebuild call, e.g. from hovering the background)
-    /// happened to fire after Runtime was finally set up. Checked once per
-    /// tick (see OnGameViewGUI's own "keep it live" background block) so
-    /// this heals itself the first frame Runtime becomes non-null, instead
-    /// of needing user interaction to notice.</summary>
-    private bool _seamPendingCoreRuntimeReady;
-
-    private void RefreshSeamSkirtIfNearCoreBoundary(Vector3 center, float radius)
+    private void SyncBackgroundRingIfNearCoreBoundary(Vector3 center, float radius)
     {
         if (_data == null || !_data.BackgroundTerrainEnabled || _bgRuntime == null) return;
         var coreW = _data.GridWidth * _data.CellSize;
         var coreD = _data.GridHeight * _data.CellSize;
-        // center is always inside/near the core's own rectangle here (this
-        // only ever fires from core-side sculpting) — distance from an
-        // interior point to the nearest edge is just the smallest of the
-        // four straight-line gaps to each side.
+        // center is always inside/near the core's own rectangle here (this only ever fires from core-side sculpting) - the
+        // distance from an interior point to the nearest edge is just the smallest of the four straight-line gaps to each side.
         var distToNearestEdge = Mathf.Min(Mathf.Min(center.x, coreW - center.x), Mathf.Min(center.z, coreD - center.z));
         if (radius < distToNearestEdge) return; // stamp never reached the boundary
-        SC2BackgroundSeamSkirt.Rebuild(_data, this);
+        SyncBackgroundRingFromCore();
+    }
+
+    private readonly List<Vector2Int> _ringChanged = new List<Vector2Int>();
+
+    /// <summary>Copies the core's LIVE perimeter heights onto the matching rim vertices of the background (its runtime and its saved
+    /// data), so the two surfaces keep meeting at the same height all along the seam without any stitching geometry. Only the rim
+    /// vertices that actually differ are touched, and only the chunks they show in are rebuilt.</summary>
+    private void SyncBackgroundRingFromCore()
+    {
+        var bg = _data?.BackgroundTerrainData;
+        if (_data == null || !_data.BackgroundTerrainEnabled || _bgRuntime == null || Runtime == null || bg?.Heights == null) return;
+        SC2BackgroundTerrain.GetCoreOriginInBackground(_data, out var gx0, out var gz0);
+        var cw = _data.GridWidth;
+        var ch = _data.GridHeight;
+        var bgVw = bg.GridWidth + 1;
+        _ringChanged.Clear();
+
+        void Copy(int cx, int cz)
+        {
+            var height = Runtime.GetHeight(cx, cz);
+            var bx = gx0 + cx;
+            var bz = gz0 + cz;
+            if (Mathf.Approximately(_bgRuntime.GetHeight(bx, bz), height)) return;
+            _bgRuntime.SetHeight(bx, bz, height);
+            var index = bz * bgVw + bx;
+            if ((uint)index < (uint)bg.Heights.Length) bg.Heights[index] = height;
+            _ringChanged.Add(new Vector2Int(bx, bz));
+        }
+
+        for (var cx = 0; cx <= cw; cx++) { Copy(cx, 0); Copy(cx, ch); }
+        for (var cz = 1; cz < ch; cz++) { Copy(0, cz); Copy(cw, cz); }
+        if (_ringChanged.Count > 0) _bgRuntime.RebuildChunksForVertices(_ringChanged);
     }
 
     private void EnsureBackgroundRuntime()
     {
-        if (!_seamSkirtHeightHookWired)
+        if (!_backgroundRingHookWired)
         {
-            _seamSkirtHeightHookWired = true;
-            HeightBrushApplied += RefreshSeamSkirtIfNearCoreBoundary;
+            _backgroundRingHookWired = true;
+            HeightBrushApplied += SyncBackgroundRingIfNearCoreBoundary;
         }
         if (_data == null || !_data.BackgroundTerrainEnabled)
         {
@@ -282,6 +285,7 @@ public class SC2TerrainShell : ScriptableObject
         {
             _bgRuntime = new SC2TerrainRuntime();
             _bgRuntime.Init(bg.GridWidth, bg.GridHeight, bg.CellSize, 200f, bg.TrianglePairIndex);
+            _bgRuntime.SetVisible(_mode != EditorMode.Simplified);
             _bgRuntime.SetWorldOrigin(SC2BackgroundTerrain.GetWorldOffset(_data));
             if (bg.Heights != null && bg.Heights.Length > 0)
                 _bgRuntime.UploadHeightsCPU(bg.Heights);
@@ -289,12 +293,9 @@ public class SC2TerrainShell : ScriptableObject
                 _bgRuntime.RestorePairMapFromData(bg);
             _bgRuntime.RestoreBlendRTFromData(bg);
             ApplyPreviewModeToChunksFor(_bgRuntime, bg);
-            // See _seamPendingCoreRuntimeReady's own doc comment — this can
-            // legitimately run before the core's own _runtime exists yet
-            // (e.g. the very first frame after a map load), which would
-            // silently sink every core-side seam vertex to Y=0.
-            if (Runtime == null) _seamPendingCoreRuntimeReady = true;
-            SC2BackgroundSeamSkirt.Rebuild(_data, this);
+            // The core's own runtime may not exist yet on the very first frame after a map load; the background's saved rim
+            // already holds the core's heights then, and the next sync (any stroke) refreshes it.
+            SyncBackgroundRingFromCore();
         }
     }
 
@@ -322,17 +323,16 @@ public class SC2TerrainShell : ScriptableObject
         var swApplyStart = System.Diagnostics.Stopwatch.StartNew();
         ApplyPreviewModeToChunksFor(_bgRuntime, bg);
         var swApplyMs = swApplyStart.ElapsedMilliseconds;
-        var swSeamStart = System.Diagnostics.Stopwatch.StartNew();
-        SC2BackgroundSeamSkirt.Rebuild(_data, this);
-        var swSeamMs = swSeamStart.ElapsedMilliseconds;
-        SC2Log.Log($"[SC2TerrainShell] RefreshBackgroundRuntime: EnsureBackgroundRuntime={swAfterEnsure}ms, ApplyPreviewModeToChunksFor={swApplyMs}ms, SeamSkirt.Rebuild={swSeamMs}ms, total={sw.ElapsedMilliseconds}ms");
+        var swRingStart = System.Diagnostics.Stopwatch.StartNew();
+        SyncBackgroundRingFromCore();
+        var swRingMs = swRingStart.ElapsedMilliseconds;
+        SC2Log.Log($"[SC2TerrainShell] RefreshBackgroundRuntime: EnsureBackgroundRuntime={swAfterEnsure}ms, ApplyPreviewModeToChunksFor={swApplyMs}ms, RingSync={swRingMs}ms, total={sw.ElapsedMilliseconds}ms");
     }
 
     private void DestroyBackgroundRuntime()
     {
         _bgRuntime?.Dispose();
         _bgRuntime = null;
-        SC2BackgroundSeamSkirt.Destroy();
     }
 
     /// <summary>Pushes a just-Undo/Redo-restored background snapshot into
@@ -352,7 +352,7 @@ public class SC2TerrainShell : ScriptableObject
         _bgRuntime.RestorePairMapFromData(bg);
         _bgRuntime.RestoreBlendRTFromData(bg);
         ApplyPreviewModeToChunksFor(_bgRuntime, bg);
-        SC2BackgroundSeamSkirt.Rebuild(_data, this);
+        SyncBackgroundRingFromCore();
     }
 
     private void EnsureBackgroundSubEditors()
@@ -860,6 +860,17 @@ public class SC2TerrainShell : ScriptableObject
         RecordUndoCheckpoint(label);
     }
 
+    /// <summary>The label of an undo step made of one entry on the core's stack AND one on the background's: a sculpt stroke that
+    /// reached both surfaces. Undo/Redo recognise it on both stacks and walk both back together.</summary>
+    public const string SeamStrokeLabel = "Sculpt (core + background)";
+
+    /// <summary>Renames the newest checkpoint of the core's or the background's undo stack - for a stroke that reaches the second
+    /// surface after its first checkpoint was already recorded (see SeamStrokeLabel).</summary>
+    public void RelabelLastCheckpoint(bool background, string label)
+    {
+        (background ? _bgUndoStack : _undoStack).RelabelNextUndo(label);
+    }
+
     /// <summary>Call BEFORE painting an RNM blend stroke (SC2PaintMode's
     /// "Blend" sub-mode) — see SC2TerrainCombinedUndo's own doc comment for
     /// why this is a separate channel from RecordUndoCheckpoint.</summary>
@@ -934,6 +945,22 @@ public class SC2TerrainShell : ScriptableObject
         // Ctrl+Z permanently unable to reach the core's own CombinedUndo
         // history the moment _bgUndoStack ran dry.
         _paintMode?.FlushOutlineJob();
+
+        // A stroke that reached both surfaces left an entry on each stack: walk both back together.
+        if (_data != null && _data.BackgroundTerrainData != null
+            && _undoStack.NextUndoLabel == SeamStrokeLabel && _bgUndoStack.NextUndoLabel == SeamStrokeLabel)
+        {
+            var coreDepth = _undoStack.UndoCount;
+            if (CombinedUndo.Undo(_data, Session?.Document, SyncMaterialsAndPairNamesFromDocument))
+            {
+                // The combined history may have undone a later command instead; only follow the core's sculpt entry.
+                if (_undoStack.UndoCount < coreDepth && _bgUndoStack.Undo(_data.BackgroundTerrainData))
+                    ApplyRestoredBackgroundSnapshot();
+                ApplyRestoredSnapshot();
+                return true;
+            }
+        }
+
         if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
             && _bgUndoStack.Undo(_data.BackgroundTerrainData))
         {
@@ -952,6 +979,21 @@ public class SC2TerrainShell : ScriptableObject
     public bool Redo()
     {
         _paintMode?.FlushOutlineJob();
+
+        // See Undo(): a stroke that reached both surfaces is redone on both stacks together.
+        if (_data != null && _data.BackgroundTerrainData != null
+            && _undoStack.NextRedoLabel == SeamStrokeLabel && _bgUndoStack.NextRedoLabel == SeamStrokeLabel)
+        {
+            var coreDepth = _undoStack.RedoCount;
+            if (CombinedUndo.Redo(_data, Session?.Document, SyncMaterialsAndPairNamesFromDocument))
+            {
+                if (_undoStack.RedoCount < coreDepth && _bgUndoStack.Redo(_data.BackgroundTerrainData))
+                    ApplyRestoredBackgroundSnapshot();
+                ApplyRestoredSnapshot();
+                return true;
+            }
+        }
+
         // See Undo()'s own comment on why this falls through instead of
         // returning false the moment _bgUndoStack has nothing left to redo.
         if (_lastEditedTargetIsBackground && _data != null && _data.BackgroundTerrainData != null
@@ -1026,6 +1068,7 @@ public class SC2TerrainShell : ScriptableObject
             // itself changes; Undo/Redo needs it too since they can change
             // the same underlying pair/material data a mode switch doesn't.
             ApplyPreviewModeToChunks();
+            SyncBackgroundRingFromCore();
         }
         else
         {
@@ -1487,10 +1530,9 @@ public class SC2TerrainShell : ScriptableObject
     /// (SC2BackgroundTerrain.Generate), sharing the core's own CellSize/
     /// grid alignment so the boundary between them resolves via a plain
     /// per-cell inside/outside test and the SAME SC2TerrainSimplifier
-    /// pipeline the core itself uses (this tab's SimplifyRatio slider is
-    /// literally the same widget the Pairs tab uses, just pointed at the
-    /// background's own single pair). See the "Decorative background
-    /// terrain" plan for the full design.</summary>
+    /// pipeline the core itself uses, down to the export triangle budget
+    /// (SC2BackgroundTerrain.ExportTriangleBudget). See SC2BackgroundTerrain's
+    /// own header for the full design.</summary>
     private void DrawBackgroundPanel()
     {
         if (_data == null)
@@ -1527,14 +1569,17 @@ public class SC2TerrainShell : ScriptableObject
 
         DrawUnifiedNote("A low-detail decorative surface is generated around the playable core, sharing its exact grid alignment so the seam is always exact regardless of SimplifyRatio choices on either side. Purely cosmetic — never contributes to Costs/Hfield, and only lightly to Collision2 near the seam.");
 
-        var newSize = Mathf.RoundToInt(DrawCompactSlider("Footprint Size", _data.BackgroundTerrainSize, 512f, 16384f,
+        var minFootprint = SC2BackgroundTerrain.MinFootprint(_data);
+        var maxFootprint = SC2BackgroundTerrain.MaxFootprint(_data);
+        var shownSize = SC2BackgroundTerrain.ClampFootprint(_data, _data.BackgroundTerrainSize);
+        var newSize = Mathf.RoundToInt(DrawCompactSlider("Footprint Size", shownSize, minFootprint, maxFootprint,
             onValueChangeStart: () => RecordUndoCheckpoint("Change Background Terrain Size")));
         if (newSize != _data.BackgroundTerrainSize)
         {
             _data.BackgroundTerrainSize = newSize;
             RefreshBackgroundRuntime();
         }
-        DrawUnifiedNote("World-space outer size (X and Z), centered on the core. Clamped internally on a fine-CellSize map so generation always stays fast — a very large request may end up smaller than asked.");
+        DrawUnifiedNote($"World-space outer size (X and Z), centered on the core, from just around it up to {SC2BackgroundTerrain.MaxFootprintCoreMultiple}x its larger side. The background uses the core's own grid density, so it meets the core without any stitching strip; a bigger footprint means more triangles in the editor.");
 
         EditorGUILayout.Space(6);
 
@@ -1564,24 +1609,10 @@ public class SC2TerrainShell : ScriptableObject
         var bg = _data.BackgroundTerrainData;
         if (bg != null && bg.Pairs.Count > 0)
         {
-            var pair = bg.Pairs[0];
-            EditorGUILayout.LabelField($"Source triangles: {bg.GridWidth * bg.GridHeight * 2:N0} (before simplify)");
-            var newRatio = DrawCompactSlider("Simplify Ratio", pair.SimplifyRatio, 0f, 1f,
-                onValueChangeStart: () => RecordUndoCheckpoint("Change Background Simplify Ratio"));
-            if (!Mathf.Approximately(newRatio, pair.SimplifyRatio))
-            {
-                pair.SimplifyRatio = newRatio;
-                // SimplifyRatio only affects the export-time
-                // SC2TerrainLayerBuilder pass (BuildForExportOrPreview) —
-                // the live chunk runtime always renders the full,
-                // unsimplified grid (same as the core's own chunks, which
-                // have no equivalent slider either), so there's nothing to
-                // refresh on _bgRuntime itself here, only the seam skirt
-                // (which DOES go through that same builder).
-                SC2BackgroundSeamSkirt.Rebuild(_data, this);
-                MarkDirtyAndRepaint();
-            }
-            DrawUnifiedNote("Same simplification the playable terrain's own pairs use — 0 keeps full source density, higher values reduce the exported/previewed triangle count. The boundary ring against the core is always locked regardless of this value, so the seam never opens up.");
+            EditorGUILayout.LabelField($"Source triangles: {bg.GridWidth * bg.GridHeight * 2:N0} (editor), exported as about {SC2BackgroundTerrain.EstimateExportTriangles(bg):N0}");
+            for (var i = 0; i < bg.Pairs.Count; i++)
+                DrawBackgroundDetailSlider(bg, bg.Pairs[i], $"bgtab-{i}", bg.Pairs.Count > 1 ? bg.Pairs[i].Name : null);
+            DrawUnifiedNote($"The editor keeps the full-density grid; on export (and for the lighting bake) the background is simplified to at most {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles. Simplify 1.0 is that maximum, lower values make it lighter; it can't go above. The rim against the core is always kept at full density, so the seam never opens - that also sets a floor under how light the background can get.");
             DrawUnifiedNote("Texture tiling (UV1) is set per pair — same \"Tiling Scale\" field as the core's own Pairs tab, reachable below in the Pairs tab's own Background section. Match it to whatever the core's own boundary pair uses to avoid a visible tiling-density jump at the seam.");
         }
 
@@ -2031,7 +2062,7 @@ public class SC2TerrainShell : ScriptableObject
 
         // Same "keep it live every tick" reasoning as SC2WaterPreview just
         // above. EnsureBackgroundRuntime is cheap once built (early-out on
-        // the steady-state path); the preview-mode/seam-skirt refresh right
+        // the steady-state path); the preview-mode refresh right
         // after it is a plain Material.Set* call, no mesh rebuild — mirrors
         // the old SC2BackgroundTerrainPreview's own cheap-every-tick
         // ApplyPreviewOverrides, just against the live runtime instead of a
@@ -2044,23 +2075,9 @@ public class SC2TerrainShell : ScriptableObject
             EnsureBackgroundRuntime();
         if (_bgRuntime != null && _data?.BackgroundTerrainData != null)
         {
-            // Refreshes _sharedChunkMat's preview-mode state — the seam
-            // skirt now renders with this exact same shared material
-            // (SC2BackgroundSeamSkirt.Rebuild), so it picks this up for
-            // free, no separate call needed.
+            // Refreshes _sharedChunkMat's preview-mode state.
             ApplyPreviewModeToChunksFor(_bgRuntime, _data.BackgroundTerrainData);
         }
-        // Self-heal: the seam's first-ever Rebuild may have run before the
-        // core's own Runtime existed (see _seamPendingCoreRuntimeReady's own
-        // doc comment) — as soon as it does, rebuild once more so the
-        // core-side seam vertices stop reading the Y=0 fallback, without
-        // needing the user to hover the background to trigger it manually.
-        if (_seamPendingCoreRuntimeReady && Runtime != null)
-        {
-            SC2BackgroundSeamSkirt.Rebuild(_data, this);
-            _seamPendingCoreRuntimeReady = false;
-        }
-
         // Keep every imported terrain.bdf object's SC2/Terrain material(s)
         // in sync with the live Environment tab (Sun/Shadow/Fog/
         // EnvironmentMap) — same "refresh every tick" reasoning as
@@ -2122,6 +2139,7 @@ public class SC2TerrainShell : ScriptableObject
     public void SetBasePreviewVisible(bool visible)
     {
         _runtime?.SetVisible(visible);
+        _bgRuntime?.SetVisible(visible);
         DestroyLegacyPreviewMesh();
         _simplifiedMode?.SetVisible(!visible);
     }
@@ -2561,6 +2579,36 @@ public class SC2TerrainShell : ScriptableObject
         var screenMouse = GUIUtility.GUIToScreenPoint(e.mousePosition);
         if (!_focusedFieldScreenRect.Contains(screenMouse))
             GUI.FocusControl(null);
+    }
+
+    /// <summary>A background pair's Simplify slider (see SC2BackgroundTerrain.GetPairDetail): 1.0 is the export triangle budget, which
+    /// is also the most it can be, and lower values simplify further. Undoable like the core's own Simplify slider.</summary>
+    public void DrawBackgroundDetailSlider(SC2TerrainData bg, SC2MaterialPair pair, string keySuffix, string label = null,
+        System.Action onChanged = null)
+    {
+        var detail = SC2BackgroundTerrain.GetPairDetail(pair);
+        var next = DrawCompactSlider(string.IsNullOrEmpty(label) ? "Simplify" : "Simplify: " + label, detail, SC2BackgroundTerrain.MinDetail, 1f,
+            $"{bg.GetInstanceID()}-{keySuffix}", onValueChangeStart: () => RecordUndoCheckpointFor(bg, "Change Background Simplify"));
+        if (!Mathf.Approximately(next, detail))
+        {
+            SC2BackgroundTerrain.SetPairDetail(pair, next);
+            EditorUtility.SetDirty(bg);
+            MarkDirtyAndRepaint();
+            onChanged?.Invoke();
+        }
+    }
+
+    /// <summary>The generated background's data, or null when the background is off or an imported terrain.bdf stands in for it
+    /// (then there is nothing of ours to simplify). For the Simplified and Export tabs, which list its pairs next to the core's.</summary>
+    public SC2TerrainData ProceduralBackgroundData
+    {
+        get
+        {
+            if (_data == null || !_data.BackgroundTerrainEnabled || _data.BackgroundTerrainData == null) return null;
+            var imported = GetImportedTerrainsForExport?.Invoke();
+            if (imported != null && imported.Exists(t => t.IsBackgroundTerrain)) return null;
+            return _data.BackgroundTerrainData;
+        }
     }
 
     public static float DrawCompactSlider(string label, float value, float min, float max, string keySuffix = null, System.Action onValueChangeStart = null)
@@ -4246,7 +4294,14 @@ public class SC2TerrainShell : ScriptableObject
         OnPreviewModeChanged?.Invoke(_prev);
     }
 
-    private void ApplyRuntimeVisibility() =>
+    private void ApplyRuntimeVisibility()
+    {
+        // The background's live chunks give way to the simplified preview too (it shows the background's exported shape).
+        _bgRuntime?.SetVisible(_mode != EditorMode.Simplified);
+        ApplyCoreRuntimeVisibility();
+    }
+
+    private void ApplyCoreRuntimeVisibility() =>
         // ImportOnlyMode already makes the live plane
         // contribute zero geometry to the exported terrain.bdf/hfield.bdf/
         // collision2.bdf (SC2TerrainLayerBuilder.Build) - it must be hidden
@@ -4288,6 +4343,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         const float cellSize = 1f;
         _runtime?.SetHeightGridOverlay(_heightGridOverlayVisible, cellSize);
+        _bgRuntime?.SetHeightGridOverlay(_heightGridOverlayVisible, cellSize);
         var imported = GetImportedTerrainsForExport?.Invoke();
         if (imported == null) return;
         foreach (var entry in imported)
@@ -4317,6 +4373,8 @@ public class SC2TerrainShell : ScriptableObject
     {
         var cellSize = _data != null ? _data.CellSize : 1f;
         _runtime?.SetWireframeOverlay(_wireframeOverlayVisible, cellSize);
+        var background = _data?.BackgroundTerrainData;
+        _bgRuntime?.SetWireframeOverlay(_wireframeOverlayVisible, background != null ? background.CellSize : cellSize);
         var imported = GetImportedTerrainsForExport?.Invoke();
         if (imported == null) return;
         foreach (var entry in imported)
@@ -4820,6 +4878,9 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (runtime == null || data == null) return;
 
+        // The MatCap look shades the Mats/Pairs/Slope/unassigned colours of every runtime (core and background alike).
+        runtime.SetMatCapPreset(_matCapPreset);
+
         if (_prev == PreviewMode.PairColors)
         {
             runtime.ApplyPairColourView(data, false);
@@ -4877,9 +4938,7 @@ public class SC2TerrainShell : ScriptableObject
                 // `data` here was the actual bug: background's own chunk
                 // mesh always fell back to each pair's per-pair TilingScale,
                 // silently ignoring Global UV Scale regardless of the
-                // toggle, while the seam skirt (SC2BackgroundSeamSkirt,
-                // which already correctly used coreData) looked right —
-                // exactly the "only the seam respects it" symptom reported.
+                // toggle.
                 TilingScale = _data.EffectiveUvTilingScale(p),
                 Rnm0 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask0 : null,
                 Rnm1 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask1 : null,

@@ -98,7 +98,7 @@ public static class SC2TerrainUv1Unwrap
 
     /// <summary>Samples a BuildProfiles result at an arbitrary position in
     /// the SAME local coordinate frame the profiles were built in (world
-    /// space for the core terrain and its seam skirt, background-local
+    /// space for the core terrain, background-local
     /// space for the background) — export mesh simplification can place a
     /// vertex anywhere along an edge, not just on an original grid vertex,
     /// so this can't be a plain array lookup. u and v are looked up
@@ -117,10 +117,9 @@ public static class SC2TerrainUv1Unwrap
     }
 
     /// <summary>Like <see cref="Sample"/>, but a position outside the profiled grid continues the
-    /// profile linearly with the slope of its last cell instead of clamping to the edge value. The
-    /// seam skirt reaches one coarse cell past the core terrain: with clamping every skirt vertex
-    /// beyond the core edge got the very same UV1, so the tiled texture collapsed into streaks across
-    /// the strip; with the continuation the strip keeps texturing at the core's own scale.</summary>
+    /// profile linearly with the slope of its last cell instead of clamping to the edge value, so a
+    /// surface reaching past the profiled grid keeps texturing at that grid's own scale instead of
+    /// collapsing into streaks of one clamped coordinate.</summary>
     public static Vector2 SampleExtended(float[] u, float[] v, int gridWidth, int gridHeight, float cellSize, float localX, float localZ)
     {
         if (cellSize <= 0f || gridWidth <= 0 || gridHeight <= 0 || u.Length == 0 || v.Length == 0) return Vector2.zero;

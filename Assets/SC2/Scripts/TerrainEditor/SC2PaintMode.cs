@@ -1236,8 +1236,8 @@ public class SC2PaintMode
             _win.MarkDirtyAndRepaint(geometryChanged: false);
             var swMarkDirtyMs = swMarkDirty.ElapsedMilliseconds;
 
-            // Same as SC2GeometryMode's own MouseUp — keeps the background's
-            // seam skirt glued after a completed Paint Pair stroke on it;
+            // Same as SC2GeometryMode's own MouseUp - refreshes the background
+            // after a completed Paint Pair stroke on it;
             // no-op when the active surface is the core. Logs its own
             // internal breakdown separately (see its own doc comment).
             if (Data != _win.Data) _win.RefreshBackgroundRuntime();
@@ -1339,12 +1339,10 @@ public class SC2PaintMode
             EditorUtility.SetDirty(Data);
             var swSetDirtyMs = swSetDirty.ElapsedMilliseconds;
 
-            // Same as SC2GeometryMode's own MouseUp — keeps the background's
-            // seam skirt glued after a completed Paint Blend stroke on it
-            // (also refreshes its own RnmMaskTexture, which the chunk
-            // runtime doesn't use but the seam skirt's shared material
-            // does not depend on either — SC2TerrainRuntime.SharedChunkMat
-            // samples BlendRT directly); no-op when active surface is core.
+            // Same as SC2GeometryMode's own MouseUp - refreshes the background
+            // after a completed Paint Blend stroke on it
+            // (SC2TerrainRuntime.SharedChunkMat samples BlendRT directly);
+            // no-op when active surface is core.
             // Logs its own internal breakdown separately (see its own doc
             // comment).
             if (Data != _win.Data) _win.RefreshBackgroundRuntime();
@@ -1585,6 +1583,8 @@ public class SC2PaintMode
             if (pair >= 0 && pair < counts.Length) counts[pair] += 2;
         }
         data.PairTriCounts = counts;
+        // The pairs' own cached counts (SC2MaterialPair.GetTriangleCount) are stale now too.
+        foreach (var pair in data.Pairs) pair?.InvalidateTriCount();
     }
 
     public bool HandleKeyboardShortcut(UnityEngine.Event e) => false;

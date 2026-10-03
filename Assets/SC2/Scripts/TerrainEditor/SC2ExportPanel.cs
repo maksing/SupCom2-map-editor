@@ -225,6 +225,30 @@ public sealed class SC2ExportPanel
             SC2TerrainShell.EndUnifiedPanelBox();
         }
 
+        // The generated background is simplified per pair too: 1.0 is its export budget (the most it can be), lower values go
+        // lighter. The same slider as on the Background, Pairs and Simplified tabs.
+        var background = _win.ProceduralBackgroundData;
+        if (background != null && background.Pairs.Count > 0)
+        {
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField("Background simplification (per pair):", EditorStyles.boldLabel, GUILayout.Width(w), GUILayout.MaxWidth(w));
+            SC2TerrainShell.DrawUnifiedNote($"1.0 = {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles for the whole background, shared between its pairs by size; lower is lighter, it can't go above. Exports as about {SC2BackgroundTerrain.EstimateExportTriangles(background):N0}.");
+            for (var i = 0; i < background.Pairs.Count; i++)
+            {
+                var p = background.Pairs[i];
+                SC2TerrainShell.BeginUnifiedPanelBox();
+                EditorGUILayout.BeginHorizontal(GUILayout.Width(Mathf.Max(1f, w - 20f)), GUILayout.MaxWidth(Mathf.Max(1f, w - 20f)));
+                var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
+                EditorGUI.DrawRect(swatch, background.PairColor(i));
+                EditorGUILayout.LabelField(CompactCount(SC2BackgroundTerrain.PairSourceTriangles(background, i)), GUILayout.Width(SC2UiScale.Pxf(38f)));
+                var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
+                EditorGUILayout.LabelField(p.Name, nameStyle, GUILayout.Width(Mathf.Max(32f, w - 90f)), GUILayout.MaxWidth(Mathf.Max(32f, w - 90f)));
+                EditorGUILayout.EndHorizontal();
+                _win.DrawBackgroundDetailSlider(background, p, $"export-bg-{i}");
+                SC2TerrainShell.EndUnifiedPanelBox();
+            }
+        }
+
         var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
         if (importedTerrains != null && importedTerrains.Count > 0)
         {
@@ -360,6 +384,12 @@ public sealed class SC2ExportPanel
     private const int MinimapWaitMilliseconds = 30_000;
 
     private const string ExportDetail = "Rendering the minimap and writing the map files. This can take a while.";
+
+    // 4,194,304 -> "4.2M", 57,603 -> "58k": the background's pairs have far more triangles than the label has room for.
+    private static string CompactCount(int n) =>
+        n >= 1_000_000 ? (n / 1_000_000f).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "M"
+        : n >= 1_000 ? Mathf.RoundToInt(n / 1_000f) + "k"
+        : n + "t";
 
     private static string PairTriStr(SC2TerrainData data, int pairIdx)
     {

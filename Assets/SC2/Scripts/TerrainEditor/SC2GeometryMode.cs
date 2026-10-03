@@ -29,6 +29,13 @@ public struct SC2GeometryToolState
 /// background's own real offset otherwise, added/subtracted uniformly so
 /// every call site below works unchanged for either surface.
 ///
+/// The surface under the cursor decides what the panel shows and where a
+/// stroke starts, but the stroke itself is applied to EVERY surface the brush
+/// reaches (CollectTargets): along the core/background seam one stroke shapes
+/// both, and the background's rim is re-synced to the core's perimeter after
+/// each dab so they stay level. The undo checkpoints of a stroke that reaches
+/// both are one joint step (SC2TerrainShell.SeamStrokeLabel).
+///
 /// Two things deliberately still always read the CORE's own data
 /// regardless of which surface is active:
 ///  - Symmetry (Data.Symmetry/SymmetryCenter/GetSymmetricPositions) — there
@@ -735,6 +742,71 @@ public class SC2GeometryMode
         }
     }
 
+    // ── Seam editing ──────────────────────────────────────────────────────────
+    // A stroke is applied to EVERY surface the brush reaches, not only the one under the cursor, so sculpting along the seam
+    // shapes the core and the background together. The background's rim is then re-synced to the core's perimeter after every dab
+    // (SC2TerrainShell.HeightBrushApplied), so the two stay exactly level along it.
+
+    private struct SculptTarget
+    {
+        public SC2TerrainRuntime Runtime;
+        public SC2TerrainData Data;
+        public Vector3 Offset;
+        public bool Background;
+    }
+
+    private readonly List<SculptTarget> _targets = new List<SculptTarget>();
+    private bool _strokeTouchedCore;
+    private bool _strokeTouchedBackground;
+
+    private static SC2FlattenPlane PlaneToLocal(SC2FlattenPlane plane, SculptTarget target)
+    {
+        plane.Center -= new Vector3(target.Offset.x, 0f, target.Offset.z);
+        return plane;
+    }
+
+    private static SC2FlattenPlane PlaneToWorld(SC2FlattenPlane plane, SculptTarget target)
+    {
+        plane.Center += new Vector3(target.Offset.x, 0f, target.Offset.z);
+        return plane;
+    }
+
+    /// <summary>Fills <see cref="_targets"/> with the surfaces a brush of the current radius at <paramref name="pos"/> (world
+    /// space) reaches: the core when the brush touches its rectangle, the background when it touches any of it outside the core
+    /// (inside the carved hole there is nothing to sculpt).</summary>
+    private void CollectTargets(Vector3 pos, float radius)
+    {
+        _targets.Clear();
+        var core = _win.Data;
+        if (core == null) return;
+        var margin = core.CellSize * 2f;
+        var coreW = core.GridWidth * core.CellSize;
+        var coreD = core.GridHeight * core.CellSize;
+
+        if (_win.Runtime != null && SC2SeamReach.ReachesCore(pos.x, pos.z, coreW, coreD, radius, margin))
+            _targets.Add(new SculptTarget { Runtime = _win.Runtime, Data = core, Offset = Vector3.zero, Background = false });
+
+        var bg = core.BackgroundTerrainEnabled ? core.BackgroundTerrainData : null;
+        if (_win.BackgroundRuntime == null || bg == null) return;
+        var offset = SC2BackgroundTerrain.GetWorldOffset(core);
+        if (SC2SeamReach.ReachesBackground(pos.x, pos.z, coreW, coreD, offset.x, offset.z,
+                bg.GridWidth * bg.CellSize, bg.GridHeight * bg.CellSize, radius, margin))
+            _targets.Add(new SculptTarget { Runtime = _win.BackgroundRuntime, Data = bg, Offset = offset, Background = true });
+    }
+
+    /// <summary>Records the undo checkpoint of a surface the first time the current stroke touches it. When the second surface
+    /// joins, both checkpoints are labelled as one joint step so Undo/Redo walk both back together.</summary>
+    private void EnsureStrokeCheckpoint(bool background)
+    {
+        if (background ? _strokeTouchedBackground : _strokeTouchedCore) return;
+        var otherTouched = background ? _strokeTouchedCore : _strokeTouchedBackground;
+        var data = background ? _win.Data?.BackgroundTerrainData : _win.Data;
+        if (data == null) return;
+        _win.RecordUndoCheckpointFor(data, otherTouched ? SC2TerrainShell.SeamStrokeLabel : "Sculpt");
+        if (otherTouched) _win.RelabelLastCheckpoint(!background, SC2TerrainShell.SeamStrokeLabel);
+        if (background) _strokeTouchedBackground = true; else _strokeTouchedCore = true;
+    }
+
     void HandleInput(Event e)
     {
         if (!_brushVis || _win.ActiveRuntime == null) return;
@@ -820,21 +892,26 @@ public class SC2GeometryMode
             _isPainting = false;
 
             var swHeights = System.Diagnostics.Stopwatch.StartNew();
-            Data.Heights = _win.ActiveRuntime.GetHeightsCopy();
+            // Every surface the stroke touched settles its runtime heights back into its data (the active surface always does:
+            // a stroke that never reached anything leaves them unchanged).
+            var syncCore = _strokeTouchedCore || Data == _win.Data;
+            var syncBackground = _strokeTouchedBackground || Data != _win.Data;
+            if (syncCore && _win.Runtime != null) _win.Data.Heights = _win.Runtime.GetHeightsCopy();
+            if (syncBackground && _win.BackgroundRuntime != null && _win.Data?.BackgroundTerrainData != null)
+                _win.Data.BackgroundTerrainData.Heights = _win.BackgroundRuntime.GetHeightsCopy();
             var swHeightsMs = swHeights.ElapsedMilliseconds;
 
             var swSetDirty = System.Diagnostics.Stopwatch.StartNew();
-            EditorUtility.SetDirty(Data);
+            if (syncCore) EditorUtility.SetDirty(_win.Data);
+            if (syncBackground && _win.Data?.BackgroundTerrainData != null) EditorUtility.SetDirty(_win.Data.BackgroundTerrainData);
             var swSetDirtyMs = swSetDirty.ElapsedMilliseconds;
 
             SC2TerrainShell.BumpTerrainGeometryVersion();
 
-            // Keeps the background's own seam skirt glued to a completed
-            // background stroke — a no-op when the active surface is the
-            // core (RefreshBackgroundRuntime itself checks whether the
-            // background even exists/needs rebuilding). Logs its own
-            // internal breakdown separately (see its own doc comment).
-            if (Data != _win.Data) _win.RefreshBackgroundRuntime();
+            // Re-syncs the background's rim with the core after a completed stroke that touched the background - a no-op when
+            // the stroke stayed on the core (RefreshBackgroundRuntime itself checks whether the background even exists/needs
+            // rebuilding). Logs its own internal breakdown separately (see its own doc comment).
+            if (syncBackground) _win.RefreshBackgroundRuntime();
 
             SC2Log.Log($"[SC2GeometryMode] MouseUp: MarkDirty+InvalidateLiveHeightGrid={swAfterDirty}ms, GetHeightsCopy={swHeightsMs}ms, EditorUtility.SetDirty={swSetDirtyMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
             return;
@@ -843,7 +920,11 @@ public class SC2GeometryMode
         {
             _isPainting = true;
             _stampStroke.End();
-            _win.ActiveRuntime?.BeginSculptStroke();
+            _strokeTouchedCore = false;
+            _strokeTouchedBackground = false;
+            // Both surfaces clear their per-stroke stamp state: the stroke may reach either one at any time.
+            _win.Runtime?.BeginSculptStroke();
+            _win.BackgroundRuntime?.BeginSculptStroke();
             // Roll a fresh stamp rotation for this stroke only,
             // and (re)build the readable-pixel cache the mask sampler needs
             // — see _geoBrushRotationRad/EnsureGeoBrushPixelCache's own doc
@@ -856,7 +937,9 @@ public class SC2GeometryMode
             // Heights[] is only re-synced from the runtime on MouseUp (see below),
             // so it already reflects the state before this stroke — one undo
             // checkpoint per stroke, not per drag frame.
-            _win.RecordUndoCheckpointFor(Data, "Sculpt");
+            // The surface under the cursor is checkpointed right away; the other one when the stroke first reaches it (see
+            // EnsureStrokeCheckpoint).
+            EnsureStrokeCheckpoint(Data != _win.Data);
         }
         if (!_isPainting || (!down && !drag)) return;
         var now = EditorApplication.timeSinceStartup;
@@ -882,7 +965,6 @@ public class SC2GeometryMode
         // harmless extra objects at the edge than to miss one that's now
         // sitting at a stale height.
         var notifyRadius = _radius + Mathf.Max(2f, Data.CellSize * 2f);
-        var offset = _win.ActiveWorldOffset;
 
         var brushMask = _win.Data.UseCustomGeometryBrush ? _geoBrushPixels : null;
 
@@ -913,8 +995,13 @@ public class SC2GeometryMode
                 {
                     var pos = setHeightPositions[slot];
                     GetSymmetricStampTransform(slot, out var mirror, out var swapAxes, out var rotationRad);
-                    _win.ActiveRuntime.SculptSetHeight(pos - offset, _radius, _strength, _hardness, _setHeight,
-                        brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
+                    CollectTargets(pos, _radius);
+                    foreach (var target in _targets)
+                    {
+                        EnsureStrokeCheckpoint(target.Background);
+                        target.Runtime.SculptSetHeight(pos - target.Offset, _radius, _strength, _hardness, _setHeight,
+                            brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
+                    }
                     _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
                 }
             }
@@ -937,6 +1024,8 @@ public class SC2GeometryMode
 
             if (dabs.Count > 0)
             {
+                var touchedCore = false;
+                var touchedBackground = false;
                 foreach (var dab in dabs)
                 {
                     var positions = _win.Data.GetSymmetricPositions(dab);
@@ -944,10 +1033,28 @@ public class SC2GeometryMode
                     for (var i = 0; i < positions.Count; i++)
                     {
                         GetSymmetricStampTransform(i, out var mirror, out var swapAxes, out var rotationRad);
-                        _win.ActiveRuntime.SculptFlatten(positions[i] - offset, _radius, _strength, _hardness,
-                            ref _flattenPlanes[i], _flattenLockPlane,
-                            brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, rebuildChunks: false,
-                            brushMirror: mirror, brushSwapAxes: swapAxes);
+                        CollectTargets(positions[i], _radius);
+                        // Every surface the dab reaches is flattened to ONE plane (kept in world space, so it stays valid as the
+                        // stroke moves from one surface to the other): the locked per-stroke plane when there is one, otherwise
+                        // the plane the first surface samples for this dab.
+                        var dabPlane = default(SC2FlattenPlane);
+                        foreach (var target in _targets)
+                        {
+                            EnsureStrokeCheckpoint(target.Background);
+                            if (target.Background) touchedBackground = true; else touchedCore = true;
+                            SC2FlattenPlane local;
+                            bool useGiven;
+                            if (_flattenLockPlane && _flattenPlanes[i].Valid) { local = PlaneToLocal(_flattenPlanes[i], target); useGiven = true; }
+                            else if (dabPlane.Valid) { local = PlaneToLocal(dabPlane, target); useGiven = true; }
+                            else { local = default; useGiven = _flattenLockPlane; }
+                            var used = default(SC2FlattenPlane);
+                            target.Runtime.SculptFlatten(positions[i] - target.Offset, _radius, _strength, _hardness,
+                                ref local, useGiven,
+                                brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, rebuildChunks: false,
+                                brushMirror: mirror, brushSwapAxes: swapAxes, onPlane: plane => used = plane);
+                            if (!dabPlane.Valid && used.Valid) dabPlane = PlaneToWorld(used, target);
+                            if (_flattenLockPlane && !_flattenPlanes[i].Valid && dabPlane.Valid) _flattenPlanes[i] = dabPlane;
+                        }
                     }
                 }
                 // One mesh rebuild and one Objects/Decals notification for the whole swept area.
@@ -955,7 +1062,9 @@ public class SC2GeometryMode
                 var reach = notifyRadius + Vector3.Distance(dabs[0], dabs[dabs.Count - 1]) * 0.5f;
                 foreach (var pos in _win.Data.GetSymmetricPositions(middle))
                 {
-                    _win.ActiveRuntime.RebuildChunksAround(pos - offset, reach);
+                    if (touchedCore && _win.Runtime != null) _win.Runtime.RebuildChunksAround(pos, reach);
+                    if (touchedBackground && _win.BackgroundRuntime != null)
+                        _win.BackgroundRuntime.RebuildChunksAround(pos - SC2BackgroundTerrain.GetWorldOffset(_win.Data), reach);
                     _win.HeightBrushApplied?.Invoke(pos, reach);
                 }
             }
@@ -983,9 +1092,26 @@ public class SC2GeometryMode
                 var slotRotationDeg = mode == 4
                     ? SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot)
                     : 0f;
-                _win.ActiveRuntime.SculptBrush(pos - offset, _radius, effectiveStrength, _hardness, mode,
-                    brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes,
-                    _win.Data.SymmetryCenter - offset, slotRotationDeg);
+                CollectTargets(pos, _radius);
+                if (mode == 2 && _targets.Count == 2)
+                {
+                    // Smooth over the seam is computed over the core's and the background's vertices together, so the vertices on
+                    // the seam average the same neighbours from both sides and stay level (see SculptSmoothAcrossSeam).
+                    foreach (var target in _targets) EnsureStrokeCheckpoint(target.Background);
+                    SC2BackgroundTerrain.GetCoreOriginInBackground(_win.Data, out var originX, out var originZ);
+                    SC2TerrainRuntime.SculptSmoothAcrossSeam(_win.Runtime, _win.BackgroundRuntime, originX, originZ, pos,
+                        _radius, effectiveStrength, _hardness, brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes);
+                }
+                else
+                {
+                    foreach (var target in _targets)
+                    {
+                        EnsureStrokeCheckpoint(target.Background);
+                        target.Runtime.SculptBrush(pos - target.Offset, _radius, effectiveStrength, _hardness, mode,
+                            brushMask, _geoBrushPixelsW, _geoBrushPixelsH, rotationRad, mirror, swapAxes,
+                            _win.Data.SymmetryCenter - target.Offset, slotRotationDeg, target.Offset);
+                    }
+                }
                 _win.HeightBrushApplied?.Invoke(pos, notifyRadius);
             }
             }

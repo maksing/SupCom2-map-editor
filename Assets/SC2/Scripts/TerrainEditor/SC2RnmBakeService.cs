@@ -139,7 +139,7 @@ public static class SC2RnmBakeService
     /// from whatever geometry a given bake writes its own lighting OUTPUT
     /// against. When the decorative background is enabled, this spans BOTH
     /// the core's own footprint AND the background's full extent (main
-    /// mesh + seam skirt), all expressed in the background's own local
+    /// mesh), all expressed in the background's own local
     /// coordinate space (worldPos - sharedOffset, i.e. ComputeBounds' own
     /// minX/minZ as origin — background's own footprint is always a
     /// superset of the core's, since it's centered on and surrounds the
@@ -191,12 +191,6 @@ public static class SC2RnmBakeService
             AppendRaw(unified, s.Vertices, s.Triangles, Vector3.zero);
         }
 
-        // Seam skirt — BuildSeamSkirt's own vertices are in core WORLD
-        // space, shift into local like the core geometry above.
-        SC2BackgroundTerrain.BuildSeamSkirt(coreData, out var skirtVerts, out var skirtNormals, out var skirtTris);
-        if (skirtTris.Length > 0)
-            AppendRaw(unified, skirtVerts, skirtTris, -sharedOffset);
-
         return SC2HfieldProjectionService.Project(unified, null, mapX, mapY);
     }
 
@@ -235,7 +229,7 @@ public static class SC2RnmBakeService
     /// <summary>Appends one raw vertex/triangle chunk (not itself an
     /// existing TerrainModel's layer) as a new layer, shifted by
     /// <paramref name="shift"/> — used for the background's own kept mesh
-    /// and seam skirt, whose SC2TerrainSimplifierResult/raw arrays aren't
+    /// whose SC2TerrainSimplifierResult/raw arrays aren't
     /// TerrainModel-shaped to begin with.</summary>
     private static void AppendRaw(TerrainModel target, Vector3[] verts, int[] tris, Vector3 shift)
     {
@@ -751,8 +745,8 @@ public static class SC2RnmBakeService
     }
 
     /// <summary>Background equivalent of BuildBakeGeometry — builds the
-    /// decorative background's own merged model (main mesh + seam skirt,
-    /// SC2BackgroundTerrain.BuildForExportOrPreview/BuildSeamSkirt) in the
+    /// decorative background's own merged model (main mesh,
+    /// SC2BackgroundTerrain.BuildForExportOrPreview) in the
     /// background's LOCAL coordinate space (ComputeBounds' own minX/minZ as
     /// origin, i.e. worldPos - offset) rather than absolute world space —
     /// the background is centered on the core's centroid and routinely
@@ -795,10 +789,6 @@ public static class SC2RnmBakeService
         // s.Vertices below (bg's own Heights/grid, not the core's).
         SC2TerrainUv1Unwrap.BuildProfiles(bg.Heights, bg.GridWidth, bg.GridHeight, bg.CellSize,
             out var bgUv1ProfileU, out var bgUv1ProfileV, coreData.Uv1HeightWeight);
-        // Core's own profile, for the seam skirt below (its vertices are
-        // core world-space, bridging core-to-background, not background-local).
-        SC2TerrainUv1Unwrap.BuildProfiles(coreData.Heights, coreData.GridWidth, coreData.GridHeight, coreData.CellSize,
-            out var coreUv1ProfileU, out var coreUv1ProfileV, coreData.Uv1HeightWeight);
 
         foreach (var builtLayer in bgBuild.Layers)
         {
@@ -831,49 +821,6 @@ public static class SC2RnmBakeService
                 model.Triangles.Add(new TerrainTriangle { V0 = (uint)s.Triangles[i], V1 = (uint)s.Triangles[i + 1], V2 = (uint)s.Triangles[i + 2] });
 
             model.Materials.Add(new TerrainMaterial { Name = pair.Name });
-        }
-
-        // Seam skirt — appended as its own layer tagged pair index 0 (the
-        // skirt is visually pair 0's own surface, matching how the real
-        // export/preview merge it into pair 0's material) rather than
-        // spliced into an existing layer's vertex/triangle range the way
-        // the exporter does — that splice exists purely to avoid a second
-        // TerrainMaterial entry in the exported file, a concern that
-        // doesn't apply here since this model is never serialized. A plain
-        // extra layer is simplest and BakeInternal's maskGroups grouping
-        // already merges any number of layers sharing one pair/mask
-        // correctly regardless of how many there are.
-        SC2BackgroundTerrain.BuildSeamSkirt(coreData, out var skirtVerts, out var skirtNormals, out var skirtTris);
-        if (skirtTris.Length > 0 && bg.Pairs.Count > 0)
-        {
-            var pair0 = bg.Pairs[0];
-            var uvScale = coreData.EffectiveUvTilingScale(pair0);
-            var layer = new BdfIO.Formats.Terrain.TerrainLayer
-                { CumulativeVertices = model.Vertices.Count, CumulativeIndices = model.Triangles.Count * 3 };
-            model.Layers.Add(layer);
-            pairIndexPerLayer.Add(0);
-
-            for (var vi = 0; vi < skirtVerts.Length; vi++)
-            {
-                var localPos = skirtVerts[vi] - offset; // BuildSeamSkirt's own vertices are already in core WORLD space
-                var n = skirtNormals[vi];
-                // Sampled against the CORE's own profile using skirtVerts[vi]
-                // directly (core world space, pre-offset) — the skirt
-                // bridges the core terrain's edge, not the background's.
-                var uv = SC2TerrainUv1Unwrap.SampleExtended(coreUv1ProfileU, coreUv1ProfileV, coreData.GridWidth, coreData.GridHeight, coreData.CellSize,
-                    skirtVerts[vi].x, skirtVerts[vi].z);
-                model.Vertices.Add(new TerrainVertex
-                {
-                    PosX = localPos.x, PosY = localPos.y, PosZ = localPos.z,
-                    Uv1U = uv.x / uvScale, Uv1V = uv.y / uvScale,
-                    Uv2U = localPos.x / spanX, Uv2V = localPos.z / spanZ,
-                    NormalX = n.x, NormalY = n.y, NormalZ = n.z,
-                });
-            }
-            for (var i = 0; i < skirtTris.Length; i += 3)
-                model.Triangles.Add(new TerrainTriangle { V0 = (uint)skirtTris[i], V1 = (uint)skirtTris[i + 1], V2 = (uint)skirtTris[i + 2] });
-
-            model.Materials.Add(new TerrainMaterial { Name = pair0.Name });
         }
 
         return model;

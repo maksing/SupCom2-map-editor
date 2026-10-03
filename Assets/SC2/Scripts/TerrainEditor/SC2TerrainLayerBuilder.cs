@@ -23,6 +23,9 @@ public sealed class SC2TerrainBuildResult
 
 public static class SC2TerrainLayerBuilder
 {
+    private static float PairRatio(SC2TerrainData data, float[] perPair, int pairIndex) =>
+        perPair != null && pairIndex < perPair.Length ? perPair[pairIndex] : data.Pairs[pairIndex].SimplifyRatio;
+
     public static SC2TerrainBuildResult Build(SC2TerrainData data, bool sortByTriangleCount)
         => Build(data, sortByTriangleCount, null, null);
 
@@ -50,13 +53,21 @@ public static class SC2TerrainLayerBuilder
     /// serve the shipped game mesh's own triangle budget and shading — real
     /// export/Collision2/RNM-bake callers must keep getting the genuine
     /// simplified+shaded result, so this defaults to false and only
-    /// SC2LiveHeightGrid opts in.</summary>
+    /// SC2LiveHeightGrid opts in.
+    /// simplifyRatioPerPair: when set, pair i is simplified by simplifyRatioPerPair[i] instead of its own SimplifyRatio (the
+    /// background, whose ratios come from one triangle budget, SC2BackgroundTerrain.ExportSimplifyRatios).
+    /// protectRingAroundUnassigned: see SC2TerrainSimplifier.FindBoundaryVertices.
+    /// clusterRegion: maps a vertex position (x, z) to a region id; the simplifier never merges vertices of different regions. For
+    /// a surface with a hole, regions that are each convex and clear of the hole keep a merged vertex out of it.</summary>
     public static SC2TerrainBuildResult Build(
         SC2TerrainData data,
         bool sortByTriangleCount,
         System.Action<string, float> progress,
         HashSet<int> additionalLockedVertices,
-        bool skipSimplification = false)
+        bool skipSimplification = false,
+        float[] simplifyRatioPerPair = null,
+        bool protectRingAroundUnassigned = true,
+        System.Func<float, float, int> clusterRegion = null)
     {
         var result = new SC2TerrainBuildResult();
         // ImportOnlyMode: the live plane must contribute
@@ -83,9 +94,9 @@ public static class SC2TerrainLayerBuilder
         var needsBoundary = !skipSimplification && hasAdditionalLocks;
         if (!skipSimplification)
             for (var i = 0; i < data.Pairs.Count; i++)
-                if (data.Pairs[i].SimplifyRatio > 0f) { needsBoundary = true; break; }
+                if (PairRatio(data, simplifyRatioPerPair, i) > 0f) { needsBoundary = true; break; }
         progress?.Invoke(needsBoundary ? "Finding locked pair boundaries" : "Counting pair triangles", 0.03f);
-        var boundary = needsBoundary ? SC2TerrainSimplifier.FindBoundaryVertices(data) : new HashSet<int>();
+        var boundary = needsBoundary ? SC2TerrainSimplifier.FindBoundaryVertices(data, protectRingAroundUnassigned) : new HashSet<int>();
         if (needsBoundary && hasAdditionalLocks)
             foreach (var v in additionalLockedVertices)
                 boundary.Add(v);
@@ -150,7 +161,8 @@ public static class SC2TerrainLayerBuilder
             var pi = order[oi];
             var count = pairTriCount[pi];
             progress?.Invoke($"Simplifying pair {oi + 1}/{order.Count}: {data.Pairs[pi].Name}", 0.45f + 0.45f * oi / Mathf.Max(1, order.Count));
-            var mesh = SC2TerrainSimplifier.Simplify(allVerts, globalNormals, pairTris[pi], pairOrig[pi], boundary, skipSimplification ? 0f : data.Pairs[pi].SimplifyRatio);
+            var mesh = SC2TerrainSimplifier.Simplify(allVerts, globalNormals, pairTris[pi], pairOrig[pi], boundary,
+                skipSimplification ? 0f : PairRatio(data, simplifyRatioPerPair, pi), clusterRegion);
             result.Layers.Add(new SC2TerrainBuiltLayer
             {
                 PairIndex = pi,

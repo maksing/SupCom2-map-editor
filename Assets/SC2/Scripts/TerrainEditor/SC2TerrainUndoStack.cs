@@ -106,6 +106,15 @@ public sealed class SC2TerrainUndoStack
     public bool CanRedo => _redo.Count > 0;
     public string NextUndoLabel => _undo.Count > 0 ? _undo.Peek().Label : null;
     public string NextRedoLabel => _redo.Count > 0 ? _redo.Peek().Label : null;
+    public int UndoCount => _undo.Count;
+    public int RedoCount => _redo.Count;
+
+    /// <summary>Renames the newest undo entry - for an edit that turns out to belong to a joint step with another stack
+    /// (see SC2TerrainShell.SeamStrokeLabel) after its checkpoint was already recorded.</summary>
+    public void RelabelNextUndo(string label)
+    {
+        if (_undo.Count > 0) _undo.Peek().Label = label;
+    }
 
     /// <summary>Same Stopwatch.GetTimestamp()-based monotonic clock
     /// SC2ShellUndoCoordinator's own LastActionTimestamp/LastRedoTimestamp
@@ -153,7 +162,7 @@ public sealed class SC2TerrainUndoStack
         if (data == null || _trackedData != data || _undo.Count == 0)
             return false;
 
-        _redo.Push(Capture(data, "(redo target)"));
+        _redo.Push(Capture(data, _undo.Peek().Label));
         LastRedoTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         var snapshot = _undo.Pop();
         Apply(data, snapshot);
@@ -166,7 +175,7 @@ public sealed class SC2TerrainUndoStack
         if (data == null || _trackedData != data || _redo.Count == 0)
             return false;
 
-        _undo.Push(Capture(data, "(undo target)"));
+        _undo.Push(Capture(data, _redo.Peek().Label));
         LastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         var snapshot = _redo.Pop();
         Apply(data, snapshot);

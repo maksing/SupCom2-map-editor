@@ -31,7 +31,8 @@ public static class SC2TerrainSimplifier
         int[]        pairTris,
         int[]        origIdx,
         HashSet<int> boundary,
-        float        ratio)
+        float        ratio,
+        System.Func<float, float, int> clusterRegion = null)
     {
         if (ratio <= 0f || pairTris.Length < 6)
             return Repack(allVerts, globalNormals, pairTris, origIdx);
@@ -41,7 +42,7 @@ public static class SC2TerrainSimplifier
         // heap entries grow faster than the useful collapses. Terrain export is
         // dominated by broad heightfield-like surfaces, so vertex clustering is
         // a much better default: O(V+T), deterministic, and no unbounded heap.
-        return SimplifyByComponents(allVerts, globalNormals, pairTris, origIdx, boundary, ratio);
+        return SimplifyByComponents(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion);
 
     }
 
@@ -51,7 +52,8 @@ public static class SC2TerrainSimplifier
         int[]        pairTris,
         int[]        origIdx,
         HashSet<int> boundary,
-        float        ratio)
+        float        ratio,
+        System.Func<float, float, int> clusterRegion)
     {
         var triCount = pairTris.Length / 3;
         if (triCount < 96)
@@ -66,7 +68,7 @@ public static class SC2TerrainSimplifier
         {
             if (ShouldKeepComponentRaw(allVerts, pairTris, boundary))
                 return WithComponentStats(Repack(allVerts, globalNormals, pairTris, origIdx), 1, 1, 0);
-            var large = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio);
+            var large = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion);
             large.ComponentCount = 1;
             return large;
         }
@@ -76,7 +78,7 @@ public static class SC2TerrainSimplifier
         {
             if (ShouldKeepComponentRaw(allVerts, pairTris, boundary))
                 return WithComponentStats(Repack(allVerts, globalNormals, pairTris, origIdx), 1, 1, 0);
-            var one = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio);
+            var one = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion);
             one.ComponentCount = 1;
             return one;
         }
@@ -106,7 +108,7 @@ public static class SC2TerrainSimplifier
             if (keepRaw) skipped++;
             var mesh = keepRaw
                 ? Repack(allVerts, globalNormals, compTris, compOrig)
-                : SimplifyByVertexClustering(allVerts, globalNormals, compTris, compOrig, boundary, ratio);
+                : SimplifyByVertexClustering(allVerts, globalNormals, compTris, compOrig, boundary, ratio, clusterRegion);
 
             if (mesh.Triangles == null || mesh.Triangles.Length == 0)
                 continue;
@@ -273,7 +275,8 @@ public static class SC2TerrainSimplifier
         int[]        pairTris,
         int[]        origIdx,
         HashSet<int> boundary,
-        float        ratio)
+        float        ratio,
+        System.Func<float, float, int> clusterRegion)
     {
         var (lv, lt, _, l2g) = BuildLocal(allVerts, pairTris);
         var triCount = lt.Length / 3;
@@ -288,7 +291,7 @@ public static class SC2TerrainSimplifier
         for (var attempt = 0; attempt < 4; attempt++)
         {
             var effectiveTarget = Mathf.Max(2, Mathf.RoundToInt(targetT * (1f - attempt * 0.18f)));
-            var candidate = ClusterOnce(lv, globalNormals, lt, l2g, origIdx, boundary, effectiveTarget);
+            var candidate = ClusterOnce(lv, globalNormals, lt, l2g, origIdx, boundary, effectiveTarget, clusterRegion);
             var candidateCount = candidate.Triangles.Length / 3;
 
             if (candidateCount > 0 && candidateCount < bestCount)
@@ -311,7 +314,8 @@ public static class SC2TerrainSimplifier
         List<int>    l2g,
         int[]        origIdx,
         HashSet<int> boundary,
-        int          targetT)
+        int          targetT,
+        System.Func<float, float, int> clusterRegion)
     {
         var minX = float.PositiveInfinity; var maxX = float.NegativeInfinity;
         var minZ = float.PositiveInfinity; var maxZ = float.NegativeInfinity;
@@ -358,6 +362,8 @@ public static class SC2TerrainSimplifier
                 var ix = Mathf.Clamp(Mathf.RoundToInt((lv[i].x - minX) * invX), 0, cellsX);
                 var iz = Mathf.Clamp(Mathf.RoundToInt((lv[i].z - minZ) * invZ), 0, cellsZ);
                 key = ((long)ix << 32) | (uint)iz;
+                // Vertices of different regions never merge, even in the same grid cell (see Build's clusterRegion).
+                if (clusterRegion != null) key ^= (long)clusterRegion(lv[i].x, lv[i].z) << 56;
             }
 
             if (!map.TryGetValue(key, out var ci))
@@ -533,9 +539,14 @@ public static class SC2TerrainSimplifier
         return MkNormals(allVerts, bounded);
     }
 
-    public static HashSet<int> FindBoundaryVertices(SC2TerrainData data)
+    /// <param name="protectRingAroundUnassigned">Keeping the first triangle ring around a border (below) is for borders between two
+    /// pairs. A border against UNASSIGNED triangles (a carved hole: the background's cut-out for the core) is still locked itself,
+    /// but with this off no extra ring is kept around it - that ring stays at full density next to the hole, a strip of small
+    /// quads along the whole seam.</param>
+    public static HashSet<int> FindBoundaryVertices(SC2TerrainData data, bool protectRingAroundUnassigned = true)
     {
         var boundary = new HashSet<int>();
+        var ringSeeds = new HashSet<int>();
         if (data == null || data.TrianglePairIndex == null || data.TrianglePairIndex.Length == 0)
             return boundary;
 
@@ -565,11 +576,14 @@ public static class SC2TerrainSimplifier
             var key = edges[groupStart].Key;
             var firstPair = edges[groupStart].Pair;
             var pairDiffers = false;
+            var touchesUnassigned = firstPair < 0;
 
             while (groupEnd < edges.Length && edges[groupEnd].Key == key)
             {
                 if (edges[groupEnd].Pair != firstPair)
                     pairDiffers = true;
+                if (edges[groupEnd].Pair < 0)
+                    touchesUnassigned = true;
                 groupEnd++;
             }
 
@@ -577,6 +591,11 @@ public static class SC2TerrainSimplifier
             {
                 boundary.Add(edges[groupStart].A);
                 boundary.Add(edges[groupStart].B);
+                if (protectRingAroundUnassigned || !touchesUnassigned)
+                {
+                    ringSeeds.Add(edges[groupStart].A);
+                    ringSeeds.Add(edges[groupStart].B);
+                }
             }
 
             groupStart = groupEnd;
@@ -595,7 +614,7 @@ public static class SC2TerrainSimplifier
             var a = tris[t * 3];
             var b = tris[t * 3 + 1];
             var c = tris[t * 3 + 2];
-            if (boundary.Contains(a) || boundary.Contains(b) || boundary.Contains(c))
+            if (ringSeeds.Contains(a) || ringSeeds.Contains(b) || ringSeeds.Contains(c))
             {
                 protectedVerts.Add(a);
                 protectedVerts.Add(b);

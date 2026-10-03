@@ -765,11 +765,6 @@ public static class SC2TerrainExporter
             if (bg != null)
                 SC2TerrainUv1Unwrap.BuildProfiles(bg.Heights, bg.GridWidth, bg.GridHeight, bg.CellSize,
                     out bgUv1ProfileU, out bgUv1ProfileV, data.Uv1HeightWeight);
-            // Tracked so the seam skirt below can splice directly into
-            // pair 0's own layer/material instead of registering a second
-            // one, since it's visually the same decorative surface and there's
-            // no reason for two separate material entries in the exported file.
-            var pair0LayerIndex = -1;
             // Background-local normalized [0,1] bounds for UV2 (RNM/blend-
             // mask lookup) — MUST match SC2BackgroundTerrainPreview.Ensure's
             // own UV2 computation exactly, or a painted mask lands at a
@@ -809,7 +804,6 @@ public static class SC2TerrainExporter
                     var layer = new BdfIO.Formats.Terrain.TerrainLayer
                         { CumulativeVertices = model.Vertices.Count, CumulativeIndices = model.Triangles.Count * 3 };
                     model.Layers.Add(layer);
-                    if (pi == 0) pair0LayerIndex = model.Layers.Count - 1;
 
                     var bgUv1U = new float[s.Vertices.Length];
                     var bgUv1V = new float[s.Vertices.Length];
@@ -907,97 +901,6 @@ public static class SC2TerrainExporter
                     if (!string.IsNullOrEmpty(pair.ShaderFile)) mat.ShaderFile = pair.ShaderFile;
                     if (!string.IsNullOrEmpty(pair.ShaderPrefix)) mat.ShaderPrefix = pair.ShaderPrefix;
                     model.Materials.Add(mat);
-                }
-            }
-
-            // Seam-stitching skirt (SC2BackgroundTerrain.BuildSeamSkirt) —
-            // fills the real crack a coarser-than-core background otherwise
-            // leaves along the boundary, caused by the differing mesh
-            // density between the two. Already in core world space, no
-            // offset needed.
-            // Merged directly into pair 0's OWN layer/material — spliced
-            // into its vertex/triangle range, every later layer's
-            // Cumulative offsets re-based, same technique
-            // TerrainBdf.RebuildLayerBsp already uses when a layer's own
-            // triangle/vertex count changes in place — rather than
-            // registering a second layer+material, since it's visually the
-            // same decorative surface, no reason
-            // for two separate material entries in the exported file.
-            SC2BackgroundTerrain.BuildSeamSkirt(data, out var skirtVerts, out var skirtNormals, out var skirtTris);
-            if (skirtTris.Length > 0 && bg != null && pair0LayerIndex >= 0)
-            {
-                SC2Log.Log($"[SC2Exporter] background seam skirt: {skirtTris.Length / 3:N0} tris (merged into pair 0's own layer).");
-                // Same GlobalUvScale-aware resolver the main loop above
-                // uses — the skirt is merged into pair 0's own material, so
-                // its UV1 must always agree with whatever pair 0 itself
-                // resolves to. Uv2 rebased to the SAME [0,1] background-local
-                // bounds as the main loop above so a painted RNM/blend mask
-                // lines up correctly on skirt triangles too.
-                var pair0 = bg.Pairs.Count > 0 ? bg.Pairs[0] : null;
-                var uvScale = data.EffectiveUvTilingScale(pair0);
-                // Skirt vertices are already in CORE world space (see this
-                // block's own comment above), so they sample the core's own
-                // coreUv1Profile* built earlier — not the background's.
-                var skirtUv1U = new float[skirtVerts.Length];
-                var skirtUv1V = new float[skirtVerts.Length];
-                for (var vi = 0; vi < skirtVerts.Length; vi++)
-                {
-                    var uv = SC2TerrainUv1Unwrap.SampleExtended(coreUv1ProfileU, coreUv1ProfileV, data.GridWidth, data.GridHeight, data.CellSize,
-                        skirtVerts[vi].x, skirtVerts[vi].z);
-                    skirtUv1U[vi] = uv.x / uvScale; skirtUv1V[vi] = uv.y / uvScale;
-                }
-                var (skirtTangents, skirtBinormals) = BuildUv1Tbn(skirtVerts, skirtTris, skirtNormals, skirtUv1U, skirtUv1V);
-
-                var skirtVertexList = new List<TerrainVertex>(skirtVerts.Length);
-                for (var vi = 0; vi < skirtVerts.Length; vi++)
-                {
-                    var worldPos = skirtVerts[vi];
-                    var n = skirtNormals[vi];
-                    var tangent = skirtTangents[vi];
-                    var binormal = skirtBinormals[vi];
-                    skirtVertexList.Add(new TerrainVertex
-                    {
-                        PosX = worldPos.x, PosY = worldPos.y, PosZ = worldPos.z,
-                        Uv1U = skirtUv1U[vi], Uv1V = skirtUv1V[vi],
-                        Uv2U = (worldPos.x - bgMinX) / bgSpanX, Uv2V = (worldPos.z - bgMinZ) / bgSpanZ,
-                        NormalX = n.x, NormalY = n.y, NormalZ = n.z,
-                        TangentX = tangent.x, TangentY = tangent.y, TangentZ = tangent.z,
-                        BinormalX = binormal.x, BinormalY = binormal.y, BinormalZ = binormal.z,
-                    });
-                }
-
-                // Insert right after pair 0's own EXISTING vertices/tris
-                // (i.e. right before whatever layer currently follows it,
-                // or at the very end if pair 0 is the last layer so far).
-                var pair0Layer = model.Layers[pair0LayerIndex];
-                var insertVertPos = pair0LayerIndex + 1 < model.Layers.Count
-                    ? model.Layers[pair0LayerIndex + 1].CumulativeVertices
-                    : model.Vertices.Count;
-                var insertTriPos = pair0LayerIndex + 1 < model.Layers.Count
-                    ? model.Layers[pair0LayerIndex + 1].CumulativeIndices / 3
-                    : model.Triangles.Count;
-                // Skirt triangle indices are LOCAL to the skirt's own
-                // vertex array (0-based) — rebase them into pair 0's own
-                // local index space, which now spans its existing
-                // vertices FOLLOWED BY the skirt's.
-                var pair0LocalVertCountBeforeSkirt = insertVertPos - pair0Layer.CumulativeVertices;
-
-                var skirtTriangleList = new List<TerrainTriangle>(skirtTris.Length / 3);
-                for (var i = 0; i < skirtTris.Length; i += 3)
-                    skirtTriangleList.Add(new TerrainTriangle
-                    {
-                        V0 = (uint)(skirtTris[i] + pair0LocalVertCountBeforeSkirt),
-                        V1 = (uint)(skirtTris[i + 1] + pair0LocalVertCountBeforeSkirt),
-                        V2 = (uint)(skirtTris[i + 2] + pair0LocalVertCountBeforeSkirt),
-                    });
-
-                model.Vertices.InsertRange(insertVertPos, skirtVertexList);
-                model.Triangles.InsertRange(insertTriPos, skirtTriangleList);
-
-                for (var li = pair0LayerIndex + 1; li < model.Layers.Count; li++)
-                {
-                    model.Layers[li].CumulativeVertices += skirtVertexList.Count;
-                    model.Layers[li].CumulativeIndices += skirtTriangleList.Count * 3;
                 }
             }
         }

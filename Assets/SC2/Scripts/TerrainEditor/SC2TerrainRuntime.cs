@@ -260,18 +260,7 @@ public partial class SC2TerrainRuntime : IDisposable
     /// in" part of the carved-out core footprint in the exported data.</summary>
     public short[] HoleTriPairIndex => _holeTriPairIndex;
 
-    /// <summary>The one Material shared by every chunk (see its own field
-    /// comment above). Exposed so SC2BackgroundSeamSkirt's own small
-    /// stitching mesh can use the EXACT same material/shader (MatCap-based
-    /// editor preview, SC2TerrainView.shader) as the surrounding chunks
-    /// instead of a separately-built one — a background pair with no real
-    /// diffuse texture assigned (the common case before the user paints
-    /// real materials in) renders as a plausible MatCap surface here, but
-    /// as a jarring flat-white-lit-by-raw-sun-color patch through the real
-    /// in-game SC2Terrain.shader (CreateLivePairMaterial) the skirt used to
-    /// build for itself — the two shaders answer "what does no-texture look
-    /// like" completely differently, so anything short of sharing the exact
-    /// same material guarantees a visible seam-vs-body color mismatch.</summary>
+    /// <summary>The one Material shared by every chunk (see its own field comment above).</summary>
     public Material SharedChunkMat => _sharedChunkMat;
 
     /// <summary>Places this runtime's chunk root somewhere other than world
@@ -586,28 +575,6 @@ public partial class SC2TerrainRuntime : IDisposable
         SC2TerrainUv1Unwrap.BuildProfiles(_heights, GridWidth, GridHeight, CellSize, out _uv1ProfileU, out _uv1ProfileV, _uv1HeightWeight);
     }
 
-    /// <summary>Same stretch-compensated tiling coordinate RebuildChunk
-    /// assigns its own chunk vertices, for an external caller whose mesh
-    /// isn't part of this runtime's regular chunk grid — currently only
-    /// SC2BackgroundSeamSkirt's own thin stitching strip, which bridges this
-    /// runtime's edge to another SC2TerrainRuntime's and needs BOTH sides'
-    /// tiling to agree with their real surrounding chunks. Takes this
-    /// runtime's own LOCAL x/z (world space for the core, background-local
-    /// for the background — same frame RebuildChunk itself uses).</summary>
-    public Vector2 SampleUv1Tile(float localX, float localZ)
-    {
-        EnsureUv1Profile();
-        return SC2TerrainUv1Unwrap.Sample(_uv1ProfileU, _uv1ProfileV, GridWidth, GridHeight, CellSize, localX, localZ);
-    }
-
-    /// <summary>SampleUv1Tile that continues past this runtime's own grid edge (see
-    /// SC2TerrainUv1Unwrap.SampleExtended) — for the seam skirt, which reaches beyond the core.</summary>
-    public Vector2 SampleUv1TileExtended(float localX, float localZ)
-    {
-        EnsureUv1Profile();
-        return SC2TerrainUv1Unwrap.SampleExtended(_uv1ProfileU, _uv1ProfileV, GridWidth, GridHeight, CellSize, localX, localZ);
-    }
-
     /// <summary>
     /// Sets (or clears) the costs/terrainTypes brush overlay — see
     /// SC2CostsShell. Unlike an earlier version of this that issued ad-hoc
@@ -895,7 +862,8 @@ public partial class SC2TerrainRuntime : IDisposable
                              int mode,
                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
                              float brushRotationRad = 0f, Vector2 brushMirror = default, bool brushSwapAxes = false,
-                             Vector3 symmetryCenter = default, float slotRotationDeg = 0f)
+                             Vector3 symmetryCenter = default, float slotRotationDeg = 0f,
+                             Vector3 noiseWorldOffset = default)
     {
         if (brushMirror == default) brushMirror = Vector2.one;
         // Noise (mode 4) below needs its OWN mirror/rotation transform, separate from
@@ -962,13 +930,89 @@ public partial class SC2TerrainRuntime : IDisposable
                         canonX = rx; canonZ = rz;
                     }
                     canonX += symmetryCenter.x; canonZ += symmetryCenter.z;
-                    _heights[idx] += (Mathf.PerlinNoise(canonX * .05f, canonZ * .05f) - .5f) * amt * 2;
+                    // noiseWorldOffset: this runtime's own origin in the world (non-zero for the background), so the pattern
+                    // is continuous across the core/background seam instead of restarting at each runtime's own origin.
+                    _heights[idx] += (Mathf.PerlinNoise((canonX + noiseWorldOffset.x) * .05f, (canonZ + noiseWorldOffset.z) * .05f) - .5f) * amt * 2;
                     break;
                 }
             }
             _heights[idx] = SC2TerrainData.ClampHeight(_heights[idx]);
         }
         RebuildDirtyChunks(worldPos, radius);
+    }
+
+    /// <summary>
+    /// Smooth for a brush that reaches both the core and the background. The two grids have the same cell size and line up, so
+    /// together they form ONE lattice (the core's vertices, plus the background's outside the core's rectangle; a vertex on the
+    /// core's perimeter is the same lattice point in both). Smoothing each surface on its own makes the vertices on the seam
+    /// average different neighbours - the core's edge sees no neighbours outside itself - and leaves a step along it. Here
+    /// every lattice vertex under the brush is averaged over ALL its neighbours, whichever surface they belong to, from the heights
+    /// as they were before the dab, and the result is written to both surfaces for a seam vertex, so the two stay level.
+    /// <paramref name="bgOriginX"/>/<paramref name="bgOriginZ"/> are the background's grid index of the core's (0,0) corner.
+    /// </summary>
+    public static void SculptSmoothAcrossSeam(SC2TerrainRuntime core, SC2TerrainRuntime bg, int bgOriginX, int bgOriginZ,
+                                              Vector3 worldPos, float radius, float strength, float hardness,
+                                              Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
+                                              float brushRotationRad = 0f, Vector2 brushMirror = default, bool brushSwapAxes = false)
+    {
+        if (core?._heights == null || bg?._heights == null) return;
+        if (brushMirror == default) brushMirror = Vector2.one;
+        var cell = core.CellSize;
+        var cw = core.GridWidth; var ch = core.GridHeight;
+        var dt = strength * 0.016f * 60f;
+        var r2 = radius * radius;
+
+        bool InCore(int i, int j) => (uint)i <= (uint)cw && (uint)j <= (uint)ch;
+        bool InBackground(int i, int j) => (uint)(i + bgOriginX) <= (uint)bg.GridWidth && (uint)(j + bgOriginZ) <= (uint)bg.GridHeight;
+        bool OnRim(int i, int j) => i == 0 || i == cw || j == 0 || j == ch;
+        float HeightAt(int i, int j) => InCore(i, j)
+            ? core._heights[j * core._stride + i]
+            : bg._heights[(j + bgOriginZ) * bg._stride + i + bgOriginX];
+
+        var x0 = Mathf.Max(-bgOriginX, Mathf.FloorToInt((worldPos.x - radius) / cell));
+        var x1 = Mathf.Min(bg.GridWidth - bgOriginX, Mathf.CeilToInt((worldPos.x + radius) / cell));
+        var z0 = Mathf.Max(-bgOriginZ, Mathf.FloorToInt((worldPos.z - radius) / cell));
+        var z1 = Mathf.Min(bg.GridHeight - bgOriginZ, Mathf.CeilToInt((worldPos.z + radius) / cell));
+
+        var updates = new List<(int i, int j, float h)>();
+        for (var j = z0; j <= z1; j++)
+        for (var i = x0; i <= x1; i++)
+        {
+            if (!InCore(i, j) && !InBackground(i, j)) continue;
+            var dx = i * cell - worldPos.x; var dz = j * cell - worldPos.z;
+            var d2 = dx * dx + dz * dz;
+            if (d2 > r2) continue;
+            var falloff = brushMask != null
+                ? SampleBrushMask(brushMask, brushMaskW, brushMaskH, dx, dz, radius, brushRotationRad, brushMirror, brushSwapAxes)
+                : HardnessFalloff(Mathf.Sqrt(d2) / radius, hardness);
+            var amt = falloff * dt;
+            if (amt <= 0f) continue;
+
+            var sum = 0f; var count = 0;
+            for (var nz = -1; nz <= 1; nz++)
+            for (var nx = -1; nx <= 1; nx++)
+            {
+                if (nx == 0 && nz == 0) continue;
+                if (!InCore(i + nx, j + nz) && !InBackground(i + nx, j + nz)) continue;
+                sum += HeightAt(i + nx, j + nz);
+                count++;
+            }
+            var current = HeightAt(i, j);
+            var smoothed = count > 0 ? Mathf.Lerp(current, sum / count, amt * .5f) : current;
+            updates.Add((i, j, SC2TerrainData.ClampHeight(smoothed)));
+        }
+
+        // Written only after every new height is known, so the result does not depend on the order the vertices were visited in.
+        foreach (var (i, j, h) in updates)
+        {
+            var inCore = InCore(i, j);
+            if (inCore) core._heights[j * core._stride + i] = h;
+            // A vertex outside the core belongs to the background; one on the core's perimeter to both.
+            if ((!inCore || OnRim(i, j)) && InBackground(i, j)) bg._heights[(j + bgOriginZ) * bg._stride + i + bgOriginX] = h;
+        }
+
+        core.RebuildDirtyChunks(worldPos, radius);
+        bg.RebuildDirtyChunks(worldPos + new Vector3(bgOriginX * cell, 0f, bgOriginZ * cell), radius);
     }
 
     /// <summary>
@@ -981,7 +1025,8 @@ public partial class SC2TerrainRuntime : IDisposable
                               ref SC2FlattenPlane lockedPlane, bool lockPlane,
                               Color32[] brushMask = null, int brushMaskW = 0, int brushMaskH = 0,
                               float brushRotationRad = 0f, bool rebuildChunks = true,
-                              Vector2 brushMirror = default, bool brushSwapAxes = false)
+                              Vector2 brushMirror = default, bool brushSwapAxes = false,
+                              System.Action<SC2FlattenPlane> onPlane = null)
     {
         if (brushMirror == default) brushMirror = Vector2.one;
         var r2 = radius * radius;
@@ -1004,6 +1049,9 @@ public partial class SC2TerrainRuntime : IDisposable
                 (dx, dz) => SC2FlattenMath.AreaWeight(radius, dx, dz));
             if (lockPlane) lockedPlane = plane;
         }
+        // The plane this dab used, for a caller that applies the same dab to a second surface and must flatten it to the
+        // very same plane (a stroke over the core/background seam).
+        onPlane?.Invoke(plane);
 
         // Same per-dab power as the other sculpt brushes (SculptBrush's dt).
         var amount = strength * 0.016f * 60f;
@@ -1016,6 +1064,37 @@ public partial class SC2TerrainRuntime : IDisposable
     /// <summary>Rebuilds the chunk meshes within <paramref name="radius"/> of a position — for a caller
     /// that applied several dabs with rebuildChunks off and rebuilds once over the swept area.</summary>
     public void RebuildChunksAround(Vector3 worldPos, float radius) => RebuildDirtyChunks(worldPos, radius);
+
+    /// <summary>Rebuilds exactly the chunks a set of changed vertices can show in: the chunk each one is in, plus the neighbouring
+    /// chunks when it (or the vertex next to it, whose normal it changes) sits on a chunk border. For a few scattered vertex edits
+    /// (SetHeight) over a large grid, where a rebuild by radius would redo every chunk in between.</summary>
+    public void RebuildChunksForVertices(IReadOnlyList<Vector2Int> vertices)
+    {
+        if (vertices == null || vertices.Count == 0) return;
+        var wanted = new HashSet<int>();
+
+        void AddChunksOf(int gx, int gz)
+        {
+            if (gx < 0 || gz < 0 || gx > GridWidth || gz > GridHeight) return;
+            var cx = Mathf.Min(gx / CHUNK_SIZE, _chunksX - 1);
+            var cz = Mathf.Min(gz / CHUNK_SIZE, _chunksZ - 1);
+            wanted.Add(cz * _chunksX + cx);
+            // A vertex exactly on a chunk's low edge is also the high edge of the previous chunk.
+            if (gx > 0 && gx % CHUNK_SIZE == 0 && cx > 0) wanted.Add(cz * _chunksX + cx - 1);
+            if (gz > 0 && gz % CHUNK_SIZE == 0 && cz > 0) wanted.Add((cz - 1) * _chunksX + cx);
+            if (gx > 0 && gz > 0 && gx % CHUNK_SIZE == 0 && gz % CHUNK_SIZE == 0 && cx > 0 && cz > 0)
+                wanted.Add((cz - 1) * _chunksX + cx - 1);
+        }
+
+        foreach (var v in vertices)
+            for (var dz = -1; dz <= 1; dz++)
+                for (var dx = -1; dx <= 1; dx++)
+                    AddChunksOf(v.x + dx, v.y + dz);
+
+        foreach (var index in wanted)
+            if (index >= 0 && index < _chunks.Count)
+                RebuildChunk(_chunks[index]);
+    }
 
     /// <summary>
     /// Set exact height within brush radius with hardness-controlled edge.

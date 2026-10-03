@@ -470,8 +470,6 @@ public class SC2PairsMode
                 // this runs during active sculpting/painting.
                 _win.Runtime?.RecalculateUv1(Data.Uv1HeightWeight);
                 _win.BackgroundRuntime?.RecalculateUv1(Data.Uv1HeightWeight);
-                if (Data.BackgroundTerrainEnabled && Data.BackgroundTerrainData != null)
-                    SC2BackgroundSeamSkirt.Rebuild(Data, _win);
                 _win.MarkDirtyAndRepaint();
             }
             SC2TerrainShell.DrawUnifiedNote("Terrain.bdf's texture coordinates (UV1) already unwrap by real 3D surface distance on every export instead of a flat top-down X/Z projection, so a tiled texture doesn't stretch along steep cliffs/mountains. This button refreshes the EDITOR PREVIEW to match after you've reshaped the terrain — it does not bake or change lighting (that's the separate Bake Lighting button).");
@@ -696,8 +694,15 @@ public class SC2PairsMode
         // exclusive), a bare "pair-{i}" would collide between e.g. core's
         // pair 0 and background's own pair 0 — both DrawCompactSlider calls
         // share one static cached-text dictionary keyed by this string.
-        pair.SimplifyRatio = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"pair-{Data.GetInstanceID()}-{i}",
-            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Simplify Ratio"));
+        if (Data == _win.Data)
+        {
+            pair.SimplifyRatio = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"pair-{Data.GetInstanceID()}-{i}",
+                onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Simplify Ratio"));
+        }
+        else
+        {
+            _win.DrawBackgroundDetailSlider(Data, pair, $"bgpair-{i}");
+        }
 
         EditorGUILayout.Space(4);
         var newMat1Index = MatPicker(i, "D1", pair.Mat1Index);

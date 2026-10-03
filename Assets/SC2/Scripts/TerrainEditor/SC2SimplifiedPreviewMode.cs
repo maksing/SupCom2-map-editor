@@ -18,6 +18,10 @@ public sealed class SC2SimplifiedPreviewMode
     private Material _wireMaterial;
     private Material[] _materials;
     private SC2TerrainBuildResult _lastBuild;
+    // The background's simplified build and its world offset, when the background is on (null otherwise).
+    private SC2TerrainBuildResult _lastBackgroundBuild;
+    private SC2TerrainData _lastBackgroundData;
+    private Vector3 _lastBackgroundOffset;
     private double _buildMs;
     private bool _dirty = true;
     private bool _showWireframe;
@@ -88,6 +92,31 @@ public sealed class SC2SimplifiedPreviewMode
             SC2TerrainShell.EndUnifiedPanelBox();
         }
 
+        var background = _win.ProceduralBackgroundData;
+        if (background != null && background.Pairs.Count > 0)
+        {
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Background", EditorStyles.boldLabel);
+            if (_lastBackgroundBuild != null)
+                EditorGUILayout.LabelField(
+                    $"Source: {_lastBackgroundBuild.SourceTriangleCount:N0} tris, preview: {_lastBackgroundBuild.BuiltTriangleCount:N0} tris, {_lastBackgroundBuild.BuiltVertexCount:N0} verts",
+                    EditorStyles.miniLabel);
+            EditorGUILayout.LabelField($"Exported as about {SC2BackgroundTerrain.EstimateExportTriangles(background):N0} tris (1.0 = {SC2BackgroundTerrain.ExportTriangleBudget:N0})", EditorStyles.miniLabel);
+            for (var i = 0; i < background.Pairs.Count; i++)
+            {
+                var p = background.Pairs[i];
+                SC2TerrainShell.BeginUnifiedPanelBox();
+                EditorGUILayout.BeginHorizontal();
+                var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
+                EditorGUI.DrawRect(swatch, background.PairColor(i));
+                var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
+                EditorGUILayout.LabelField(p.Name, nameStyle, GUILayout.MinWidth(32), GUILayout.ExpandWidth(true));
+                EditorGUILayout.EndHorizontal();
+                _win.DrawBackgroundDetailSlider(background, p, $"simplified-bg-{i}", null, MarkDirty);
+                SC2TerrainShell.EndUnifiedPanelBox();
+            }
+        }
+
         EditorGUILayout.Space(8);
         if (GUILayout.Button("Rebuild Preview", GUILayout.Height(SC2UiScale.Pxf(30f))))
             Rebuild();
@@ -113,15 +142,55 @@ public sealed class SC2SimplifiedPreviewMode
         EnsureObject();
         _win.SetBasePreviewVisiblePublic(false);
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         // Same outer-perimeter lock the real exporter uses (see its own
         // comment) — this preview exists specifically to show what the
         // simplified, export-shaped mesh looks like, so it must protect the
         // map's own edge from simplification the same way export does.
-        _lastBuild = SC2TerrainLayerBuilder.Build(Data, sortByTriangleCount: false, null,
+        SC2TerrainBuildResult BuildCore() => SC2TerrainLayerBuilder.Build(Data, sortByTriangleCount: false, null,
             SC2TerrainSimplifier.FindOuterPerimeterVertices(Data));
-        BuildMesh(_lastBuild);
-        _buildMs = sw.Elapsed.TotalMilliseconds;
+
+        var background = _win.ProceduralBackgroundData;
+        if (background == null)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            _lastBuild = BuildCore();
+            _lastBackgroundBuild = null;
+            _lastBackgroundData = null;
+            BuildMesh(_lastBuild);
+            Finish(sw.Elapsed.TotalMilliseconds);
+            return;
+        }
+
+        // The background's simplification takes seconds: it runs on a worker thread behind the busy plate, and the meshes
+        // are built from its result on the main thread.
+        SC2BusyOverlay.RunInBackground("Building the simplified preview",
+            "Simplifying the core and the background the way the export does. This can take a while.", () =>
+            {
+                var core = Data;
+                return () =>
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    SC2BusyOverlay.Report("Simplifying the core");
+                    var coreBuild = BuildCore();
+                    SC2BusyOverlay.Report("Simplifying the background");
+                    var backgroundBuild = SC2BackgroundTerrain.BuildForExportOrPreview(core, out var offset);
+                    var elapsed = sw.Elapsed.TotalMilliseconds;
+                    return () =>
+                    {
+                        _lastBuild = coreBuild;
+                        _lastBackgroundBuild = backgroundBuild;
+                        _lastBackgroundData = background;
+                        _lastBackgroundOffset = offset;
+                        BuildMesh(_lastBuild);
+                        Finish(elapsed);
+                    };
+                };
+            });
+    }
+
+    private void Finish(double buildMs)
+    {
+        _buildMs = buildMs;
         _dirty = false;
         SceneView.RepaintAll();
         _win.Repaint();
@@ -181,24 +250,10 @@ public sealed class SC2SimplifiedPreviewMode
         var subTris = new List<int[]>();
         var mats = new List<Material>();
 
-        foreach (var layer in build.Layers)
-        {
-            var simplified = layer.Mesh;
-            if (simplified.Triangles == null || simplified.Triangles.Length == 0)
-                continue;
-
-            var offset = verts.Count;
-            verts.AddRange(simplified.Vertices);
-            normals.AddRange(simplified.Normals);
-
-            var tri = new int[simplified.Triangles.Length];
-            for (var i = 0; i < tri.Length; i++)
-                tri[i] = simplified.Triangles[i] + offset;
-            subTris.Add(tri);
-            mats.Add(SC2PreviewMaterialFactory.MakePairColorMaterial(Data, layer.PairIndex, "Simplified"));
-
-            AddProblemOverlay(layer, verts, normals, subTris, mats);
-        }
+        AddBuildLayers(build, Data, Vector3.zero, "Simplified", verts, normals, subTris, mats);
+        // The background's layers are in its own local space; its offset places them in the world.
+        if (_lastBackgroundBuild != null && _lastBackgroundData != null)
+            AddBuildLayers(_lastBackgroundBuild, _lastBackgroundData, _lastBackgroundOffset, "SimplifiedBackground", verts, normals, subTris, mats);
 
         if (_mesh != null) Object.DestroyImmediate(_mesh);
         SC2PreviewMaterialFactory.Destroy(_materials);
@@ -225,6 +280,29 @@ public sealed class SC2SimplifiedPreviewMode
             ? mats.ToArray()
             : new[] { SC2PreviewMaterialFactory.MakeGrey("EmptySimplifiedPreview") };
         _renderer.sharedMaterials = _materials;
+    }
+
+    private void AddBuildLayers(SC2TerrainBuildResult build, SC2TerrainData data, Vector3 worldOffset, string materialName,
+        List<Vector3> verts, List<Vector3> normals, List<int[]> subTris, List<Material> mats)
+    {
+        foreach (var layer in build.Layers)
+        {
+            var simplified = layer.Mesh;
+            if (simplified.Triangles == null || simplified.Triangles.Length == 0)
+                continue;
+
+            var offset = verts.Count;
+            foreach (var v in simplified.Vertices) verts.Add(v + worldOffset);
+            normals.AddRange(simplified.Normals);
+
+            var tri = new int[simplified.Triangles.Length];
+            for (var i = 0; i < tri.Length; i++)
+                tri[i] = simplified.Triangles[i] + offset;
+            subTris.Add(tri);
+            mats.Add(SC2PreviewMaterialFactory.MakePairColorMaterial(data, layer.PairIndex, materialName));
+
+            AddProblemOverlay(layer, data, worldOffset, verts, normals, subTris, mats);
+        }
     }
 
     private void BuildWireframeMesh(List<Vector3> verts, List<int[]> subTris)
@@ -264,6 +342,8 @@ public sealed class SC2SimplifiedPreviewMode
 
     private void AddProblemOverlay(
         SC2TerrainBuiltLayer layer,
+        SC2TerrainData data,
+        Vector3 worldOffset,
         List<Vector3> verts,
         List<Vector3> normals,
         List<int[]> subTris,
@@ -272,9 +352,9 @@ public sealed class SC2SimplifiedPreviewMode
         var problem = layer.Mesh.ProblemOrigTriMap;
         if (problem == null || problem.Length == 0) return;
 
-        Data.InvalidateGeometryCache();
-        var sourceVerts = Data.Vertices;
-        var sourceTris = Data.Triangles;
+        data.InvalidateGeometryCache();
+        var sourceVerts = data.Vertices;
+        var sourceTris = data.Triangles;
         var overlayTris = new int[problem.Length * 3];
         var triCursor = 0;
         for (var i = 0; i < problem.Length; i++)
@@ -283,9 +363,9 @@ public sealed class SC2SimplifiedPreviewMode
             if (sourceTri < 0 || sourceTri * 3 + 2 >= sourceTris.Length) continue;
 
             var offset = verts.Count;
-            verts.Add(sourceVerts[sourceTris[sourceTri * 3]] + Vector3.up * 0.035f);
-            verts.Add(sourceVerts[sourceTris[sourceTri * 3 + 1]] + Vector3.up * 0.035f);
-            verts.Add(sourceVerts[sourceTris[sourceTri * 3 + 2]] + Vector3.up * 0.035f);
+            verts.Add(sourceVerts[sourceTris[sourceTri * 3]] + worldOffset + Vector3.up * 0.035f);
+            verts.Add(sourceVerts[sourceTris[sourceTri * 3 + 1]] + worldOffset + Vector3.up * 0.035f);
+            verts.Add(sourceVerts[sourceTris[sourceTri * 3 + 2]] + worldOffset + Vector3.up * 0.035f);
             normals.Add(Vector3.up);
             normals.Add(Vector3.up);
             normals.Add(Vector3.up);

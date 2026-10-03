@@ -1359,6 +1359,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // it on every single load, not just those two buttons.
         _terrainShell?.Update();
         SC2BusyOverlay.Tick(RepaintGameView);
+        ShowBackgroundNotice();
         TickAutosave();
 
 #if !UNITY_EDITOR
@@ -1386,6 +1387,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// tool is normally used in the Editor OUTSIDE Play mode. Default
     /// interval is 15 minutes (SC2SaveSettings); disabling autosave, or
     /// having no active terrain, simply skips the countdown.</summary>
+    // Tells the user once when a background built for an older, coarser grid was rebuilt at the core's density.
+    private void ShowBackgroundNotice()
+    {
+        var notice = SC2BackgroundTerrain.ConsumeNotice();
+        if (notice != null) SetStatus(notice);
+    }
+
     private void TickAutosave()
     {
         if (_terrainShell == null || _terrainShell.Data == null)
@@ -1466,6 +1474,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Idempotent like the rest: a queued job starts once and the plate
         // is released once, however many ticks reach it in one frame.
         SC2BusyOverlay.Tick(RepaintGameView);
+        ShowBackgroundNotice();
         // Same idempotence as above — TickAutosave only ever fires once real
         // time has actually advanced past the interval, so calling it again
         // from Update() the same frame (Play mode inside the Editor) is a
@@ -7086,7 +7095,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// object-selection (both would otherwise hijack GetViewPivot() via
     /// Selection.activeTransform and break orbit/pan). The background
     /// terrain's own chunk GameObjects (SC2TerrainRuntime, same as the
-    /// core's) and its seam skirt have no MeshCollider at all — same as the
+    /// core's) have no MeshCollider at all — same as the
     /// core's own chunks — so they're never a physics-raycast hit in the
     /// first place and need no exclusion entry here (unlike the old
     /// SC2BackgroundTerrainPreview, which used a real MeshCollider purely
