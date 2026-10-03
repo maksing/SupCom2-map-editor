@@ -312,6 +312,7 @@ public partial class SC2TerrainRuntime
         // Mirrors the stamp's content for a REFLECTED symmetric copy — see SC2SymmetryMath.GetSlotMirror.
         _paintBrushMat.SetVector("_BrushMirror", brushMirror);
         _paintBrushMat.SetFloat("_BrushSwapAxes", brushSwapAxes ? 1f : 0f);
+        ApplyBrushPairLock();
     }
 
     private void DisposeBlendLayers()

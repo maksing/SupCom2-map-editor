@@ -1120,9 +1120,25 @@ public partial class SC2TerrainRuntime : IDisposable
 
     // ── GPU pair paint ────────────────────────────────────────────────────────
 
+    // The pairs the next brush dabs must leave alone (see SC2PairLockSet.ToShaderArray); null = none. Set by SC2PaintMode before
+    // each dab for the tool being used, so it never leaks from one tool to the other.
+    private float[] _brushPairLock;
+
+    public void SetBrushPairLock(float[] lockTable) => _brushPairLock = lockTable;
+
+    private void ApplyBrushPairLock()
+    {
+        if (_paintBrushMat == null) return;
+        _paintBrushMat.SetFloat("_LockMode", _brushPairLock != null ? 1f : 0f);
+        if (_brushPairLock == null) return;
+        _paintBrushMat.SetFloatArray("_PairLock", _brushPairLock);
+        _paintBrushMat.SetTexture("_PairMapTex", PairMapRT);
+    }
+
     public void PaintPair(Vector3 worldPos, float radius, float strength, int pairIdx, bool erase=false)
     {
         if (!EnsureShaders()) return;
+        ApplyBrushPairLock();
         var uvX = worldPos.x / (GridWidth  * CellSize);
         var uvZ = worldPos.z / (GridHeight * CellSize);
         var uvR = Mathf.Max(radius / (GridWidth * CellSize), 0.001f);

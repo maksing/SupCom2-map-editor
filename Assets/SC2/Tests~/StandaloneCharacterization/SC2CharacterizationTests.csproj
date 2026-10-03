@@ -106,6 +106,8 @@
     <!-- Pair border outline band for the blend mask (System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PairOutlineMath.cs" Link="Source\SC2PairOutlineMath.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PairOutlineUpdater.cs" Link="Source\SC2PairOutlineUpdater.cs" />
+    <!-- Pairs a brush must not touch. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2PairLockSet.cs" Link="Source\SC2PairLockSet.cs" />
     <!-- Sun direction -> where a cube's shadow falls (Environment > Sun preview). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SunShadowMath.cs" Link="Source\SC2SunShadowMath.cs" />
     <!-- Point-cloud volume bake (pcloud_up / pcloud_down) and the DXT5 writer for it. -->

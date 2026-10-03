@@ -48,6 +48,20 @@ Shader "Hidden/SC2/PaintBrush"
             float2    _BrushMirror;
             float     _BrushSwapAxes;
 
+            // Pair lock: while _LockMode is 1, a pixel whose pair is flagged in _PairLock (1 = locked; index 255 = no pair) is left as it
+            // is. The pair is read from the render texture being painted for the pair modes (0/1: it IS the pair map) and from
+            // _PairMapTex (the map-wide pair map, point filtered) for the blend modes 2/3/4.
+            sampler2D _PairMapTex;
+            float     _LockMode;
+            float     _PairLock[256];
+
+            bool PairIsLocked(float4 src, float2 uv)
+            {
+                float r = _PaintMode <= 1 ? src.r : tex2Dlod(_PairMapTex, float4(uv, 0, 0)).r;
+                int index = (int)(r * 255.0 + 0.5);
+                return _PairLock[clamp(index, 0, 255)] > 0.5;
+            }
+
             // Applies a soft brush amount (0..1) to a pixel for the blend modes 2/3/4.
             float4 ApplySoft(float4 src, float amt)
             {
@@ -62,6 +76,8 @@ Shader "Hidden/SC2/PaintBrush"
             {
                 float4 src    = tex2D(_MainTex, i.uv);
                 float2 offset = (i.uv - _BrushUV) / _BrushRadius;
+                if (_LockMode > 0.5 && PairIsLocked(src, i.uv))
+                    return src;
 
                 if (_PaintMode >= 2 && _UseCustomBrush > 0.5)
                 {

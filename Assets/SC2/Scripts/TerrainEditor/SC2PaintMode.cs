@@ -64,6 +64,13 @@ public class SC2PaintMode
     // While on, a finished stroke outlines the border of the cells it newly gave to the pair, on the group's "Outline"
     // blend mask layer, and clears outlines that are no longer along a pair border. Only cells that changed to the pair in
     // this stroke are outlined, so repainting existing areas draws nothing new.
+    // Pairs the brush must not touch: one set for the Assign Pairs brush (cells of a locked pair keep their pair) and one for the
+    // Blend Mask brush (nothing is painted on the cells of a locked pair). Kept for the session.
+    private readonly SC2PairLockSet _assignLock = new SC2PairLockSet();
+    private readonly SC2PairLockSet _blendLock = new SC2PairLockSet();
+    private float[] _lockBuffer;
+    private bool _assignLockFoldout, _blendLockFoldout;
+
     private bool  _autoOutline = false;
     private float _outlineWidth = 8f;
     private float _outlineSoftness = 0.5f;
@@ -153,6 +160,43 @@ public class SC2PaintMode
     }
 
     /// <summary>The pair chooser (with its colour swatch) used by the Assign Pairs panel.</summary>
+    /// <summary>"Lock pairs": a foldout with one toggle per pair (and one for the cells that have no pair), plus Lock all / Unlock /
+    /// Invert. A locked pair is left alone by the brush.</summary>
+    private void DrawPairLocks(float w, string title, SC2PairLockSet locks, ref bool foldout, string whatLockMeans)
+    {
+        var count = Data.Pairs.Count;
+        var lockedCount = 0;
+        for (var i = 0; i < count; i++) if (locks.IsLocked(i)) lockedCount++;
+        if (locks.IsLocked(-1)) lockedCount++;
+        if (!SC2EnvFieldGui.Foldout(ref foldout, lockedCount > 0 ? $"{title} ({lockedCount} locked)" : title)) return;
+
+        for (var i = 0; i < count; i++)
+        {
+            EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+            var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(12f), SC2UiScale.Pxf(16f), GUILayout.Width(SC2UiScale.Pxf(12f)), GUILayout.Height(SC2UiScale.Pxf(16f)));
+            EditorGUI.DrawRect(swatch, Data.PairColor(i));
+            locks.Set(i, EditorGUILayout.ToggleLeft(Data.Pairs[i].Name, locks.IsLocked(i), GUILayout.Width(Mathf.Max(60f, w - 20f))));
+            EditorGUILayout.EndHorizontal();
+        }
+        locks.Set(-1, EditorGUILayout.ToggleLeft("(no pair)", locks.IsLocked(-1), GUILayout.Width(w), GUILayout.MaxWidth(w)));
+
+        var bw = Mathf.Max(40f, (w - 8f) / 3f);
+        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+        if (GUILayout.Button("Lock all", GUILayout.Width(bw))) locks.LockAll(count);
+        if (GUILayout.Button("Unlock", GUILayout.Width(bw))) locks.UnlockAll();
+        if (GUILayout.Button("Invert", GUILayout.Width(bw))) locks.Invert(count);
+        EditorGUILayout.EndHorizontal();
+        SC2TerrainShell.DrawUnifiedNote(whatLockMeans);
+    }
+
+    /// <summary>The lock table for the brush shader, or null when nothing is locked.</summary>
+    private float[] LockTableOrNull(SC2PairLockSet locks)
+    {
+        if (!locks.Any) return null;
+        _lockBuffer = locks.ToShaderArray(_lockBuffer);
+        return _lockBuffer;
+    }
+
     void DrawAssignPairPopup(float w)
     {
         // Pair selector with colour swatches
@@ -176,6 +220,8 @@ public class SC2PaintMode
 
         var w = SC2TerrainShell.GetPanelContentWidth();
         DrawAssignPairPopup(w);
+        DrawPairLocks(w, "Lock pairs", _assignLock, ref _assignLockFoldout,
+            "A locked pair keeps its cells: the brush, Select+Assign and Assign ALL do not overwrite them. To paint only over some pairs, press Lock all and untick those pairs.");
 
         _autoOutline = EditorGUILayout.Toggle("Auto outline (D2)", _autoOutline, GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (_autoOutline)
@@ -211,16 +257,29 @@ public class SC2PaintMode
                $"All triangles → '{Data.Pairs[_assignPair].Name}'?", "Yes", "Cancel"))
         {
             _win.RecordUndoCheckpointFor(Data, "Assign All");
-            // Fill PairMapRT with pair index colour via blit
-            if (_win.ActiveRuntime != null)
+            short[] assignAllBefore;
+            if (_assignLock.Any)
             {
-                var prev = RenderTexture.active;
-                RenderTexture.active = _win.ActiveRuntime.PairMapRT;
-                GL.Clear(false, true, new Color(_assignPair / 255f, 0, 0, 1));
-                RenderTexture.active = prev;
+                // Locked pairs keep their cells: assign on the CPU array, skipping them, then push it to the GPU map.
+                SyncPairMapToCPU();
+                assignAllBefore = (short[])Data.TrianglePairIndex.Clone();
+                for (var ti = 0; ti < Data.TrianglePairIndex.Length; ti++)
+                    if (!_assignLock.IsLocked(Data.TrianglePairIndex[ti])) Data.AssignTriangleToPair(ti, _assignPair);
+                _win.ActiveRuntime?.RestorePairMapFromData(Data);
             }
-            var assignAllBefore = (short[])Data.TrianglePairIndex.Clone();
-            Data.AssignAllTrianglesToPair(_assignPair);
+            else
+            {
+                // Fill PairMapRT with pair index colour via blit
+                if (_win.ActiveRuntime != null)
+                {
+                    var prev = RenderTexture.active;
+                    RenderTexture.active = _win.ActiveRuntime.PairMapRT;
+                    GL.Clear(false, true, new Color(_assignPair / 255f, 0, 0, 1));
+                    RenderTexture.active = prev;
+                }
+                assignAllBefore = (short[])Data.TrianglePairIndex.Clone();
+                Data.AssignAllTrianglesToPair(_assignPair);
+            }
             OutlineNewlyPaintedCells(Data, _assignPair, assignAllBefore, syncFirst: false);
             _win.MarkDirtyAndRepaint();
         }
@@ -266,6 +325,8 @@ public class SC2PaintMode
             _win.ActiveRuntime?.SetActivePairForBlend(_rnmPair, Data);
         }
         DrawLayerPanel(w);
+        DrawPairLocks(w, "Lock pairs", _blendLock, ref _blendLockFoldout,
+            "The brush does not paint on the cells of a locked pair. To paint only on some pairs, press Lock all and untick those pairs. Reset and Fill still act on the whole layer.");
         _rnmBlend = SC2TerrainShell.DrawCompactSlider("Blend alpha", _rnmBlend, 0f, 1f);
         EditorGUILayout.LabelField(
             _rnmBlend < .1f ? "← D1 (base)" :
@@ -1218,8 +1279,10 @@ public class SC2PaintMode
         else
         {
             // GPU paint — single blit per symmetric position
+            _win.ActiveRuntime.SetBrushPairLock(LockTableOrNull(_assignLock));
             foreach (var worldPos in _win.Data.GetSymmetricPositions(_brushPos))
                 _win.ActiveRuntime.PaintPair(worldPos - offset, _radius, _strength, _assignPair);
+            _win.ActiveRuntime.SetBrushPairLock(null);
             _win.MarkPairCpuDataStale();
             // Immediately update PairColor RT for real-time preview — same
             // call SC2TerrainShell.RepaintPairColorRTPublic makes for the
@@ -1327,7 +1390,9 @@ public class SC2PaintMode
             // returns the CONTENT rotation; negated here because _BrushRotation rotates the sample
             // offset, the inverse operation (see that method's own doc comment).
             var extraRotationRad = -SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
+            _win.ActiveRuntime.SetBrushPairLock(LockTableOrNull(_blendLock));
             _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, _rnmRemoveFromLayer);
+            _win.ActiveRuntime.SetBrushPairLock(null);
         }
         // With editing layers the dabs above went into the active layer; flatten them into the mask once per tick.
         _win.ActiveRuntime.RecompositeBlendIfDirty();
@@ -1341,7 +1406,11 @@ public class SC2PaintMode
     {
         _win.RecordUndoCheckpointFor(Data, "Assign Selection");
         var selectionBefore = (short[])Data.TrianglePairIndex.Clone();
-        foreach (var ti in _sel) Data.AssignTriangleToPair(ti, _assignPair);
+        foreach (var ti in _sel)
+        {
+            if (_assignLock.Any && ti >= 0 && ti < Data.TrianglePairIndex.Length && _assignLock.IsLocked(Data.TrianglePairIndex[ti])) continue;
+            Data.AssignTriangleToPair(ti, _assignPair);
+        }
         _sel.Clear();
         OutlineNewlyPaintedCells(Data, _assignPair, selectionBefore, syncFirst: false);
         _win.MarkDirtyAndRepaint();
