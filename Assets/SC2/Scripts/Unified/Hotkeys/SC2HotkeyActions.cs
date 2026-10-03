@@ -71,7 +71,7 @@ public static class SC2HotkeyActions
 
         new SC2HotkeyAction("Objects.ConnectMarkers", "Connect selected markers", SC2HotkeyCategory.Objects, Key(KeyCode.R, ctrl: true)),
         new SC2HotkeyAction("Objects.DisconnectMarkers", "Disconnect selected markers", SC2HotkeyCategory.Objects, Key(KeyCode.R, alt: true)),
-        new SC2HotkeyAction("Objects.RotateGesture", "Start rotate gesture", SC2HotkeyCategory.Objects, Key(KeyCode.R)),
+        new SC2HotkeyAction("Objects.RotateGesture", "Start rotate gesture (then X / Y / Z limits it to an axis, a typed number sets the angle)", SC2HotkeyCategory.Objects, Key(KeyCode.R)),
         new SC2HotkeyAction("Objects.ScaleGesture", "Start scale gesture", SC2HotkeyCategory.Objects, Key(KeyCode.S)),
         new SC2HotkeyAction("Objects.LiveRotateWhilePlacing", "Hold to rotate while placing", SC2HotkeyCategory.Objects, Key(KeyCode.E)),
         new SC2HotkeyAction("Objects.DeleteSelection", "Delete selection", SC2HotkeyCategory.Objects, Key(KeyCode.Delete), Key(KeyCode.Backspace)),

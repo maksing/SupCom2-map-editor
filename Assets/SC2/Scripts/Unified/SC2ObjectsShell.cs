@@ -5311,6 +5311,12 @@ public sealed class SC2ObjectsShell
     private Vector2 _gestureAnchorScreen;
     private Vector2 _gestureStartMouse;
     private float _gestureStartDistance;
+    // Rotate gesture, like Blender: R, then X / Y / Z limits the turn to that world axis (the same key again = the prop's own axis,
+    // a third press = free again), and a typed number sets the angle (Backspace edits it, - flips the sign).
+    private SC2RotationAxis _gestureAxis = SC2RotationAxis.None;
+    private bool _gestureAxisLocal;
+    private string _gestureTyped = "";
+    private Camera _gestureCamera;
     private readonly List<(SC2ObjProp prop, Quaternion originalRotation, float originalScale)> _gestureItems = new();
     // Rotation/scale of the symmetry siblings (not selected themselves) of the gesture's props at
     // its start, so every frame recomputes them from there and Esc can restore them.
@@ -6257,6 +6263,10 @@ public sealed class SC2ObjectsShell
         {
             _propsGestureKind = SC2Hotkeys.Matches("Objects.RotateGesture", Event.current) ? PropsGestureKind.Rotate : PropsGestureKind.Scale;
             _gestureAnchorScreen = gestureAnchorScreen;
+            _gestureAxis = SC2RotationAxis.None;
+            _gestureAxisLocal = false;
+            _gestureTyped = "";
+            _gestureCamera = camera;
             _gestureStartMouse = mousePosition;
             _gestureStartDistance = Mathf.Max(1f, Vector2.Distance(gestureAnchorScreen, mousePosition));
             _gestureItems.Clear();
@@ -7137,9 +7147,31 @@ public sealed class SC2ObjectsShell
             _propsGestureKind = PropsGestureKind.None;
             _gestureItems.Clear();
             _gestureSiblingOriginals.Clear();
+            _gestureCamera = null;
             e.Use();
             RepaintHost?.Invoke();
             return;
+        }
+
+        // R then X / Y / Z, and typing an angle, as in Blender.
+        if (_propsGestureKind == PropsGestureKind.Rotate && e != null && e.type == EventType.KeyDown)
+        {
+            var pressed = e.keyCode == KeyCode.X ? SC2RotationAxis.X : e.keyCode == KeyCode.Y ? SC2RotationAxis.Y : e.keyCode == KeyCode.Z ? SC2RotationAxis.Z : SC2RotationAxis.None;
+            if (pressed != SC2RotationAxis.None && !e.control && !e.alt && !e.command)
+            {
+                (_gestureAxis, _gestureAxisLocal) = SC2AxisRotation.Press(_gestureAxis, _gestureAxisLocal, pressed);
+                e.Use();
+            }
+            else if (e.keyCode == KeyCode.Backspace)
+            {
+                _gestureTyped = SC2AxisRotation.DropLastTyped(_gestureTyped);
+                e.Use();
+            }
+            else if (e.character != '\0')
+            {
+                var next = SC2AxisRotation.AppendTyped(_gestureTyped, e.character);
+                if (next != _gestureTyped) { _gestureTyped = next; e.Use(); }
+            }
         }
         if (e != null && e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
         {
@@ -7158,6 +7190,7 @@ public sealed class SC2ObjectsShell
             _gestureSiblingOriginals.Clear();
             _propsGestureKind = PropsGestureKind.None;
             _gestureItems.Clear();
+            _gestureCamera = null;
             _lastActionSummary = "Cancelled.";
             e.Use();
             RepaintHost?.Invoke();
@@ -7166,24 +7199,39 @@ public sealed class SC2ObjectsShell
 
         if (_propsGestureKind == PropsGestureKind.Rotate)
         {
+            var typedAngle = SC2AxisRotation.TryParseTyped(_gestureTyped, out var typedDegrees);
             var startVec = _gestureStartMouse - _gestureAnchorScreen;
             var currentVec = mousePosition - _gestureAnchorScreen;
-            if (startVec.sqrMagnitude > 4f && currentVec.sqrMagnitude > 4f)
+            var mouseDriven = startVec.sqrMagnitude > 4f && currentVec.sqrMagnitude > 4f;
+            if (typedAngle || mouseDriven)
             {
-                var startAngle = Mathf.Atan2(startVec.y, startVec.x);
-                var currentAngle = Mathf.Atan2(currentVec.y, currentVec.x);
-                // Negated: GUI-space Y increases downward, the opposite of
-                // the math convention atan2 assumes, so a raw angle delta
-                // here would spin the object the "wrong" way relative to
-                // how the mouse visibly circled the pivot on screen.
-                var deltaDegrees = -(currentAngle - startAngle) * Mathf.Rad2Deg;
+                // The mouse angle; a typed number replaces it.
+                var deltaDegrees = typedDegrees;
+                if (!typedAngle)
+                {
+                    var startAngle = Mathf.Atan2(startVec.y, startVec.x);
+                    var currentAngle = Mathf.Atan2(currentVec.y, currentVec.x);
+                    // Negated: GUI-space Y increases downward, the opposite of
+                    // the math convention atan2 assumes, so a raw angle delta
+                    // here would spin the object the "wrong" way relative to
+                    // how the mouse visibly circled the pivot on screen.
+                    deltaDegrees = -(currentAngle - startAngle) * Mathf.Rad2Deg;
+                }
                 var gestureIds = new HashSet<int>(_gestureItems.Select(x => x.prop.Id));
                 foreach (var (prop, originalRotation, _) in _gestureItems)
                 {
-                    prop.Rotation = originalRotation * Quaternion.Euler(0f, deltaDegrees, 0f);
+                    // With an axis, the mouse turns the prop the way it circles on screen whichever way the axis points to the camera.
+                    var viewSign = !typedAngle && _gestureCamera != null
+                        ? SC2AxisRotation.ViewSign(_gestureAxis, _gestureAxisLocal, originalRotation, _gestureCamera.transform.forward) : 1f;
+                    prop.Rotation = SC2AxisRotation.Apply(originalRotation, _gestureAxis, _gestureAxisLocal, deltaDegrees * viewSign);
                     PropagateSymmetryRotationScale(prop, originalRotation, _gestureSiblingOriginals, gestureIds, applyScale: false);
                 }
-                _lastActionSummary = $"Rotate: {deltaDegrees:0.#}° — click/Enter to confirm, Esc to cancel.";
+                var axisText = SC2AxisRotation.Describe(_gestureAxis, _gestureAxisLocal);
+                _lastActionSummary = $"Rotate{(axisText.Length > 0 ? " " + axisText : "")}: {(typedAngle ? _gestureTyped : deltaDegrees.ToString("0.#"))}° — X/Y/Z axis (again: local), type an angle, click/Enter to confirm, Esc to cancel.";
+            }
+            else if (_gestureAxis != SC2RotationAxis.None)
+            {
+                _lastActionSummary = $"Rotate {SC2AxisRotation.Describe(_gestureAxis, _gestureAxisLocal)} — move the mouse or type an angle, click/Enter to confirm, Esc to cancel.";
             }
         }
         else if (_propsGestureKind == PropsGestureKind.Scale)
