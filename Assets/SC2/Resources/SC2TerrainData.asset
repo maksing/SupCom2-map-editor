@@ -66220,6 +66220,7 @@ MonoBehaviour:
   RnmBakeOverrideSunIntensity: 1
   RnmBakeOverrideShadowColor: {r: 0.64, g: 0.77, b: 0.92, a: 1}
   RnmBakeShadowSoftRadius: 6
+  RnmShadowExclusions: []
   ImportedRnmBakedRgba: 
   ImportedRnmWidth: 0
   ImportedRnmHeight: 0
