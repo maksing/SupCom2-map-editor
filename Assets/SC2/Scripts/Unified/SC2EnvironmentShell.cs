@@ -189,7 +189,11 @@ public sealed class SC2EnvironmentShell
             case 3: _drawer.DrawFogTab(m); break;
             case 4: _drawer.DrawGlowTab(m); break;
             case 5: _drawer.DrawBloomTab(m); break;
-            case 6: _drawer.DrawPointCloudTab(m); break;
+            case 6:
+                _drawer.DrawPointCloudTab(m);
+                // The bake that fills the volumes lives with their info.bdf fields; it works on the terrain data, not on `m`.
+                _terrainShell.DrawPointCloudBakeSection();
+                break;
             case 7: _drawer.DrawFogOfWarTab(m); break;
             case 8: _drawer.DrawIntelTab(m); break;
             case 9: _drawer.DrawDepthOfFieldTab(m); break;

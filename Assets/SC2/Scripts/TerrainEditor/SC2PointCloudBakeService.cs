@@ -4,7 +4,7 @@ using BdfIO.Formats.Hfield;
 using BdfIO.Formats.Info;
 using SC2.MapEditor.Document;
 
-/// <summary>Lighting Bake > Bake Point Cloud: runs SC2PointCloudBaker over the terrain (core, background, imported
+/// <summary>Environment > Point Clouds > Bake Point Cloud: runs SC2PointCloudBaker over the terrain (core, background, imported
 /// terrain.bdf objects; no props) and stores the two volumes as DXT5 volume DDS files on SC2TerrainData. The
 /// ground light comes from the map's baked RNM lighting when Bake Lighting has run, a flat mid value otherwise.
 /// Export writes the files; the bake never runs on export.</summary>

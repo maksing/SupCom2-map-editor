@@ -1302,7 +1302,7 @@ public static class SC2TerrainExporter
         // old "{safe}_0/1/2.win.dds" trio behind forever. rnmCache's keys
         // are the complete set of mask-name stems ExportRnmMaskByName
         // actually wrote/kept this run.
-        // Lighting Bake > Bake Point Cloud: the two unit-lighting volumes are written as baked.
+        // Environment > Point Clouds > Bake Point Cloud: the two unit-lighting volumes are written as baked.
         if (hasPointCloud)
         {
             try

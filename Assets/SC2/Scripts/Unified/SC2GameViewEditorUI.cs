@@ -925,6 +925,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     public SC2TerrainShell TerrainShell => _terrainShell;
     private int _terrainShellLastSubtab = -1;
     private GUIStyle _panelStyle;
+    // The panel's padding on the left, top and bottom only: the right edge of a panel belongs to its scrollbar, which sits flush
+    // against it (see DrawMainPanel). The header variant has no bottom padding, so the scrolled content starts right below it.
+    private GUIStyle _panelContentStyle;
+    private GUIStyle _panelHeaderStyle;
     private GUIStyle _headerStyle;
     private GUIStyle _titleStyle;
     private GUIStyle _tabStyle;
@@ -988,29 +992,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private Vector2 _panelScroll;
     // Horizontal-only scroll position for DrawSubtabs' compact-mode strip.
     private Vector2 _subtabsScroll;
-    // Reserved so PanelContentWidth accounts for the vertical scrollbar
-    // DrawMainPanel's scroll view can show — matches Unity's own default
-    // vertical scrollbar width closely enough that content never has to
-    // fight the scrollbar for the last few pixels on the right edge.
-    // Scaled through SC2UiScale — sliders/text fields
-    // used to render out past their row's own right edge, into where the
-    // NOW-WIDER scrollbar (SC2UnifiedSkin's verticalScrollbar.fixedWidth,
-    // also scaled) actually sits. This constant staying fixed meant every
-    // shell's own `w` parameter (PanelContentWidth, threaded through as
-    // panelWidth to every DrawEmbeddedGUI call) was computed too WIDE
-    // once Scale grew the real scrollbar past this old 16px assumption.
-    // Was 16f — content used to be left with a visible
-    // dead gap between its own right edge and the real scrollbar, not
-    // flush against it. SC2UnifiedSkin.StyleScrollbar (the style this
-    // panel's GUILayout.BeginScrollView actually renders with, since
-    // GUI.skin = SC2UnifiedSkin.Get() for the whole draw) sets the real
-    // vertical scrollbar's fixedWidth to SC2UiScale.Pxf(10f), not 16f —
-    // this was over-reserving by 6px worth of scale for no reason, and
-    // reserving it UNCONDITIONALLY even on tabs whose content doesn't
-    // actually overflow (so no scrollbar draws at all, but the gap was
-    // still there). Matching the real style's own width exactly removes
-    // that dead strip.
+    // The vertical scrollbar of a side panel is always shown and sits flush against the panel's outer edge, so its width is
+    // taken off the width every shell is given. It is the width SC2UnifiedSkin.StyleScrollbar gives the style
+    // (SC2UiScale.Pxf(10f)); a different value would let content run under the bar or leave a dead strip beside it.
     private static float PanelScrollbarWidth => SC2UiScale.Pxf(10f);
+    // The strip left between the content and the scrollbar, so controls whose own margins stick out a little past their row
+    // still stay clear of the bar.
+    private static float PanelContentGap => SC2UiScale.Pxf(6f);
 
     /// <summary>
     /// Actual width of the embedded inspector panel. EditorGUIUtility.currentViewWidth
@@ -1022,7 +1010,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// like Radius/Height/Map Name. Consumers should use this instead.
     /// </summary>
     public float PanelWidth => _panelRect.width;
-    public float PanelContentWidth => Mathf.Max(1f, _panelRect.width - (_panelStyle != null ? _panelStyle.padding.horizontal : 20f) - PanelScrollbarWidth);
+    public float PanelContentWidth => Mathf.Max(1f, _panelRect.width - (_panelStyle != null ? _panelStyle.padding.left : 10f) - PanelContentGap - PanelScrollbarWidth);
     public GUIStyle TitleTextStyle => _titleStyle;
     public GUIStyle SmallTextStyle => _miniTextStyle;
     private Rect _fileMenuRect;
@@ -1045,7 +1033,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // the rightmost slice of every row (each unit's own "x" delete button,
     // sitting at the row's far right edge), making it visually present but
     // unclickable — the scrollbar's own input consumed the click instead.
-    public float ReferencePanelContentWidth => Mathf.Max(1f, _referencePanelRect.width - (_panelStyle != null ? _panelStyle.padding.horizontal : 12f) - PanelScrollbarWidth);
+    public float ReferencePanelContentWidth => Mathf.Max(1f, _referencePanelRect.width - (_panelStyle != null ? _panelStyle.padding.left : 10f) - PanelContentGap - PanelScrollbarWidth);
     private Vector3 _mapViewCenter = DefaultMapCenter;
     private float _mapViewSize = 512f;
     private bool _viewTransitionActive;
@@ -1844,6 +1832,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             margin = new RectOffset(0, 0, 0, 0),
             border = new RectOffset(0, 0, 0, 0),
             normal = { background = _panelTexture, textColor = ColorTextPrimary }
+        };
+        _panelContentStyle = new GUIStyle(GUIStyle.none)
+        {
+            padding = new RectOffset(_panelStyle.padding.left, 0, _panelStyle.padding.top, _panelStyle.padding.bottom),
+            margin = new RectOffset(0, 0, 0, 0),
+        };
+        _panelHeaderStyle = new GUIStyle(GUIStyle.none)
+        {
+            padding = new RectOffset(_panelStyle.padding.left, 0, _panelStyle.padding.top, 0),
+            margin = new RectOffset(0, 0, 0, 0),
         };
         _headerStyle = new GUIStyle(GUIStyle.none)
         {
@@ -2901,16 +2899,21 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         DrawSolidRect(_panelRect, ColorBg, _panelTexture);
         DrawSolidRect(new Rect(_panelRect.xMax - 1f, _panelRect.y, 1f, _panelRect.height), ColorDivider, _dividerTexture);
 
-        GUILayout.BeginArea(_panelRect, _panelStyle);
+        // The area is the whole panel, with no padding of its own: the scrollbar of the one scroll view below has to sit flush
+        // against the panel's right edge, which a padded area would keep it from reaching.
+        GUILayout.BeginArea(_panelRect);
+        // What a tab wants to keep in view while its content scrolls (Terrain's preview toolbar) is drawn above the scroll view.
+        if (_mainTab == 0) DrawTerrainPinnedHeader();
         // Scrollable: some tabs' content (e.g. Environment's merged Water
         // tab, 6 foldouts that can all be expanded at once) can legitimately
         // exceed the panel's fixed height — previously just clipped/
         // inaccessible below the fold with no way to reach it, since
-        // BeginArea alone doesn't scroll.
-        var outerWidth = Mathf.Max(1f, _panelRect.width - _panelStyle.padding.horizontal);
-        var outerHeight = Mathf.Max(1f, _panelRect.height - _panelStyle.padding.vertical);
-        _panelScroll = GUILayout.BeginScrollView(_panelScroll, GUILayout.Width(outerWidth), GUILayout.Height(outerHeight));
-        GUILayout.BeginVertical(GUILayout.Width(PanelContentWidth));
+        // BeginArea alone doesn't scroll. The vertical bar is always shown, so it is in the same place on every tab whether or
+        // not the content happens to overflow; the horizontal one never is (nothing in a panel should need it).
+        _panelScroll = GUILayout.BeginScrollView(_panelScroll, false, true, GUIStyle.none, GUI.skin.verticalScrollbar, GUIStyle.none,
+            GUILayout.Width(_panelRect.width), GUILayout.ExpandHeight(true));
+        _panelScroll.x = 0f;
+        GUILayout.BeginVertical(_panelContentStyle, GUILayout.Width(_panelRect.width - PanelScrollbarWidth));
         {
             switch (_mainTab)
             {
@@ -2948,9 +2951,21 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
         GUILayout.EndVertical();
         GUILayout.EndScrollView();
+        _panelScroll.x = 0f;
         GUILayout.EndArea();
 
         // Child IMGUI controls must receive MouseDown/MouseUp normally.
+    }
+
+    /// <summary>The Terrain tab's preview-mode toolbar, kept above the scrolled content so it stays in reach.</summary>
+    private void DrawTerrainPinnedHeader()
+    {
+        EnsureTerrainShell();
+        SyncTerrainShellSubtab();
+        TryAdoptTerrainData();
+        GUILayout.BeginVertical(_panelHeaderStyle, GUILayout.Width(_panelRect.width));
+        _terrainShell.DrawEmbeddedHeader(PanelContentWidth);
+        GUILayout.EndVertical();
     }
 
     /// <summary>Compact right-side panel (View menu > "Reference Panel",
@@ -2981,18 +2996,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var contentAreaRect = new Rect(_referencePanelRect.x, _referencePanelRect.y + gizmoClearance,
             _referencePanelRect.width, Mathf.Max(1f, _referencePanelRect.height - gizmoClearance));
 
-        GUILayout.BeginArea(contentAreaRect, _panelStyle);
-        var outerWidth = Mathf.Max(1f, contentAreaRect.width - _panelStyle.padding.horizontal);
-        var outerHeight = Mathf.Max(1f, contentAreaRect.height - _panelStyle.padding.vertical);
+        // Same layout as DrawMainPanel: no padding on the area, so the always-shown scrollbar sits flush against the panel's edge.
+        GUILayout.BeginArea(contentAreaRect);
         // Horizontal scrollbar explicitly suppressed (GUIStyle.none): this
         // column's own content width is capped to ReferencePanelContentWidth
         // everywhere below (see DrawRightPanelSection's own MaxWidth calls),
         // so any width overflow is a bug to fix at the source, not something
         // to let the user scroll sideways to see.
-        _referencePanelScroll = GUILayout.BeginScrollView(_referencePanelScroll, false, false,
+        _referencePanelScroll = GUILayout.BeginScrollView(_referencePanelScroll, false, true,
             GUIStyle.none, GUI.skin.verticalScrollbar, GUIStyle.none,
-            GUILayout.Width(outerWidth), GUILayout.Height(outerHeight));
-        GUILayout.BeginVertical(GUILayout.Width(ReferencePanelContentWidth));
+            GUILayout.Width(contentAreaRect.width), GUILayout.Height(contentAreaRect.height));
+        _referencePanelScroll.x = 0f;
+        GUILayout.BeginVertical(_panelContentStyle, GUILayout.Width(contentAreaRect.width - PanelScrollbarWidth));
         {
             var contentWidth = ReferencePanelContentWidth;
             var measureOn = GUILayout.Toggle(_tool == "Measure", "Measure", _dropdownToggleStyle, GUILayout.MaxWidth(contentWidth));

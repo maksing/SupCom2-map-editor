@@ -997,7 +997,7 @@ public static class SC2RuntimeTerrainPersistence
         public Color RnmBakeOverrideShadowColor = new Color(0.64f, 0.77f, 0.92f, 1f);
         public int RnmBakeShadowSoftRadius = 6;
         public string[] RnmShadowExclusions;
-        // Lighting Bake > Point Cloud. PointCloudStored tells a save that has these from an older one where
+        // Environment > Point Clouds. PointCloudStored tells a save that has these from an older one where
         // JsonUtility left the settings at zero.
         public bool PointCloudStored;
         public float PointCloudSkyR, PointCloudSkyG, PointCloudSkyB;

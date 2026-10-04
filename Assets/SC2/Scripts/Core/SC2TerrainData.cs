@@ -571,7 +571,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
         ImportedRnmBakedRgba.Length == ImportedRnmWidth * ImportedRnmHeight * 4 && ImportedRnmWidth > 0 && ImportedRnmHeight > 0;
 
     [Header("Point cloud (unit lighting)")]
-    /// <summary>Lighting Bake > Point Cloud: the sky light colour and its intensity, how much of the baked ground
+    /// <summary>Environment > Point Clouds: the sky light colour and its intensity, how much of the baked ground
     /// light a unit picks up from below, how much sky light leaks into the lower hemisphere, the blur growth per
     /// slice (in texels), and whether the terrain's sun shadow goes into the alpha. See SC2PointCloudBaker.</summary>
     public Color PointCloudSkyColor = new Color(0.75f, 0.88f, 1f, 1f);
@@ -586,7 +586,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     public Vector3 PointCloudBoxOrigin;
     public Vector3 PointCloudBoxSize;
     /// <summary>The last baked volumes as complete DXT5 volume DDS files (pcloud_up / pcloud_down), null until
-    /// Lighting Bake > Bake Point Cloud has run. Export writes them as they are; the box they were baked for
+    /// Environment > Point Clouds > Bake Point Cloud has run. Export writes them as they are; the box they were baked for
     /// is the info.bdf PointCloudOrigin/Size at that moment.</summary>
     public byte[] PointCloudUpDds;
     public byte[] PointCloudDownDds;

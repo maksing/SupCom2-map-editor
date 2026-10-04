@@ -517,7 +517,10 @@ namespace UnityEditor
         public static bool Foldout(bool foldout, string content, bool toggleOnLabelClick, GUIStyle style)
         {
             var label = (foldout ? "▾ " : "▸ ") + content;
-            if (GUILayout.Button(label, style ?? GUI.skin.label))
+            // A foldout without a label (a card header that draws its own title next to the arrow) must be just the arrow, not
+            // a button that expands across the row and pushes the rest of it out of the panel.
+            var onlyArrow = string.IsNullOrEmpty(content);
+            if (onlyArrow ? GUILayout.Button(label, style ?? GUI.skin.label, GUILayout.ExpandWidth(false)) : GUILayout.Button(label, style ?? GUI.skin.label))
                 foldout = !foldout;
             return foldout;
         }

@@ -141,10 +141,13 @@ public class SC2PaintMode
     {
         var w = SC2TerrainShell.GetPanelContentWidth();
         EditorGUILayout.BeginVertical(GUILayout.Width(w), GUILayout.MaxWidth(w));
+        // Each group of controls gets its own heading and a gap above it, so the grids and sliders do not run together.
+        SC2TerrainShell.DrawUnifiedSectionLabel("Paint mode");
         var modeLabels = new[] { "Assign Pairs", "Blend Mask" };
         _sub = (Sub)SC2TerrainShell.DrawUnifiedSegmentGrid((int)_sub, modeLabels, 2);
 
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Brush settings");
         _radius   = SC2TerrainShell.DrawCompactSlider("Radius",   _radius,   1f, 1000f);
         _strength = SC2TerrainShell.DrawCompactSlider("Strength", _strength, 0.01f, 1f);
         SC2TerrainShell.DrawUnifiedNote("Shift+Scroll = Radius   Ctrl+Scroll = Strength");
@@ -349,7 +352,8 @@ public class SC2PaintMode
 
         // Brush shape is a shared setting, always the CORE's own _win.Data —
         // see SC2GeometryMode's own header comment for why.
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Brush shape");
         var brushShapeLabels = new[] { "Round", "Custom" };
         var nextBrushShape = SC2TerrainShell.DrawUnifiedSegmentGrid(_win.Data.UseCustomBrush ? 1 : 0, brushShapeLabels, 2) == 1;
         if (nextBrushShape != _win.Data.UseCustomBrush)

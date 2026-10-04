@@ -166,6 +166,8 @@ public class SC2GeometryMode
 
     public void DrawPanel()
     {
+        // Each group of controls gets its own heading and a gap above it, so the grids and sliders do not run together.
+        SC2TerrainShell.DrawUnifiedSectionLabel("Brush tool");
         var toolLabels = new[] { "Raise", "Lower", "Smooth", "Flatten", "Set H", "Noise" };
         var toolValues = new[] { Tool.Raise, Tool.Lower, Tool.Smooth, Tool.Flatten, Tool.SetHeight, Tool.Noise };
         var selected = System.Array.IndexOf(toolValues, _tool);
@@ -187,7 +189,8 @@ public class SC2GeometryMode
             _tool = newTool;
         }
 
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Brush settings");
         _radius   = SC2TerrainShell.DrawCompactSlider("Radius",   _radius,   1f, 1000f,
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Radius"));
         _strength = SC2TerrainShell.DrawCompactSlider("Strength", _strength, 0.01f, 1f,
@@ -208,7 +211,8 @@ public class SC2GeometryMode
         // SculptSetHeight's brushMask params for where this actually applies.
         // Always the CORE's own _win.Data (not the dynamic Data property) —
         // see this class' own header comment for why.
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Brush shape");
         var brushShapeLabels = new[] { "Round", "Custom" };
         var nextCustomBrush = SC2TerrainShell.DrawUnifiedSegmentGrid(_win.Data.UseCustomGeometryBrush ? 1 : 0, brushShapeLabels, 2) == 1;
         if (nextCustomBrush != _win.Data.UseCustomGeometryBrush)
@@ -266,8 +270,8 @@ public class SC2GeometryMode
             EditorGUILayout.EndHorizontal();
         }
 
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Height Adjustments", EditorStyles.boldLabel);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Height Adjustments");
         // Whole-map operations, distinct from the brush tools above (which
         // only ever touch the area under the cursor) - each rewrites every
         // vertex in Data.Heights in one shot via SC2TerrainRuntime.
@@ -281,15 +285,15 @@ public class SC2GeometryMode
             ApplyHeightTransform(h => h * _heightScaleFactor, "Scale Terrain Height");
         EditorGUI.EndDisabledGroup();
 
-        EditorGUILayout.Space(2);
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
         _heightRaiseOffset = SC2TerrainShell.DrawCompactSlider("Raise/Lower Amount", _heightRaiseOffset, -SC2TerrainData.MaxHeight, SC2TerrainData.MaxHeight);
         EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
         if (GUILayout.Button("Apply Raise/Lower"))
             ApplyHeightTransform(h => h + _heightRaiseOffset, "Raise/Lower Terrain");
         EditorGUI.EndDisabledGroup();
 
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Import Heightmap", EditorStyles.boldLabel);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Import Heightmap");
         // Wider range than SC2TerrainData.MaxHeight on purpose: the final
         // per-vertex height is still clamped to [MinHeight, MaxHeight] by
         // ImportHeightmap (via SC2TerrainData.ClampHeight), so this slider
@@ -313,8 +317,8 @@ public class SC2GeometryMode
         if (!string.IsNullOrEmpty(_lastImportError))
             SC2TerrainShell.DrawUnifiedNote(_lastImportError);
 
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Export Heightmap", EditorStyles.boldLabel);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Export Heightmap");
         // Same "read-back" direction as Import's "Height Scale" above: a
         // 16-bit grayscale PNG, one pixel per height GRID VERTEX, intensity
         // = height normalized across [MinHeight, MaxHeight] — see

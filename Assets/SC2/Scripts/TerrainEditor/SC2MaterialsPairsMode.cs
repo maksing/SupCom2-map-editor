@@ -47,6 +47,19 @@ public class SC2MaterialsMode
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
         }
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+
+        // With several materials, folding the whole list at once is what makes it manageable.
+        if (Data.Materials.Count > 1)
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Collapse all"))
+                foreach (var material in Data.Materials) _collapsedMaterialIds.Add(material.Id);
+            if (GUILayout.Button("Expand all"))
+                _collapsedMaterialIds.Clear();
+            GUILayout.EndHorizontal();
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+        }
 
         for (var i = 0; i < Data.Materials.Count; i++)
             DrawMaterialBlock(i);
@@ -61,21 +74,29 @@ public class SC2MaterialsMode
 
         var expanded = !_collapsedMaterialIds.Contains(mat.Id);
         EditorGUILayout.BeginHorizontal();
-        var newExpanded = EditorGUILayout.Foldout(expanded, "", true, EditorStyles.foldout);
+        // Every control of the header row has this one height (and the same 2px margin, which the panel's button and text field
+        // styles share), so the arrow, colour chip, name, colour button and delete button sit on one line.
+        var rowHeight = SC2UiScale.Pxf(24f);
+        // A real button for the arrow, big enough to hit, instead of the editor's small foldout glyph.
+        var newExpanded = expanded;
+        if (GUILayout.Button(expanded ? "▾" : "▸", GUILayout.Width(rowHeight), GUILayout.Height(rowHeight)))
+            newExpanded = !expanded;
         if (newExpanded != expanded)
         {
             if (newExpanded) _collapsedMaterialIds.Remove(mat.Id);
             else _collapsedMaterialIds.Add(mat.Id);
         }
-        var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
-        EditorGUI.DrawRect(swatch, mat.Color);
+        // The chip is laid out without a margin, so it is given the buttons' margin as extra height and drawn inside it.
+        var chipMargin = GUI.skin.button.margin.top;
+        var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), rowHeight + chipMargin * 2f, GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(rowHeight + chipMargin * 2f));
+        EditorGUI.DrawRect(new Rect(swatch.x, swatch.y + chipMargin, swatch.width, rowHeight), mat.Color);
         // DelayedTextField, not TextField: this branch executes a real document command AND
         // MarkDirtyAndRepaint (which SC2DecalsShell.EnsurePreview reads as "terrain geometry
         // changed" and reacts to with a full decal rebuild) — a plain TextField fires this on
         // every keystroke, confirmed to make renaming lag hard on a map with many placed decals.
         // DelayedTextField only returns the new value once Enter/Tab commits it or the field
         // loses focus, so this now runs once per rename instead of once per character.
-        var newMaterialName = EditorGUILayout.DelayedTextField(mat.Name, GUILayout.MinWidth(44), GUILayout.ExpandWidth(true));
+        var newMaterialName = EditorGUILayout.DelayedTextField(mat.Name, GUILayout.MinWidth(44), GUILayout.ExpandWidth(true), GUILayout.Height(rowHeight));
         if (newMaterialName != mat.Name)
         {
             // Rename had no undo checkpoint at all before this (unlike Color,
@@ -111,7 +132,7 @@ public class SC2MaterialsMode
         // materials 0/1 broke because this map's Background terrain has exactly two materials.
         // mat.Id (a GUID, EnsureStableIds) is unique across BOTH Core and Background data, unlike
         // the shared loop index.
-        var materialColor = EditorGUILayout.ColorField(new GUIContent("", $"material-color-{mat.Id}"), mat.Color, false, false, false, GUILayout.Width(SC2UiScale.Pxf(42f)), GUILayout.Height(SC2UiScale.Pxf(20f)));
+        var materialColor = EditorGUILayout.ColorField(new GUIContent("", $"material-color-{mat.Id}"), mat.Color, false, false, false, GUILayout.Width(SC2UiScale.Pxf(42f)), GUILayout.Height(rowHeight));
         if (materialColor != mat.Color)
         {
             _win.RecordUndoCheckpointFor(Data, "Change Material Color");
@@ -119,7 +140,7 @@ public class SC2MaterialsMode
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
         }
-        if (GUILayout.Button("x", GUILayout.Width(SC2UiScale.Pxf(20f))) &&
+        if (GUILayout.Button("x", GUILayout.Width(rowHeight), GUILayout.Height(rowHeight)) &&
             EditorUtility.DisplayDialog("Delete", $"Delete '{mat.Name}'?", "Yes", "Cancel"))
         {
             _win.RecordUndoCheckpointFor(Data, "Remove Material");
@@ -155,9 +176,92 @@ public class SC2MaterialsMode
             DrawTextureField(i, "Normal", ref mat.Normal, ref mat.NormalOverridePath, ref mat.NormalForceExport, mat.Diffuse, mat.Mask);
             DrawTextureField(i, "Mask", ref mat.Mask, ref mat.MaskOverridePath, ref mat.MaskForceExport, mat.Diffuse, mat.Normal);
         }
+        else
+        {
+            DrawCollapsedSlots(i, mat);
+        }
         SC2TerrainShell.EndUnifiedPanelBox();
-        EditorGUILayout.Space(2);
+        EditorGUILayout.Space(SC2UiScale.Pxf(8f));
     }
+
+    /// <summary>What a collapsed card still shows: its Diffuse, Normal and Mask as small thumbnails, so a folded list tells which
+    /// textures each material uses. A click on one opens the texture browser for that slot, so a texture can be assigned
+    /// without unfolding the card.</summary>
+    private void DrawCollapsedSlots(int materialIndex, SC2Material mat)
+    {
+        var size = SC2UiScale.Pxf(34f);
+        EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+        GUILayout.BeginHorizontal();
+        // The sibling hints are the same as in the unfolded card (see DrawMaterialBlock).
+        DrawCollapsedSlot(materialIndex, "Diffuse", "D", SC2TextureUsage.Diffuse, size, ref mat.Diffuse, ref mat.DiffuseOverridePath, ref mat.DiffuseForceExport, mat.Normal, mat.Mask);
+        DrawCollapsedSlot(materialIndex, "Normal", "N", SC2TextureUsage.Normal, size, ref mat.Normal, ref mat.NormalOverridePath, ref mat.NormalForceExport, mat.Diffuse, mat.Mask);
+        DrawCollapsedSlot(materialIndex, "Mask", "M", SC2TextureUsage.Mask, size, ref mat.Mask, ref mat.MaskOverridePath, ref mat.MaskForceExport, mat.Diffuse, mat.Normal);
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawCollapsedSlot(int materialIndex, string label, string letter, SC2TextureUsage usage, float size,
+        ref Texture2D texture, ref string overridePath, ref bool forceExport, params Texture2D[] siblingHints)
+    {
+        // The browser hands a choice back through the same key the unfolded card's picker uses, so which of the two opened it
+        // does not matter.
+        var texKey = TextureKey(materialIndex, label);
+        var previous = texture;
+        var picked = SC2TextureBrowser.Consume(texture, texKey, out _) as Texture2D;
+
+        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
+        var letterStyle = new GUIStyle(EditorStyles.miniLabel);
+        if (picked != null)
+        {
+            EditorGUI.DrawRect(rect, new Color(0.16f, 0.16f, 0.16f, 1f));
+            SC2TextureBrowser.DrawPreview(rect, picked, usage);
+        }
+        else
+        {
+            // An empty slot has to read as "nothing assigned", not as a dark texture: a red outline, "none" in the middle and
+            // a red slot letter.
+            var empty = new Color(0.86f, 0.33f, 0.33f, 1f);
+            EditorGUI.DrawRect(rect, new Color(0.13f, 0.09f, 0.09f, 1f));
+            DrawOutline(rect, empty);
+            var noneStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter, fontSize = SC2UiScale.F(9) };
+            noneStyle.normal.textColor = empty;
+            GUI.Label(rect, "none", noneStyle);
+            letterStyle.normal.textColor = empty;
+        }
+
+        var e = Event.current;
+        var hovered = e != null && rect.Contains(e.mousePosition);
+        if (hovered && e.type == EventType.Repaint)
+            DrawOutline(rect, new Color(0.55f, 0.78f, 1f, 0.95f));
+        GUILayout.Label(letter, letterStyle, GUILayout.Width(SC2UiScale.Pxf(18f)));
+        if (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered)
+        {
+            GUIUtility.keyboardControl = 0;
+            SC2TextureBrowser.Open(texKey, picked, usage, siblingHints);
+            e.Use();
+        }
+
+        if (picked != previous)
+        {
+            var pathDraft = overridePath ?? "";
+            ApplyTextureChange(materialIndex, label, previous, overridePath, picked, ref pathDraft, true, ref forceExport);
+            texture = picked;
+            overridePath = pathDraft;
+        }
+    }
+
+    private static void DrawOutline(Rect rect, Color color)
+    {
+        EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), color);
+        EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), color);
+        EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), color);
+        EditorGUI.DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), color);
+    }
+
+    // Data.GetInstanceID() in the key: it also identifies the picker to SC2TextureBrowser.Open/Consume (only one browser
+    // session is open at a time, matched back to its opener by this exact string) and to DrawPathLockToggle's own shared
+    // lock-state dictionary — a bare "Material{index}:{label}" would let core's Material 0 and background's own Material 0
+    // collide on both, now that Materials shows both panels stacked in the same frame.
+    private string TextureKey(int materialIndex, string label) => "Material" + Data.GetInstanceID() + "-" + materialIndex + ":" + label;
 
     /// <summary>Thin wrapper — the actual logic lives in
     /// SC2MaterialPairLinker (Scripts/TerrainEditor/SC2MaterialPairLinker.cs),
@@ -197,15 +301,20 @@ public class SC2MaterialsMode
         // path for display (never written into overridePath unless the user
         // actually edits it).
         var fallbackPath = texture != null ? SC2TerrainMaterialFactory.TryGetResourcePath(texture) : null;
-        // Data.GetInstanceID() in the key: this picker's key also
-        // identifies it to SC2TextureBrowser.Open/Consume (only one browser
-        // session is open at a time, matched back to its opener by this
-        // exact string) and to DrawPathLockToggle's own shared lock-state
-        // dictionary — a bare "Material{index}:{label}" would let core's
-        // Material 0 and background's own Material 0 collide on both, now
-        // that Materials shows both panels stacked in the same frame.
-        var texKey = "Material" + Data.GetInstanceID() + "-" + materialIndex + ":" + label;
+        var texKey = TextureKey(materialIndex, label);
         var next = SC2TerrainShell.DrawTexturePickerWithPath(label, texture, texKey, ref pathDraft, out var pickedViaBrowser, fallbackPath, siblingHints) as Texture2D;
+        ApplyTextureChange(materialIndex, label, previous, previousPath, next, ref pathDraft, pickedViaBrowser, ref forceExport);
+        texture = next;
+        overridePath = pathDraft;
+        DrawCopyOnExportToggle(materialIndex, label, next, pathDraft, ref forceExport);
+    }
+
+    /// <summary>Records and applies what a slot's picker produced this frame: a different texture (browser pick or a path that
+    /// resolved) and/or a different override path. Shared by the unfolded card's picker and the thumbnails of a folded one.
+    /// <paramref name="pathDraft"/> may be rewritten (a fresh browser pick resets or sets the override path).</summary>
+    private void ApplyTextureChange(int materialIndex, string label, Texture2D previous, string previousPath, Texture2D next,
+        ref string pathDraft, bool pickedViaBrowser, ref bool forceExport)
+    {
         if (next != previous)
         {
             _win.RecordUndoCheckpointFor(Data, "Change Material " + label + " Texture");
@@ -252,9 +361,10 @@ public class SC2MaterialsMode
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
         }
-        texture = next;
-        overridePath = pathDraft;
+    }
 
+    private void DrawCopyOnExportToggle(int materialIndex, string label, Texture2D next, string pathDraft, ref bool forceExport)
+    {
         // Only a texture served by one of the three vanilla archives can be
         // skipped at export, so only then is there anything to opt into — a
         // community-pack archive texture and a Custom "file:" import are

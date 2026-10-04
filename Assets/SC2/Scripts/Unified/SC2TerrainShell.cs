@@ -410,10 +410,8 @@ public class SC2TerrainShell : ScriptableObject
     // detail instead of the coarser default. See SC2TerrainUndoStack's own
     // doc comment for the resulting (still small) undo-snapshot memory cost.
     private const int kTargetTriCount = 524_288;
-    // Scaled through SC2UiScale — same "content width computed too wide
-    // once the real scrollbar got bigger" bug class as
-    // SC2GameViewEditorUI.PanelScrollbarWidth, just this shell's own
-    // parallel content-width reservation (GetUnifiedContentWidth/line 603).
+    // Room this shell leaves for the scrollbar of its own scroll view, which exists only when it runs as a window of its own.
+    // Embedded in the host, the host scrolls and hands over the content width with the scrollbar already taken off.
     private static float kPanelScrollbarReserve => SC2UiScale.Pxf(34f);
 
     // Map size in world units
@@ -547,7 +545,11 @@ public class SC2TerrainShell : ScriptableObject
     /// width than Terrain's. Each embedded shell's own DrawEmbeddedGUI should
     /// call this with its own panelWidth before drawing anything that uses
     /// those helpers.</summary>
-    public static void SyncEffectiveViewWidth(float panelWidth) => s_effectiveViewWidth = panelWidth;
+    public static void SyncEffectiveViewWidth(float panelWidth)
+    {
+        s_effectiveViewWidth = panelWidth;
+        s_unifiedBoxDepth = 0; // a panel starts outside every card
+    }
 
     public void Repaint()
     {
@@ -607,13 +609,9 @@ public class SC2TerrainShell : ScriptableObject
 
     // ── Init / Cleanup ───────────────────────────────────────────────────────
 
-    // Shown next to "Terrain Data" so a mismatch between what the Editor is
-    // editing and what a standalone build actually starts with is visible
-    // instead of silent. Both the Editor and a build now load the shared
-    // SC2TerrainData asset from Resources (see SC2GameViewEditorUI
-    // .SharedTerrainDataResourceName), so they should always match — this label
-    // surfaces which asset that actually is, and flags the "not created yet"
-    // state rather than silently inventing empty data.
+    // Where the terrain being edited came from. Both the Editor and a build load the shared SC2TerrainData asset from Resources
+    // (see SC2GameViewEditorUI.SharedTerrainDataResourceName), so they should always match. No panel shows this any more; it is
+    // kept for diagnostics.
     private string _dataSourceLabel = "";
     public string DataSourceLabel => _dataSourceLabel;
 
@@ -1086,6 +1084,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         _effectiveViewWidth = -1f; // standalone window: EditorGUIUtility.currentViewWidth is valid here
         s_effectiveViewWidth = -1f;
+        s_unifiedBoxDepth = 0;
         _embeddedGui = false;
         DrawModeToolbar();
         DrawPreviewToolbar();
@@ -1093,18 +1092,31 @@ public class SC2TerrainShell : ScriptableObject
         DrawEditorBody();
     }
 
-    public void OnEmbeddedGUI(float panelWidth)
+    /// <summary>The preview-mode toolbar (Textured / RNM / Mats ...), drawn by the host above its scroll view so it stays in
+    /// reach while the panel below it scrolls. <paramref name="panelWidth"/> is the content width the host gives every
+    /// panel, scrollbar and gap already taken off.</summary>
+    public void DrawEmbeddedHeader(float panelWidth)
     {
-        // The host passes the available left-panel content width. Keep that as
-        // the outer shell width; inner scroll content reserves room for the
-        // vertical scrollbar so it does not cover controls on the right edge.
         _effectiveViewWidth = panelWidth;
         s_effectiveViewWidth = _effectiveViewWidth;
-        _embeddedGui = true;
+        s_unifiedBoxDepth = 0;
         var outerWidth = Mathf.Max(1f, panelWidth);
         EditorGUILayout.BeginVertical(GUILayout.Width(outerWidth), GUILayout.MaxWidth(outerWidth));
         DrawPreviewToolbar();
-        EditorGUILayout.Space(2);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        EditorGUILayout.EndVertical();
+    }
+
+    /// <summary>The body of the panel, drawn inside the host's scroll view (the host scrolls it; see DrawEmbeddedHeader for the
+    /// toolbar above). <paramref name="panelWidth"/> is the content width, drawn at exactly that width.</summary>
+    public void OnEmbeddedGUI(float panelWidth)
+    {
+        _effectiveViewWidth = panelWidth;
+        s_effectiveViewWidth = _effectiveViewWidth;
+        s_unifiedBoxDepth = 0;
+        _embeddedGui = true;
+        var outerWidth = Mathf.Max(1f, panelWidth);
+        EditorGUILayout.BeginVertical(GUILayout.Width(outerWidth), GUILayout.MaxWidth(outerWidth));
         DrawEditorBody();
         EditorGUILayout.EndVertical();
         _embeddedGui = false;
@@ -1117,7 +1129,9 @@ public class SC2TerrainShell : ScriptableObject
         var previousContent = GUI.contentColor;
         var previousColor = GUI.color;
         var outerWidth = Mathf.Max(1f, EffectiveViewWidth);
-        var contentWidth = Mathf.Max(1f, outerWidth - kPanelScrollbarReserve);
+        // Embedded in the host, the width is already the content's (the host owns the scrollbar and takes it off); as a window of
+        // its own, this panel scrolls itself and has to leave room for the bar.
+        var contentWidth = _embeddedGui ? outerWidth : Mathf.Max(1f, outerWidth - kPanelScrollbarReserve);
 
         EditorGUIUtility.labelWidth = Mathf.Clamp(contentWidth * 0.38f, 68f, 104f);
         // GUI.backgroundColor/contentColor multiply whatever texture/textColor
@@ -1131,19 +1145,6 @@ public class SC2TerrainShell : ScriptableObject
         GUI.backgroundColor = Color.white;
         GUI.contentColor = Color.white;
         GUI.color = Color.white;
-
-        // ObjectField OUTSIDE ScrollView — otherwise focus is lost on every repaint
-        EditorGUI.BeginChangeCheck();
-        EditorGUILayout.BeginHorizontal(GUILayout.Width(contentWidth), GUILayout.MaxWidth(contentWidth));
-        var nextData = (SC2TerrainData)EditorGUILayout.ObjectField("Terrain Data", _data, typeof(SC2TerrainData), false, GUILayout.Width(contentWidth), GUILayout.MaxWidth(contentWidth));
-        EditorGUILayout.EndHorizontal();
-        if (EditorGUI.EndChangeCheck())
-        {
-            SaveState(writeAssets: false);
-            SetData(nextData);
-        }
-        if (!string.IsNullOrEmpty(_dataSourceLabel))
-            DrawUnifiedNote(_dataSourceLabel);
 
         // Imported terrain.bdf objects have no SC2TerrainData at all (they're
         // a separate GameObject/Mesh/Material[] built by SC2TerrainBdfImporter,
@@ -1172,20 +1173,22 @@ public class SC2TerrainShell : ScriptableObject
 
             EnsureSubEditors();
             if (_data.BackgroundTerrainEnabled) EnsureBackgroundSubEditors();
-            DrawSaveToolbar();
-            EditorGUILayout.Space(4);
+            DrawSaveFailureNote();
         }
 
-        _scroll.x = 0f;
-        _scroll = GUILayout.BeginScrollView(
-            _scroll,
-            false,
-            true,
-            GUIStyle.none,
-            GUI.skin.verticalScrollbar,
-            GUILayout.Width(outerWidth),
-            GUILayout.MaxWidth(outerWidth));
-        _scroll.x = 0f;
+        if (!_embeddedGui)
+        {
+            _scroll.x = 0f;
+            _scroll = GUILayout.BeginScrollView(
+                _scroll,
+                false,
+                true,
+                GUIStyle.none,
+                GUI.skin.verticalScrollbar,
+                GUILayout.Width(outerWidth),
+                GUILayout.MaxWidth(outerWidth));
+            _scroll.x = 0f;
+        }
         EditorGUILayout.BeginVertical(GUILayout.Width(contentWidth), GUILayout.MaxWidth(contentWidth));
         // Geometry/Paint are a single brush now — no more manual "Editing
         // Target" toggle — so they route by _activeBrushTargetIsBackground
@@ -1231,8 +1234,11 @@ public class SC2TerrainShell : ScriptableObject
             case EditorMode.Background: DrawBackgroundPanel(); break;
         }
         EditorGUILayout.EndVertical();
-        GUILayout.EndScrollView();
-        _scroll.x = 0f;
+        if (!_embeddedGui)
+        {
+            GUILayout.EndScrollView();
+            _scroll.x = 0f;
+        }
         // _data can legitimately be null here for the Imported tab (it has
         // no SC2TerrainData at all) — guard against EditorUtility.SetDirty(null).
         if (GUI.changed && _data != null) EditorUtility.SetDirty(_data);
@@ -1696,7 +1702,6 @@ public class SC2TerrainShell : ScriptableObject
             EditorGUILayout.LabelField(_bakeStatus, EditorStyles.miniLabel);
         DrawUnifiedNote("Manual trigger only — the shadow horizon-march is real per-texel work across up to 2048x2048 texels per mask, so it never runs silently on export. Also bakes the imported layers assigned to a mask below.");
 
-        DrawPointCloudBakeSection();
         DrawImportedRnmBakeSection();
     }
 
@@ -1751,19 +1756,28 @@ public class SC2TerrainShell : ScriptableObject
         }
     }
 
-    // ── Lighting Bake > Point Cloud ─────────────────────────────────────────
+    // ── Environment > Point Clouds ─────────────────────────────────────────
     // The two volumes (pcloud_up / pcloud_down) that light units from the map itself. Baked by its own button and
     // kept on the terrain data; export writes the files. See SC2PointCloudBaker for what each channel holds.
 
     private string _pointCloudStatus;
 
-    private void DrawPointCloudBakeSection()
+    /// <summary>The point cloud's bake controls (box, sky/ground light, Bake / Remove). Drawn by the Environment tab's
+    /// Point Clouds panel (SC2EnvironmentShell) under the info.bdf fields it shares that tab with; the settings and the baked
+    /// volumes live on the terrain data.</summary>
+    public void DrawPointCloudBakeSection()
     {
+        if (_data == null)
+        {
+            DrawUnifiedNote("Create/load a terrain first - the point cloud is baked from its geometry.");
+            return;
+        }
+
         EditorGUILayout.Space(10);
         // Every control is held to the panel width, or the buttons run past the right edge.
         var w = GetUnifiedContentWidth();
         DrawUnifiedSectionLabel("Point Cloud (unit lighting)");
-        DrawUnifiedNote("Bakes the volumes that light units from the map: sun shadow from the terrain, sky light, and light bounced up from the ground (uses the baked RNM lighting - run Bake Lighting first). Terrain only; props are not included. The box below replaces PointCloudOrigin/Size in info.bdf at export.");
+        DrawUnifiedNote("Bakes the volumes that light units from the map: sun shadow from the terrain, sky light, and light bounced up from the ground (uses the baked RNM lighting - run Bake Lighting first). Terrain only; props are not included. The box below replaces PointCloudOrigin/Size above at export.");
 
         var boxSet = _data.PointCloudBoxSize.x >= 1f && _data.PointCloudBoxSize.y >= 1f && _data.PointCloudBoxSize.z >= 1f;
         var origin = SC2EnvFieldGui.Vector3Field("Box Origin", _data.PointCloudBoxOrigin, "pcloud.origin");
@@ -1819,7 +1833,7 @@ public class SC2TerrainShell : ScriptableObject
             MarkDirtyAndRepaint();
         }
         DrawUnifiedNote(!string.IsNullOrEmpty(_pointCloudStatus) ? _pointCloudStatus : (baked ? "A point cloud is baked and will be exported." : "No point cloud baked yet."));
-        DrawUnifiedNote("Manual trigger only. PointCloudLightAmount (how strongly units use it in-game) is on the Environment tab. Not part of undo.");
+        DrawUnifiedNote("Manual trigger only. PointCloudLightAmount (how strongly units use it in-game) is in the fields above. Not part of undo.");
     }
 
     // ── Lighting Bake > Imported Objects ────────────────────────────────────
@@ -2303,6 +2317,13 @@ public class SC2TerrainShell : ScriptableObject
         }
     }
 
+    /// <summary>The MatCap look is part of the Mats and Pairs previews only.</summary>
+    private static bool UsesMatCap(PreviewMode mode) => mode == PreviewMode.MatColors || mode == PreviewMode.PairColors;
+
+    /// <summary>The preset the viewport is drawn with: the chosen one in a MatCap mode, the plain default (0) in any other, so a
+    /// look picked in Mats does not linger on the Textured, RNM, Slope or Height previews once its picker is hidden.</summary>
+    private int EffectiveMatCapPreset => UsesMatCap(_prev) ? _matCapPreset : 0;
+
     private void DrawPreviewToolbar()
     {
         // Used to bail out entirely without an active/initialized
@@ -2311,8 +2332,7 @@ public class SC2TerrainShell : ScriptableObject
         // have no SC2TerrainData at all. The toolbar must render regardless
         // so those stay usable; only the _data-specific bits below
         // (height-gradient panel, symmetry buttons) stay gated on it.
-        if (!_embeddedGui)
-            DrawUnifiedSectionLabel("Preview");
+        DrawUnifiedSectionLabel("Preview mode");
         var prev = _prev;
         var nextPrev = (PreviewMode)DrawUnifiedSegmentGrid(
             (int)_prev,
@@ -2340,11 +2360,15 @@ public class SC2TerrainShell : ScriptableObject
         // Gallery-style MatCap picker — 6 procedural looks matching 6
         // specific balls from Blender's own MatCap picker (see
         // TerrainView.shader's MatCapLit), instead of sampled textures.
-        // Shades the Mats/Pairs/unassigned-Textured preview colors, so it's
-        // shown regardless of which of the 6 modes above is active — an
-        // unassigned/no-real-pair area uses it no matter what _prev says.
-        _matCapPreset = DrawUnifiedSegmentGrid(_matCapPreset, new[] { "Standard", "Steel", "Zebra", "Tan", "Dark", "Normal" }, 3);
-        _runtime?.SetMatCapPreset(_matCapPreset);
+        // It shades the Mats and Pairs colours, so it is offered (and applied, see EffectiveMatCapPreset) in those two modes only.
+        if (UsesMatCap(_prev))
+        {
+            EditorGUILayout.Space(SC2UiScale.Pxf(8f));
+            DrawUnifiedSectionLabel("MatCap shading");
+            _matCapPreset = DrawUnifiedSegmentGrid(_matCapPreset, new[] { "Standard", "Steel", "Zebra", "Tan", "Dark", "Normal" }, 3);
+        }
+        _runtime?.SetMatCapPreset(EffectiveMatCapPreset);
+        _bgRuntime?.SetMatCapPreset(EffectiveMatCapPreset);
 
         if (_prev == PreviewMode.HeightGradient)
         {
@@ -2383,7 +2407,7 @@ public class SC2TerrainShell : ScriptableObject
 #endif
     }
 
-    private static void DrawUnifiedSectionLabel(string text)
+    public static void DrawUnifiedSectionLabel(string text)
     {
         var style = SafeGuiStyle(EditorStyles.miniBoldLabel);
         style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
@@ -2416,6 +2440,12 @@ public class SC2TerrainShell : ScriptableObject
 
     private static GUIStyle _unifiedPanelBoxStyle;
 
+    // The card's own horizontal padding (left + right), and how many cards are open around the control being drawn: what
+    // GetUnifiedContentWidth() hands out shrinks by the padding of each, so a control sized "to the width" inside a card fits
+    // the card instead of pushing it (and the whole column) wider than the panel.
+    private const float kUnifiedBoxHorizontalPadding = 20f;
+    private static int s_unifiedBoxDepth;
+
     public static void BeginUnifiedPanelBox()
     {
         // Cached (a fresh GUIStyle per call per frame is pure GC churn) and
@@ -2433,10 +2463,12 @@ public class SC2TerrainShell : ScriptableObject
             };
         }
         EditorGUILayout.BeginVertical(_unifiedPanelBoxStyle, GUILayout.MaxWidth(GetUnifiedContentWidth()));
+        s_unifiedBoxDepth++;
     }
 
     public static void EndUnifiedPanelBox()
     {
+        s_unifiedBoxDepth = Mathf.Max(0, s_unifiedBoxDepth - 1);
         EditorGUILayout.EndVertical();
     }
 
@@ -2534,7 +2566,10 @@ public class SC2TerrainShell : ScriptableObject
 
     private static float GetUnifiedContentWidth()
     {
-        return Mathf.Max(1f, StaticEffectiveViewWidth - kPanelScrollbarReserve);
+        // Every embedded shell is handed the content width itself (the host owns the scrollbar and has already taken it off),
+        // so there is nothing more to reserve; only the standalone window, which sizes itself by the view width, does.
+        var width = s_effectiveViewWidth >= 0f ? s_effectiveViewWidth : StaticEffectiveViewWidth - kPanelScrollbarReserve;
+        return Mathf.Max(1f, width - s_unifiedBoxDepth * kUnifiedBoxHorizontalPadding);
     }
 
     /// <summary>
@@ -2832,44 +2867,69 @@ public class SC2TerrainShell : ScriptableObject
     // call here previously showed the whole shared atlas page uncropped).
     public static Texture DrawTexturePicker(string label, Texture texture, string pickerKey, params Texture[] siblingHints)
     {
-        var labelStyle = SafeGuiStyle(EditorStyles.miniLabel);
-        labelStyle.normal.textColor = new Color(0.18f, 0.62f, 1f);
-        labelStyle.fontSize = SC2UiScale.F(10);
-        EditorGUILayout.LabelField(label, labelStyle);
+        texture = BeginTextureSlot(label, texture, pickerKey, siblingHints, null, out _, out var infoWidth);
+        GUILayout.Label("Click the preview to choose a texture.", TextureSlotHintStyle(), GUILayout.Width(infoWidth));
+        EndTextureSlot();
+        return texture;
+    }
 
+    // ── Texture slot ─────────────────────────────────────────────────────────
+    // One slot is a compact row: a square thumbnail on the left (click to open the texture browser), and on the right the slot's
+    // name, the texture's own name and whatever else the caller adds underneath (the export path). It replaces a full-width
+    // preview with the path under it, so a card with several slots (Diffuse / Normal / Mask) fits on one screen.
+
+    private static GUIStyle TextureSlotTitleStyle()
+    {
+        var style = SafeGuiStyle(EditorStyles.miniBoldLabel);
+        style.normal.textColor = new Color(0.55f, 0.78f, 1f);
+        style.fontSize = SC2UiScale.F(11);
+        style.wordWrap = false;
+        return style;
+    }
+
+    private static GUIStyle TextureSlotNameStyle()
+    {
+        var style = SafeGuiStyle(EditorStyles.miniLabel);
+        style.normal.textColor = new Color(0.92f, 0.94f, 0.97f);
+        style.fontSize = SC2UiScale.F(10);
+        style.wordWrap = true;
+        return style;
+    }
+
+    private static GUIStyle TextureSlotHintStyle()
+    {
+        var style = SafeGuiStyle(EditorStyles.miniLabel);
+        style.normal.textColor = new Color(0.62f, 0.66f, 0.72f);
+        style.fontSize = SC2UiScale.F(9);
+        style.wordWrap = true;
+        return style;
+    }
+
+    /// <summary>Opens a slot: draws the thumbnail and the slot's header (its name, and the lock when <paramref name="lockKey"/> is
+    /// given) and the texture's name, and leaves the slot's right-hand column open for the caller to add to. Close it with
+    /// <see cref="EndTextureSlot"/>. Returns the texture after a pick made in the browser. <paramref name="infoWidth"/> is the
+    /// width of the right-hand column.</summary>
+    private static Texture BeginTextureSlot(string label, Texture texture, string pickerKey, Texture[] siblingHints, string lockKey,
+        out bool locked, out float infoWidth)
+    {
         texture = SC2TextureBrowser.Consume(texture, pickerKey, out _);
 
-        // The clamp bounds here must scale too, or they cap the preview at a
-        // fixed 168px ceiling regardless of Scale even though
-        // GetUnifiedContentWidth() (the value being clamped) already scales
-        // correctly.
         var fullWidth = GetUnifiedContentWidth();
-        var size = Mathf.Clamp(fullWidth - SC2UiScale.Pxf(72f), SC2UiScale.Pxf(112f), SC2UiScale.Pxf(168f));
-        // Long-standing bug fixed here: centering the box via
-        // BeginHorizontal()+two FlexibleSpace() calls (the previous
-        // approach) relies on that horizontal group correctly inheriting
-        // the caller's own content width from the ambient layout stack.
-        // Reachable through some callers' deeper nesting (e.g. Paint
-        // Materials' Custom brush picker: DrawPanel -> DrawRnm ->
-        // DrawCustomBrushPicker -> DrawTexturePickerWithPath -> here), that
-        // inference drifted wider than the actual visible panel, rendering
-        // the box mostly outside the left panel's right edge instead of
-        // centered in it. Allocating the FULL available width directly and
-        // centering via an explicit sub-rect sidesteps that layout-
-        // inheritance question entirely — this box's own footprint is never
-        // wider than fullWidth, which every caller already constrains its
-        // own container to.
-        var rowRect = GUILayoutUtility.GetRect(fullWidth, size, GUILayout.Width(fullWidth), GUILayout.MaxWidth(fullWidth));
-        var rect = new Rect(rowRect.x + (rowRect.width - size) * 0.5f, rowRect.y, size, size);
+        var gap = SC2UiScale.Pxf(10f);
+        var thumb = Mathf.Clamp(fullWidth * 0.28f, SC2UiScale.Pxf(64f), SC2UiScale.Pxf(96f));
+        infoWidth = Mathf.Max(SC2UiScale.Pxf(60f), fullWidth - thumb - gap - SC2UiScale.Pxf(4f));
 
+        EditorGUILayout.Space(SC2UiScale.Pxf(8f));
+        GUILayout.BeginHorizontal(GUILayout.Width(fullWidth));
+
+        var rect = GUILayoutUtility.GetRect(thumb, thumb, GUILayout.Width(thumb), GUILayout.Height(thumb));
         EditorGUI.DrawRect(rect, new Color(0.16f, 0.16f, 0.16f, 1f));
         GUI.Box(rect, GUIContent.none);
-
+        var e = Event.current;
+        var hovered = e != null && rect.Contains(e.mousePosition);
         if (texture != null)
         {
             SC2TextureBrowser.DrawPreview(rect, texture, TextureUsageForPicker(pickerKey));
-            var nameRect = new Rect(rect.x + SC2UiScale.Pxf(5f), rect.y + SC2UiScale.Pxf(5f), rect.width - SC2UiScale.Pxf(10f), SC2UiScale.Pxf(34f));
-            DrawTexturePreviewLabel(nameRect, texture.name);
         }
         else
         {
@@ -2877,18 +2937,41 @@ public class SC2TerrainShell : ScriptableObject
             textStyle.alignment = TextAnchor.MiddleCenter;
             textStyle.normal.textColor = new Color(0.85f, 0.18f, 0.18f);
             textStyle.fontSize = SC2UiScale.F(10);
-            GUI.Label(rect, "Select Texture2D", textStyle);
+            textStyle.wordWrap = true;
+            GUI.Label(rect, "Select\ntexture", textStyle);
         }
-
-        var e = Event.current;
-        if (e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
+        if (hovered && e.type == EventType.Repaint)
+        {
+            var edge = new Color(0.55f, 0.78f, 1f, 0.9f);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), edge);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), edge);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), edge);
+            EditorGUI.DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), edge);
+        }
+        if (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered)
         {
             GUIUtility.keyboardControl = 0;
             SC2TextureBrowser.Open(pickerKey, texture, TextureUsageForPicker(pickerKey), siblingHints);
             e.Use();
         }
 
+        GUILayout.Space(gap);
+        GUILayout.BeginVertical(GUILayout.Width(infoWidth));
+
+        GUILayout.BeginHorizontal(GUILayout.Width(infoWidth));
+        GUILayout.Label(label, TextureSlotTitleStyle(), GUILayout.ExpandWidth(true));
+        locked = true;
+        if (lockKey != null) locked = DrawPathLockToggle(lockKey, 22f);
+        GUILayout.EndHorizontal();
+
+        GUILayout.Label(texture != null ? texture.name : "No texture", TextureSlotNameStyle(), GUILayout.Width(infoWidth));
         return texture;
+    }
+
+    private static void EndTextureSlot()
+    {
+        GUILayout.EndVertical();
+        GUILayout.EndHorizontal();
     }
 
     /// <summary>Materials/imported-terrain/
@@ -2942,7 +3025,7 @@ public class SC2TerrainShell : ScriptableObject
     /// pickerKey). Defaults to locked (safe) the first time a given key is
     /// drawn. Returns the CURRENT locked state after handling this frame's
     /// click, for the caller to gate its own text field's GUI.enabled with.</summary>
-    public static bool DrawPathLockToggle(string key)
+    public static bool DrawPathLockToggle(string key, float sizePx = 28f)
     {
         if (!_pathFieldLocked.TryGetValue(key, out var locked)) { locked = true; _pathFieldLocked[key] = locked; }
         var lockStyle = SafeGuiStyle(GUI.skin.button);
@@ -2955,7 +3038,7 @@ public class SC2TerrainShell : ScriptableObject
         // the icon visible (confirmed real: it read as a barely-visible dot, not a lock).
         // Drawing the background/click target and the icon separately gives the icon a real,
         // fixed size regardless of the button style's own padding.
-        var size = SC2UiScale.Pxf(28f);
+        var size = SC2UiScale.Pxf(sizePx);
         var rect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
         var newLocked = GUI.Toggle(rect, locked, GUIContent.none, lockStyle);
         var icon = SC2UiIcon.Get(locked ? "lock" : "unlock");
@@ -2977,11 +3060,10 @@ public class SC2TerrainShell : ScriptableObject
     public static Texture DrawTexturePickerWithPath(string label, Texture texture, string pickerKey, ref string path, out bool pickedViaBrowser, string resolvedFallbackPath = null, params Texture[] siblingHints)
     {
         pickedViaBrowser = false;
-        var picked = DrawTexturePicker(label, texture, pickerKey, siblingHints);
+        var picked = BeginTextureSlot(label, texture, pickerKey, siblingHints, pickerKey + ":lock", out var locked, out var infoWidth);
         if (picked != texture) pickedViaBrowser = true;
 
         var displayPath = string.IsNullOrEmpty(path) ? (resolvedFallbackPath ?? "") : path;
-        var locked = DrawPathLockToggle(pickerKey + ":lock");
 
         // TextArea + wordWrap, not a single-line TextField — a long path (a real, common case for
         // an archive-sourced texture, see the screenshot this was reported from) otherwise clipped
@@ -2999,8 +3081,9 @@ public class SC2TerrainShell : ScriptableObject
         // overloads, not the (text, GUIStyle, options) one — GUILayout itself
         // is real UnityEngine API in both Editor and Standalone player builds,
         // so this works in both without touching the shim.
-        var newPath = GUILayout.TextArea(displayPath, pathStyle, GUILayout.Width(GetUnifiedContentWidth()));
+        var newPath = GUILayout.TextArea(displayPath, pathStyle, GUILayout.Width(infoWidth));
         GUI.enabled = prevEnabled;
+        EndTextureSlot();
         if (!locked && newPath != displayPath)
         {
             path = newPath;
@@ -3024,27 +3107,8 @@ public class SC2TerrainShell : ScriptableObject
         return SC2.MapEditor.Textures.SC2TextureUsage.Unknown;
     }
 
-    private static void DrawTexturePreviewLabel(Rect rect, string text)
-    {
-        var shadow = SafeGuiStyle(EditorStyles.boldLabel);
-        shadow.fontSize = SC2UiScale.F(10);
-        shadow.wordWrap = true;
-        shadow.clipping = TextClipping.Clip;
-        shadow.normal.textColor = new Color(0f, 0f, 0f, 0.85f);
-        var label = new GUIStyle(shadow)
-        {
-            normal = { textColor = Color.white }
-        };
-
-        GUI.Label(new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height), text, shadow);
-        GUI.Label(rect, text, label);
-    }
-
-    /// <summary>Same shadow-backed readable-text trick as
-    /// DrawTexturePreviewLabel above, centered on a single GUI point
-    /// instead of filling a caller-given Rect — sized to the text itself
-    /// rather than a fixed box, so it works for any short live readout
-    /// (currently: the Measure tool's distance label).</summary>
+    /// <summary>A shadow-backed readable label centered on a single GUI point, sized to the text itself rather than a fixed box,
+    /// so it works for any short live readout (currently: the Measure tool's distance label).</summary>
     public static void DrawFloatingLabel(Vector2 guiPosition, string text, Color accentColor)
     {
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
@@ -4146,35 +4210,15 @@ public class SC2TerrainShell : ScriptableObject
     }
 
     // EditorUtility.DisplayDialog/Debug.Log aren't visible in a standalone
-    // build, so where "Save Terrain" actually wrote the file (Application
-    // .persistentDataPath depends on Company/Product Name, which isn't
-    // knowable from source) needs to be shown directly in this panel — same
-    // pattern already used for Export's result note.
+    // build, so a failed save has to be shown directly in the panel. A successful one needs no note: saving is Ctrl+S, the
+    // File menu and the autosave.
     private string _lastSaveInfo;
 
-    private void DrawSaveToolbar()
+    private void DrawSaveFailureNote()
     {
-        var compact = EffectiveViewWidth < 390f;
-        BeginUnifiedPanelBox();
-        var labelStyle = SafeGuiStyle(EditorStyles.miniLabel);
-        labelStyle.wordWrap = true;
-        EditorGUILayout.LabelField("Terrain asset stores heights, materials, pairs, pair map, RNM masks and export settings.", labelStyle);
-        if (compact)
-        {
-            if (GUILayout.Button("Save Terrain", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(GetUnifiedContentWidth()), GUILayout.MaxWidth(GetUnifiedContentWidth())))
-                SaveState(writeAssets: true);
-        }
-        else
-        {
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Save Terrain", GUILayout.Width(SC2UiScale.Pxf(110f))))
-                SaveState(writeAssets: true);
-            EditorGUILayout.EndHorizontal();
-        }
-        if (!string.IsNullOrEmpty(_lastSaveInfo))
-            DrawUnifiedNote(_lastSaveInfo);
-        EndUnifiedPanelBox();
+        if (string.IsNullOrEmpty(_lastSaveInfo) || !_lastSaveInfo.StartsWith("Save FAILED", System.StringComparison.Ordinal)) return;
+        DrawUnifiedNote(_lastSaveInfo);
+        EditorGUILayout.Space(4);
     }
 
     // ── Terrain lifecycle ────────────────────────────────────────────────────
@@ -4931,8 +4975,8 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (runtime == null || data == null) return;
 
-        // The MatCap look shades the Mats/Pairs/Slope/unassigned colours of every runtime (core and background alike).
-        runtime.SetMatCapPreset(_matCapPreset);
+        // The MatCap look shades the Mats and Pairs colours of every runtime (core and background alike); other modes use the default.
+        runtime.SetMatCapPreset(EffectiveMatCapPreset);
 
         if (_prev == PreviewMode.PairColors)
         {

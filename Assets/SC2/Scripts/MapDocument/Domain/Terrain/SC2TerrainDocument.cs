@@ -55,7 +55,7 @@ namespace SC2.MapEditor.Document
         /// collide with `mask01`/`background`.</summary>
         public SC2RnmDocument ImportedRnm = new();
 
-        /// <summary>Lighting Bake > Point Cloud settings and the baked pcloud_up / pcloud_down volumes (complete DDS
+        /// <summary>Environment > Point Clouds settings and the baked pcloud_up / pcloud_down volumes (complete DDS
         /// files as blobs; empty = not baked).</summary>
         public Color PointCloudSkyColor = new Color(0.75f, 0.88f, 1f, 1f);
         public float PointCloudSkyIntensity = 0.5f;
