@@ -136,6 +136,70 @@ public static class SC2TextureBrowser
 
     public static bool IsOpen => _open;
 
+    // ── Texture slots that stay live under the open browser ─────────────────
+    // The browser is drawn after the panels and covers the screen with a scrim, so while it is open the host draws the panels against
+    // an Ignore event (nothing in them reacts). The one thing that should still work is clicking another texture slot, to move the
+    // browser to it: the slots ask for the click that was held back, TryTakePanelClick. A click that lands on the browser's own
+    // window never counts.
+
+    private static bool _panelEventMasked;
+    private static bool _panelSlotsLive;
+    private static bool _panelClickTaken;
+    private static EventType _maskedType;
+    private static int _maskedButton;
+    private static Vector2 _maskedPosition;
+    // The same point in screen space: a slot lives inside the panel's area and scroll view, whose local coordinates differ from the window's,
+    // so the slot's rectangle is compared with the click in screen space.
+    private static Vector2 _maskedScreenPosition;
+
+    /// <summary>The browser window, the same rectangle <see cref="DrawOverlay"/> draws.</summary>
+    public static Rect WindowRect
+    {
+        get
+        {
+            var width = Mathf.Clamp(Screen.width - 48f, 720f, 1180f);
+            var height = Mathf.Clamp(Screen.height - 48f, 520f, 820f);
+            return new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
+        }
+    }
+
+    /// <summary>Called by the host before it draws the panels against an Ignore event: remembers the real one.
+    /// <paramref name="slotsLive"/> is true when the browser is the only window open.</summary>
+    public static void BeginPanelEventMask(Event real, bool slotsLive)
+    {
+        _panelEventMasked = true;
+        _panelSlotsLive = slotsLive && _open;
+        _panelClickTaken = false;
+        _maskedType = real.type;
+        _maskedButton = real.button;
+        _maskedPosition = real.mousePosition;
+        _maskedScreenPosition = GUIUtility.GUIToScreenPoint(real.mousePosition);
+    }
+
+    /// <summary>Called by the host once the panels are drawn. True when a texture slot took the held-back click, so the real event
+    /// has to be consumed.</summary>
+    public static bool EndPanelEventMask()
+    {
+        var taken = _panelClickTaken;
+        _panelEventMasked = false;
+        _panelSlotsLive = false;
+        _panelClickTaken = false;
+        return taken;
+    }
+
+    /// <summary>True once for the slot whose <paramref name="rect"/> holds the left click that was held back while the browser is
+    /// open, so a slot can open the browser for itself even though the panels are not receiving events.</summary>
+    public static bool TryTakePanelClick(Rect rect)
+    {
+        if (!_panelEventMasked || !_panelSlotsLive || _panelClickTaken) return false;
+        if (_maskedType != EventType.MouseDown || _maskedButton != 0) return false;
+        if (WindowRect.Contains(_maskedPosition)) return false;
+        var screenRect = new Rect(GUIUtility.GUIToScreenPoint(rect.position), rect.size);
+        if (!screenRect.Contains(_maskedScreenPosition)) return false;
+        _panelClickTaken = true;
+        return true;
+    }
+
     /// <summary>`siblingHints`: the OTHER texture slots on the SAME
     /// material (e.g. pass the already-picked Diffuse and Mask textures
     /// when opening the Normal picker) — every real THIS-SLOT'S-OWN-USAGE
@@ -255,9 +319,7 @@ public static class SC2TextureBrowser
         var screen = new Rect(0, 0, Screen.width, Screen.height);
         DrawRect(screen, new Color(0f, 0f, 0f, 0.72f));
 
-        var width = Mathf.Clamp(Screen.width - 48f, 720f, 1180f);
-        var height = Mathf.Clamp(Screen.height - 48f, 520f, 820f);
-        var window = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
+        var window = WindowRect;
         DrawRect(window, new Color(0.075f, 0.082f, 0.098f, 1f));
         DrawBorder(window, new Color(0.25f, 0.28f, 0.34f, 1f));
 

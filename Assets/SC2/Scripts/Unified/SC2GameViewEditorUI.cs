@@ -279,6 +279,19 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private bool _stylesReady;
     private float _stylesLastScale = -1f;
     private bool _menuOverlayBlocksInput;
+
+    /// <summary>True while a window that sits above the panels is open: the panels and the viewport take no input then.</summary>
+    private bool AnyModalOpen(bool includeTextureBrowser = true)
+    {
+        var open = (includeTextureBrowser && SC2TextureBrowser.IsOpen) || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false)
+            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2BusyOverlay.IsActive;
+#if !UNITY_EDITOR
+        // The runtime confirm dialog only exists in a build (the Editor uses its own dialogs).
+        open |= SC2RuntimeConfirm.IsOpen;
+#endif
+        return open;
+    }
+
     private sealed class SC2ImportedTerrainEntry
     {
         // Stable identity for SC2ImportedTerrainEntryDocument round-tripping —
@@ -1578,6 +1591,24 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // inside DrawMainPanel).
         HandleGlobalUndoRedoSaveHotkey();
 
+        // A modal (texture browser, import panels, confirm dialog, busy plate) is drawn after the panels, so the panels would see
+        // a click, a key or the wheel first. GUI.enabled = false only stops the standard controls; many of ours read the event
+        // themselves (thumbnails, foldout headers, clickable rows). So while a modal is open the panels are drawn against an
+        // Ignore event, which none of them reacts to; the real event is put back before the menus and the modals are drawn.
+        var maskedEventType = EventType.Ignore;
+        var panelEventsMasked = false;
+        if (Event.current != null && AnyModalOpen()
+            && Event.current.type != EventType.Repaint && Event.current.type != EventType.Layout
+            && Event.current.type != EventType.Used && Event.current.type != EventType.Ignore)
+        {
+            maskedEventType = Event.current.type;
+            panelEventsMasked = true;
+            // The texture slots of the panels stay live while the browser is the only window open: a click on another slot
+            // moves the browser there (see SC2TextureBrowser.TryTakePanelClick).
+            SC2TextureBrowser.BeginPanelEventMask(Event.current, !AnyModalOpen(includeTextureBrowser: false));
+            Event.current.type = EventType.Ignore;
+        }
+
         DrawHeader(width);
         // DrawSubtabs applies this same _menuOverlayBlocksInput guard
         // internally itself (see its own GUI.enabled handling), so it's
@@ -1606,6 +1637,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         DrawNavigationGizmo(width);
         DrawFloatingReferenceImage();
         GUI.enabled = previousEnabled;
+        if (panelEventsMasked)
+        {
+            var slotTookClick = SC2TextureBrowser.EndPanelEventMask();
+            if (Event.current != null && Event.current.type == EventType.Ignore)
+            {
+                Event.current.type = maskedEventType;
+                // The click belonged to a slot, not to the browser or whatever is drawn after the panels.
+                if (slotTookClick) Event.current.Use();
+            }
+        }
 
         // REVERTED: tried calling DrawOpenMenus() here (before
         // DrawHeader/DrawSubtabs/DrawMainPanel) on the theory that GUI.depth
@@ -1689,8 +1730,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // correct behavior anyway: a modal should block viewport
             // painting/placing/navigation underneath it, not just visually
             // cover it.
-            var anyModalOpen = SC2TextureBrowser.IsOpen || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false) || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2BusyOverlay.IsActive;
-            if (!anyModalOpen)
+            if (!AnyModalOpen())
             {
                 ReleaseStuckNumericFocusOnViewportClick();
 

@@ -3031,11 +3031,12 @@ public class SC2TerrainShell : ScriptableObject
             DrawOutline(rect, new Color(0.55f, 0.78f, 1f, 0.95f));
         // Wide enough for a longer letter group ("Env", "RNM1") without the next thumbnail being pushed over it.
         GUILayout.Label(letter, letterStyle, GUILayout.Width(Mathf.Max(SC2UiScale.Pxf(22f), letterStyle.CalcSize(new GUIContent(letter)).x + SC2UiScale.Pxf(4f))));
-        if (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered)
+        var heldBackClick = GUI.enabled && SC2TextureBrowser.TryTakePanelClick(rect);
+        if (heldBackClick || (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered))
         {
             GUIUtility.keyboardControl = 0;
             SC2TextureBrowser.Open(texKey, picked, usage, siblingHints);
-            e.Use();
+            if (!heldBackClick) e.Use();
         }
         return picked;
     }
@@ -3091,11 +3092,12 @@ public class SC2TerrainShell : ScriptableObject
             EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), edge);
             EditorGUI.DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), edge);
         }
-        if (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered)
+        var heldBackClick = GUI.enabled && SC2TextureBrowser.TryTakePanelClick(rect);
+        if (heldBackClick || (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered))
         {
             GUIUtility.keyboardControl = 0;
             SC2TextureBrowser.Open(pickerKey, texture, TextureUsageForPicker(pickerKey), siblingHints);
-            e.Use();
+            if (!heldBackClick) e.Use();
         }
 
         GUILayout.Space(gap);
