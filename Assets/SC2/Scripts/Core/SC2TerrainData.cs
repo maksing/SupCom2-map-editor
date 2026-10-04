@@ -440,19 +440,16 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// snapshots that still carry a value here.</summary>
     public float BackgroundTerrainUvScale = 1024f;
 
-    /// <summary>One shared UV1 tiling scale for EVERY pair on both the playable
-    /// core and the decorative background, superseding each pair's own
-    /// SC2MaterialPair.TilingScale when enabled — guarantees the texture
-    /// tiling frequency can never mismatch at the core/background seam
-    /// (or between two core pairs) without per-pair tuning. Off by
-    /// default: an existing map's per-pair tiling stays exactly as
-    /// authored until a user opts in. Lives on the core's own
-    /// SC2TerrainData (not the background's nested instance) since it's
-    /// one map-wide setting, not something either "zone" owns
-    /// independently — background code reads it off the coreData
-    /// reference it already carries everywhere (same pattern as
-    /// BackgroundTerrainSize/Enabled).</summary>
+    /// <summary>Kept only so saved maps and undo snapshots that carry it still load: the shared tiling size below is always in
+    /// use now, there is no per-pair tiling any more. A map saved with this off is moved to the shared size by
+    /// EnsureSerializableState (it takes its first pair's old size, so the look does not change), which sets this on.</summary>
     public bool GlobalUvScaleEnabled;
+
+    /// <summary>The one UV1 tiling scale (world units per texture tile) for EVERY pair on both the playable core and the
+    /// decorative background — guarantees the texture tiling frequency can never mismatch at the core/background seam (or
+    /// between two core pairs). Lives on the core's own SC2TerrainData (not the background's nested instance) since it's one
+    /// map-wide setting, not something either "zone" owns independently — background code reads it off the coreData
+    /// reference it already carries everywhere (same pattern as BackgroundTerrainSize/Enabled).</summary>
     public float GlobalUvScale = 4f;
 
     /// <summary>Amplifies height's contribution to SC2TerrainUv1Unwrap's
@@ -465,15 +462,10 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// just above (applies to core AND background alike).</summary>
     public float Uv1HeightWeight = 1f;
 
-    /// <summary>The UV1 tiling scale to actually use for <paramref
-    /// name="pair"/> right now — GlobalUvScale when GlobalUvScaleEnabled,
-    /// else the pair's own TilingScale (both floored the same way every
-    /// existing call site already did ad hoc, now centralized here so the
-    /// live preview/export/RNM-bake geometry builders — core and
-    /// background alike — can never independently disagree about which
-    /// value won).</summary>
-    public float EffectiveUvTilingScale(SC2MaterialPair pair) =>
-        GlobalUvScaleEnabled ? Mathf.Max(0.0001f, GlobalUvScale) : Mathf.Max(0.0001f, pair != null && pair.TilingScale > 0f ? pair.TilingScale : 4f);
+    /// <summary>The UV1 tiling scale to actually use for <paramref name="pair"/>: the shared GlobalUvScale (floored), for every
+    /// pair. Centralized here so the live preview/export/RNM-bake geometry builders — core and background alike — can never
+    /// independently disagree. The pair argument is kept for the callers' sake; a pair's own TilingScale is no longer read.</summary>
+    public float EffectiveUvTilingScale(SC2MaterialPair pair) => Mathf.Max(0.0001f, GlobalUvScale);
 
     public List<SC2CostsBlockData> CostsBlocks = new();
     public ushort[] TerrainTypes = Array.Empty<ushort>();
@@ -1253,6 +1245,14 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
             p.SimplifyRatio = Mathf.Clamp01(p.SimplifyRatio);
             if (p.ShaderFlags == null) p.ShaderFlags = new List<SC2ShaderFlag>();
             if (p.RnmMaskBytes == null) p.RnmMaskBytes = Array.Empty<byte>();
+        }
+
+        // The shared tiling size is the only one now. A map saved while per-pair tiling was in use takes its first pair's
+        // size as the shared one, so its look does not change when it is opened.
+        if (!GlobalUvScaleEnabled)
+        {
+            if (Pairs.Count > 0 && Pairs[0] != null && Pairs[0].TilingScale > 0f) GlobalUvScale = Pairs[0].TilingScale;
+            GlobalUvScaleEnabled = true;
         }
     }
 

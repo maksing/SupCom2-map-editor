@@ -1619,7 +1619,7 @@ public class SC2TerrainShell : ScriptableObject
             for (var i = 0; i < bg.Pairs.Count; i++)
                 DrawBackgroundDetailSlider(bg, bg.Pairs[i], $"bgtab-{i}", bg.Pairs.Count > 1 ? bg.Pairs[i].Name : null);
             DrawUnifiedNote($"The editor keeps the full-density grid; on export (and for the lighting bake) the background is simplified to at most {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles. Simplify 1.0 is that maximum, lower values make it lighter; it can't go above. The rim against the core is always kept at full density, so the seam never opens - that also sets a floor under how light the background can get.");
-            DrawUnifiedNote("Texture tiling (UV1) is set per pair — same \"Tiling Scale\" field as the core's own Pairs tab, reachable below in the Pairs tab's own Background section. Match it to whatever the core's own boundary pair uses to avoid a visible tiling-density jump at the seam.");
+            DrawUnifiedNote("Texture tiling (UV1) is the shared setting on the Pairs tab (Texture tiling - all pairs), which applies to the background too, so the tiling density matches at the seam.");
         }
 
         EditorGUILayout.Space(6);
@@ -5027,15 +5027,12 @@ public class SC2TerrainShell : ScriptableObject
             {
                 Diffuse1 = m1?.Diffuse, Diffuse2 = m2?.Diffuse,
                 Color1 = m1?.Color ?? Color.grey, Color2 = m2?.Color ?? Color.grey,
-                // EffectiveUvTilingScale is documented as living only on the
-                // CORE's own SC2TerrainData (GlobalUvScaleEnabled/Scale are
-                // never set on the background's own nested instance) — must
-                // call it on _data (always core), not the passed-in `data`
-                // (core OR background depending on caller). Calling it on
-                // `data` here was the actual bug: background's own chunk
-                // mesh always fell back to each pair's per-pair TilingScale,
-                // silently ignoring Global UV Scale regardless of the
-                // toggle.
+                // The shared tiling size lives only on the CORE's own
+                // SC2TerrainData (it is never set on the background's own
+                // nested instance) — so EffectiveUvTilingScale must be called
+                // on _data (always core), not the passed-in `data` (core OR
+                // background depending on caller), or the background's chunk
+                // mesh would use the nested instance's unset value.
                 TilingScale = _data.EffectiveUvTilingScale(p),
                 Rnm0 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask0 : null,
                 Rnm1 = shaderMode == 4 && p.HasBakedRnmLighting ? p.RnmPreviewMask1 : null,

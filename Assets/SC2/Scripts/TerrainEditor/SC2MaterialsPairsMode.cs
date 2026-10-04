@@ -443,6 +443,10 @@ public class SC2PairsMode
     private readonly Dictionary<int, Rect> _rowRects = new();
     private int _presetPickIndex;
 
+    // The Shader flags list is open by default, the Border outline tools are folded away until wanted.
+    private bool _shaderFlagsExpanded = true;
+    private bool _outlineExpanded;
+
     // Border outline settings (shared by every pair's panel) and the result line of the last outline.
     private float _outlineWidth = 8f;
     private float _outlineSoftness = 0.5f;
@@ -521,74 +525,78 @@ public class SC2PairsMode
         }
         EditorGUI.EndDisabledGroup();
 
+        EditorGUILayout.Space(SC2UiScale.Pxf(12f));
+        SC2TerrainShell.DrawUnifiedSectionLabel($"Pairs ({Data.Pairs.Count})");
+        for (var i = 0; i < Data.Pairs.Count; i++) DrawRow(i);
+        if (_sel >= 0 && _sel < Data.Pairs.Count)
+        {
+            // The selected pair's settings in a card of their own, so they read as one block under the list.
+            EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+            SC2TerrainShell.BeginUnifiedPanelBox();
+            DrawDetails(_sel);
+            SC2TerrainShell.EndUnifiedPanelBox();
+        }
+
         // Only on the core terrain's own Pairs tab — this class is also
         // reused, unchanged, for the Background tab's own single pair
         // (Data == bg there, never == _win.Data), where a second copy of a
         // control that already affects the background too would be a
         // confusing duplicate rather than a second independent setting.
-        if (Data == _win.Data)
-        {
-            EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField("Global UV Scale", EditorStyles.boldLabel);
-            var newGlobalUvEnabled = EditorGUILayout.ToggleLeft(" Enabled (applies to core AND background pairs)", Data.GlobalUvScaleEnabled);
-            if (newGlobalUvEnabled != Data.GlobalUvScaleEnabled)
-            {
-                _win.RecordUndoCheckpointFor(Data, "Toggle Global UV Scale");
-                Data.GlobalUvScaleEnabled = newGlobalUvEnabled;
-                EditorUtility.SetDirty(Data);
-                _win.RefreshBackgroundRuntime();
-                _win.ApplyPreviewModeToChunks();
-                _win.MarkDirtyAndRepaint();
-            }
-            if (Data.GlobalUvScaleEnabled)
-            {
-                var newGlobalUvScale = SC2TerrainShell.DrawCompactSlider("UV Tile Size (world units)", Data.GlobalUvScale, 0.5f, 150f,
-                    onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Global UV Scale"));
-                if (!Mathf.Approximately(newGlobalUvScale, Data.GlobalUvScale))
-                {
-                    Data.GlobalUvScale = Mathf.Max(0.0001f, newGlobalUvScale);
-                    _win.RefreshBackgroundRuntime();
-                    _win.ApplyPreviewModeToChunks();
-                    _win.MarkDirtyAndRepaint();
-                }
-            }
-            SC2TerrainShell.DrawUnifiedNote("One shared tiling scale for EVERY pair on both the playable core and the decorative background — supersedes each pair's own Tiling Scale below while enabled, guaranteeing the texture tiling frequency can never mismatch at the seam or between two core pairs. Off leaves per-pair tiling exactly as authored.");
-
-            EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField("Terrain UV1", EditorStyles.boldLabel);
-            var newHeightWeight = SC2TerrainShell.DrawCompactSlider("Height Stretch Weight", Data.Uv1HeightWeight, 0.25f, 10f,
-                onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change UV1 Height Weight"));
-            if (!Mathf.Approximately(newHeightWeight, Data.Uv1HeightWeight))
-            {
-                Data.Uv1HeightWeight = Mathf.Max(0f, newHeightWeight);
-                EditorUtility.SetDirty(Data);
-            }
-            SC2TerrainShell.DrawUnifiedNote("1 = physically accurate (a slope's UV1 span matches its real 3D surface distance). Higher exaggerates the correction further, so steep cliffs/mountains claim even MORE UV space than their real distance alone would give them — useful if 1 still isn't enough to hide stretching on very sharp terrain. Saved with the map; applies to core and background alike, same as Global UV Scale above. Press Recalculate UV1 below to see the new value.");
-            if (GUILayout.Button("Recalculate UV1 (fix cliff texture stretching)", GUILayout.Height(SC2UiScale.Pxf(22f))))
-            {
-                // Not tied to Bake Lighting (a separate, independent
-                // feature/button) — this ONLY refreshes the live preview's
-                // own tiling coordinate to match the current terrain shape
-                // and Height Stretch Weight above. Export already computes
-                // UV1 fresh every time on its own (SC2TerrainExporter)
-                // using whatever Uv1HeightWeight is currently saved, so
-                // there's nothing to "turn on" there; this button exists so
-                // the EDITOR VIEW doesn't keep showing a stale mapping after
-                // terrain edits or a weight change until asked to refresh —
-                // continuous per-edit recompute was deliberately avoided
-                // (see SC2TerrainRuntime.RecalculateUv1's own comment) since
-                // this runs during active sculpting/painting.
-                _win.Runtime?.RecalculateUv1(Data.Uv1HeightWeight);
-                _win.BackgroundRuntime?.RecalculateUv1(Data.Uv1HeightWeight);
-                _win.MarkDirtyAndRepaint();
-            }
-            SC2TerrainShell.DrawUnifiedNote("Terrain.bdf's texture coordinates (UV1) already unwrap by real 3D surface distance on every export instead of a flat top-down X/Z projection, so a tiled texture doesn't stretch along steep cliffs/mountains. This button refreshes the EDITOR PREVIEW to match after you've reshaped the terrain — it does not bake or change lighting (that's the separate Bake Lighting button).");
-        }
-
-        EditorGUILayout.Space(4);
-        for (var i = 0; i < Data.Pairs.Count; i++) DrawRow(i);
-        if (_sel >= 0 && _sel < Data.Pairs.Count) { EditorGUILayout.Space(6); DrawDetails(_sel); }
+        if (Data == _win.Data) DrawTilingSettings();
         if (GUI.changed) { EditorUtility.SetDirty(Data); _win.Repaint(); }
+    }
+
+    /// <summary>The settings that apply to every pair at once (a shared tiling size, the cliff UV stretch), kept below the pair
+    /// list and the selected pair's card.</summary>
+    private void DrawTilingSettings()
+    {
+        EditorGUILayout.Space(SC2UiScale.Pxf(16f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Texture tiling - all pairs");
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        var newGlobalUvScale = SC2TerrainShell.DrawCompactSlider("UV Tile Size (world units)", Data.GlobalUvScale, 0.5f, 150f,
+            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Global UV Scale"));
+        if (!Mathf.Approximately(newGlobalUvScale, Data.GlobalUvScale))
+        {
+            Data.GlobalUvScale = Mathf.Max(0.0001f, newGlobalUvScale);
+            EditorUtility.SetDirty(Data);
+            _win.RefreshBackgroundRuntime();
+            _win.ApplyPreviewModeToChunks();
+            _win.MarkDirtyAndRepaint();
+        }
+        SC2TerrainShell.DrawUnifiedNote("One tiling size for every pair, core and background, so the tiling cannot differ at the seam or between pairs.");
+        SC2TerrainShell.EndUnifiedPanelBox();
+
+        EditorGUILayout.Space(SC2UiScale.Pxf(12f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Terrain UV1 - cliff stretching");
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        var newHeightWeight = SC2TerrainShell.DrawCompactSlider("Height Stretch Weight", Data.Uv1HeightWeight, 0.25f, 10f,
+            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change UV1 Height Weight"));
+        if (!Mathf.Approximately(newHeightWeight, Data.Uv1HeightWeight))
+        {
+            Data.Uv1HeightWeight = Mathf.Max(0f, newHeightWeight);
+            EditorUtility.SetDirty(Data);
+        }
+        SC2TerrainShell.DrawUnifiedNote("1 = a slope's texture span matches its real 3D surface distance. Higher gives steep cliffs more texture space, for very sharp terrain. Saved with the map; applies to core and background.");
+        if (GUILayout.Button("Recalculate UV1 (fix cliff texture stretching)", GUILayout.Height(SC2UiScale.Pxf(24f))))
+        {
+            // Not tied to Bake Lighting (a separate, independent
+            // feature/button) — this ONLY refreshes the live preview's
+            // own tiling coordinate to match the current terrain shape
+            // and Height Stretch Weight above. Export already computes
+            // UV1 fresh every time on its own (SC2TerrainExporter)
+            // using whatever Uv1HeightWeight is currently saved, so
+            // there's nothing to "turn on" there; this button exists so
+            // the EDITOR VIEW doesn't keep showing a stale mapping after
+            // terrain edits or a weight change until asked to refresh —
+            // continuous per-edit recompute was deliberately avoided
+            // (see SC2TerrainRuntime.RecalculateUv1's own comment) since
+            // this runs during active sculpting/painting.
+            _win.Runtime?.RecalculateUv1(Data.Uv1HeightWeight);
+            _win.BackgroundRuntime?.RecalculateUv1(Data.Uv1HeightWeight);
+            _win.MarkDirtyAndRepaint();
+        }
+        SC2TerrainShell.DrawUnifiedNote("Export always unwraps UV1 by real surface distance. This button only refreshes the editor preview after you reshape the terrain or change the weight; it does not bake or touch lighting.");
+        SC2TerrainShell.EndUnifiedPanelBox();
     }
 
     private static int CountTris(short[] idx, int pairIdx)
@@ -606,8 +614,12 @@ public class SC2PairsMode
 
         // Drawn from LAST frame's rect (see _rowRects's doc comment) so the
         // highlight paints behind this frame's row content, not on top of it.
-        if (_sel == i && Event.current.type == EventType.Repaint && _rowRects.TryGetValue(i, out var lastRect))
-            EditorGUI.DrawRect(lastRect, new Color(0.22f, 0.38f, 0.55f));
+        if (Event.current.type == EventType.Repaint && _rowRects.TryGetValue(i, out var lastRect))
+        {
+            // The whole row answers to the mouse (a click anywhere on it unfolds the pair), so it lights up under the pointer.
+            if (_sel == i) EditorGUI.DrawRect(lastRect, new Color(0.22f, 0.38f, 0.55f));
+            else if (lastRect.Contains(Event.current.mousePosition)) EditorGUI.DrawRect(lastRect, new Color(0.20f, 0.25f, 0.32f));
+        }
 
         EditorGUILayout.BeginHorizontal(GUILayout.Height(SC2UiScale.Pxf(28f)));
 
@@ -624,8 +636,8 @@ public class SC2PairsMode
         var pairNameStyle = new GUIStyle(EditorStyles.miniLabel) { clipping = TextClipping.Clip };
         EditorGUILayout.LabelField(pair.Name, pairNameStyle, GUILayout.MinWidth(32), GUILayout.ExpandWidth(true));
 
-        if (GUILayout.Button(_sel == i ? "v" : ">", GUILayout.Width(SC2UiScale.Pxf(22f)))) _sel = _sel==i ? -1 : i;
-        if (GUILayout.Button("x", GUILayout.Width(SC2UiScale.Pxf(20f))) &&
+        if (GUILayout.Button(_sel == i ? "▾" : "▸", GUILayout.Width(SC2UiScale.Pxf(24f)), GUILayout.Height(SC2UiScale.Pxf(24f)))) _sel = _sel==i ? -1 : i;
+        if (GUILayout.Button("x", GUILayout.Width(SC2UiScale.Pxf(24f)), GUILayout.Height(SC2UiScale.Pxf(24f))) &&
             EditorUtility.DisplayDialog("Delete", $"Delete '{pair.Name}'?", "Yes", "Cancel"))
         {
             _win.RecordUndoCheckpointFor(Data, "Remove Pair");
@@ -673,15 +685,50 @@ public class SC2PairsMode
         // work outside the real Editor. Cached for NEXT frame's highlight draw
         // above, not drawn here, since drawing it now would paint over the
         // content this same row just drew.
-        if (Event.current.type == EventType.Repaint)
-            _rowRects[i] = GUILayoutUtility.GetLastRect();
+        var rowRect = GUILayoutUtility.GetLastRect();
+        var rowEvent = Event.current;
+        if (rowEvent.type == EventType.Repaint)
+        {
+            _rowRects[i] = rowRect;
+        }
+        else if (rowEvent.type == EventType.MouseDown && rowEvent.button == 0 && rowRect.Contains(rowEvent.mousePosition))
+        {
+            // A click anywhere on the row (swatches, count, name) unfolds or folds the pair, not only on the arrow. The arrow
+            // and delete buttons have already used their own clicks by now, which leaves this event no longer a MouseDown.
+            _sel = _sel == i ? -1 : i;
+            rowEvent.Use();
+        }
+    }
+
+    /// <summary>A section heading that folds: the whole row is the click target (arrow, name and the space after it), and it
+    /// lights up under the pointer. Returns the new open state.</summary>
+    private static bool DrawFoldoutHeader(string label, bool expanded)
+    {
+        var height = SC2UiScale.Pxf(24f);
+        var rect = GUILayoutUtility.GetRect(0f, height, GUILayout.ExpandWidth(true), GUILayout.Height(height));
+        var e = Event.current;
+        var hovered = rect.Contains(e.mousePosition);
+        if (e.type == EventType.Repaint)
+        {
+            if (hovered) EditorGUI.DrawRect(rect, new Color(0.20f, 0.25f, 0.32f));
+            var style = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, fontSize = SC2UiScale.F(11) };
+            style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
+            GUI.Label(rect, (expanded ? "▾  " : "▸  ") + label, style);
+        }
+        if (e.type == EventType.MouseDown && e.button == 0 && hovered)
+        {
+            expanded = !expanded;
+            e.Use();
+        }
+        return expanded;
     }
 
     /// <summary>"Outline border": a band of the pair's second material (D2, blend alpha) along the inside of its border,
     /// painted into the active layer of the pair's Blend Mask — see SC2PaintMode.OutlinePairBorder.</summary>
     private void DrawOutlineSection(int i)
     {
-        EditorGUILayout.LabelField("Border outline", EditorStyles.boldLabel);
+        _outlineExpanded = DrawFoldoutHeader("Border outline", _outlineExpanded);
+        if (!_outlineExpanded) return;
         var key = $"pair-outline-{Data.GetInstanceID()}-{i}";
         _win.GetOutlineMinimums(Data, out var minWidth, out var minSpread, out var minSmoothing);
         _outlineWidth = SC2TerrainShell.DrawCompactSlider("Width (units)", _outlineWidth, minWidth, 64f, key);
@@ -702,6 +749,7 @@ public class SC2PairsMode
         // DelayedTextField, not TextField — same reasoning as the Material rename field's own
         // comment: this branch's ExecuteCommand+MarkDirtyAndRepaint must run once per rename, not
         // once per keystroke (confirmed to trigger a full SC2DecalsShell decal rebuild each time).
+        SC2TerrainShell.DrawUnifiedSectionLabel("Pair");
         var newPairName = EditorGUILayout.DelayedTextField("Name", pair.Name);
         if (newPairName != pair.Name)
         {
@@ -768,53 +816,8 @@ public class SC2PairsMode
             pair.RnmMaskName = newRnmMaskName;
         }
 
-        var globalUvActive = _win.Data != null && _win.Data.GlobalUvScaleEnabled;
-        EditorGUI.BeginDisabledGroup(globalUvActive);
-        var newTilingScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Tiling Scale", pair.TilingScale));
-        if (newTilingScale != pair.TilingScale)
-        {
-            _win.RecordUndoCheckpointFor(Data, "Change Tiling Scale");
-            pair.TilingScale = newTilingScale;
-            // Without this, the value was stored correctly (and the final
-            // export/EffectiveUvTilingScale resolver would use it) but the
-            // live GPU preview's own per-pair UV-scale LUT — rebuilt only
-            // when _previewDirty triggers ApplyPreviewModeToChunks — never
-            // refreshed, so the viewport kept showing the old tiling
-            // indefinitely and the edit read as having no effect at all.
-            // Matches the sibling Pair Color field's own pattern just above.
-            EditorUtility.SetDirty(Data);
-            _win.MarkDirtyAndRepaint();
-        }
-        EditorGUI.EndDisabledGroup();
-        if (globalUvActive)
-        {
-            // "above" only when this really is the core Pairs tab drawing
-            // both the control and this row in the same pass — the
-            // Background tab's own reused single-pair view (Data != _win.Data)
-            // never shows the Global UV Scale control at all any more, only
-            // the core Pairs tab does, so that row needs to say where to go.
-            var whereText = Data == _win.Data ? "above" : "on the Pairs tab";
-            SC2TerrainShell.DrawUnifiedNote($"Overridden by Global UV Scale {whereText} — currently " +
-                $"{_win.Data.GlobalUvScale:0.##} world units for every pair, core and background alike.");
-        }
-
-        // Data.GetInstanceID() in the key: since Materials/Pairs now shows
-        // the core's and the background's own panels stacked in the same
-        // frame (no more Editing Target toggle keeping them mutually
-        // exclusive), a bare "pair-{i}" would collide between e.g. core's
-        // pair 0 and background's own pair 0 — both DrawCompactSlider calls
-        // share one static cached-text dictionary keyed by this string.
-        if (Data == _win.Data)
-        {
-            pair.SimplifyRatio = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"pair-{Data.GetInstanceID()}-{i}",
-                onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Simplify Ratio"));
-        }
-        else
-        {
-            _win.DrawBackgroundDetailSlider(Data, pair, $"bgpair-{i}");
-        }
-
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Materials");
         var newMat1Index = MatPicker(i, "D1", pair.Mat1Index);
         var newMat2Index = MatPicker(i, "D2", pair.Mat2Index);
         if (newMat1Index != pair.Mat1Index || newMat2Index != pair.Mat2Index)
@@ -837,11 +840,60 @@ public class SC2PairsMode
         pair.Mat1Id = pair.Mat1Index >= 0 && pair.Mat1Index < Data.Materials.Count ? Data.Materials[pair.Mat1Index].Id : "";
         pair.Mat2Id = pair.Mat2Index >= 0 && pair.Mat2Index < Data.Materials.Count ? Data.Materials[pair.Mat2Index].Id : "";
 
-        EditorGUILayout.Space(6);
-        DrawOutlineSection(i);
-        EditorGUILayout.Space(6);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        // ── Material Presets ──────────────────────────────────────────────
+        // Applies ONLY to this pair's own fields (ShaderFile/ShaderPrefix/
+        // State/ShaderFlags/TextureScroll) — deliberately never touches
+        // Mat1Index/Mat2Index or the linked SC2TerrainData.Materials'
+        // texture paths, so a user's chosen Diffuse/Normal/Mask is never
+        // silently overwritten by picking a preset (see SC2MaterialPresets'
+        // own doc comment). Applied in place onto the existing 12-entry
+        // ShaderFlags list (set each flag's Value by key lookup) rather
+        // than replacing the list object — the same duplicate-flag safety
+        // reasoning as the reverse-sync write-back for Imported terrain.
+        SC2TerrainShell.DrawUnifiedSectionLabel("Material preset");
+        EditorGUILayout.BeginHorizontal();
+        var presetNames = new string[SC2MaterialPreset.All.Count];
+        for (var pi = 0; pi < presetNames.Length; pi++) presetNames[pi] = SC2MaterialPreset.All[pi].Name;
+        _presetPickIndex = EditorGUILayout.Popup(Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1), presetNames, SC2UiScale.PopupStyle());
+        if (GUILayout.Button("Apply", GUILayout.Width(SC2UiScale.Pxf(60f))))
+        {
+            var preset = SC2MaterialPreset.All[_presetPickIndex];
+            _win.RecordUndoCheckpointFor(Data, "Apply Material Preset");
+            if (pair.ShaderFlags == null || pair.ShaderFlags.Count == 0)
+                pair.ShaderFlags = DefaultFlags();
+            foreach (var flag in pair.ShaderFlags)
+                if (preset.Flags.TryGetValue(flag.Key, out var presetValue))
+                    flag.Value = presetValue;
+            pair.State = preset.State;
+            pair.TextureScroll = preset.TextureScroll;
+            pair.ShaderFile = preset.ShaderFile;
+            pair.ShaderPrefix = preset.ShaderPrefix;
+            if (preset.Flags.TryGetValue("ALPHA_TEST", out var alphaTestOn) && alphaTestOn)
+                pair.AlphaTestThreshold = preset.AlphaTestThreshold;
+            // A preset's Ramp / Environment textures only fill a slot that is still empty; a texture the
+            // user already picked is never replaced.
+            if (!string.IsNullOrEmpty(preset.RampPath) && string.IsNullOrEmpty(pair.RampPath))
+            {
+                pair.RampPath = preset.RampPath;
+                pair.RampSourceTag = "";
+                pair.RampForceExport = false;
+            }
+            if (!string.IsNullOrEmpty(preset.EnvironmentPath) && string.IsNullOrEmpty(pair.EnvironmentPath))
+            {
+                pair.EnvironmentPath = preset.EnvironmentPath;
+                pair.EnvironmentSourceTag = "";
+                pair.EnvironmentForceExport = false;
+            }
+        }
+        EditorGUILayout.EndHorizontal();
+        if (!string.IsNullOrEmpty(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description))
+            EditorGUILayout.HelpBox(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description, MessageType.None);
+
         // ── Shader flags ──────────────────────────────────────────────────
-        EditorGUILayout.LabelField("Shader Flags", EditorStyles.boldLabel);
+        _shaderFlagsExpanded = DrawFoldoutHeader("Shader flags", _shaderFlagsExpanded);
+        if (_shaderFlagsExpanded)
+        {
         if (pair.ShaderFlags == null || pair.ShaderFlags.Count == 0)
             pair.ShaderFlags = DefaultFlags();
         // A pair saved with an older, shorter flag list (9 of the 13) would otherwise never show the rest
@@ -889,61 +941,12 @@ public class SC2PairsMode
             pair.ShaderFlags = DefaultFlags();
         }
         EditorGUILayout.EndHorizontal();
-
-        EditorGUILayout.Space(6);
-        // ── Material Presets ──────────────────────────────────────────────
-        // Applies ONLY to this pair's own fields (ShaderFile/ShaderPrefix/
-        // State/ShaderFlags/TextureScroll) — deliberately never touches
-        // Mat1Index/Mat2Index or the linked SC2TerrainData.Materials'
-        // texture paths, so a user's chosen Diffuse/Normal/Mask is never
-        // silently overwritten by picking a preset (see SC2MaterialPresets'
-        // own doc comment). Applied in place onto the existing 12-entry
-        // ShaderFlags list (set each flag's Value by key lookup) rather
-        // than replacing the list object — the same duplicate-flag safety
-        // reasoning as the reverse-sync write-back for Imported terrain.
-        EditorGUILayout.LabelField("Material Preset", EditorStyles.boldLabel);
-        EditorGUILayout.BeginHorizontal();
-        var presetNames = new string[SC2MaterialPreset.All.Count];
-        for (var pi = 0; pi < presetNames.Length; pi++) presetNames[pi] = SC2MaterialPreset.All[pi].Name;
-        _presetPickIndex = EditorGUILayout.Popup(Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1), presetNames, SC2UiScale.PopupStyle());
-        if (GUILayout.Button("Apply", GUILayout.Width(SC2UiScale.Pxf(60f))))
-        {
-            var preset = SC2MaterialPreset.All[_presetPickIndex];
-            _win.RecordUndoCheckpointFor(Data, "Apply Material Preset");
-            if (pair.ShaderFlags == null || pair.ShaderFlags.Count == 0)
-                pair.ShaderFlags = DefaultFlags();
-            foreach (var flag in pair.ShaderFlags)
-                if (preset.Flags.TryGetValue(flag.Key, out var presetValue))
-                    flag.Value = presetValue;
-            pair.State = preset.State;
-            pair.TextureScroll = preset.TextureScroll;
-            pair.ShaderFile = preset.ShaderFile;
-            pair.ShaderPrefix = preset.ShaderPrefix;
-            if (preset.Flags.TryGetValue("ALPHA_TEST", out var alphaTestOn) && alphaTestOn)
-                pair.AlphaTestThreshold = preset.AlphaTestThreshold;
-            // A preset's Ramp / Environment textures only fill a slot that is still empty; a texture the
-            // user already picked is never replaced.
-            if (!string.IsNullOrEmpty(preset.RampPath) && string.IsNullOrEmpty(pair.RampPath))
-            {
-                pair.RampPath = preset.RampPath;
-                pair.RampSourceTag = "";
-                pair.RampForceExport = false;
-            }
-            if (!string.IsNullOrEmpty(preset.EnvironmentPath) && string.IsNullOrEmpty(pair.EnvironmentPath))
-            {
-                pair.EnvironmentPath = preset.EnvironmentPath;
-                pair.EnvironmentSourceTag = "";
-                pair.EnvironmentForceExport = false;
-            }
         }
-        EditorGUILayout.EndHorizontal();
-        if (!string.IsNullOrEmpty(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description))
-            EditorGUILayout.HelpBox(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description, MessageType.None);
-
-        EditorGUILayout.Space(6);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
         DrawPairRampAndEnvironment(pair, i);
 
-        EditorGUILayout.Space(6);
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("State and texture scroll");
         // ── State + Texture Scroll ───────────────────────────────────────
         // Real terrain.bdf TerrainMaterial fields (56-map corpus survey) —
         // pure export-time metadata for the resulting .bdf, since Pairs'
@@ -978,6 +981,8 @@ public class SC2PairsMode
             _win.RecordUndoCheckpointFor(Data, "Change Texture Scroll");
             pair.TextureScroll = newScroll;
         }
+        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
+        DrawOutlineSection(i);
     }
 
     private struct PairTextureCache { public string Path; public Texture Texture; }
@@ -987,7 +992,7 @@ public class SC2PairsMode
     /// the State and Texture Scroll below (the live preview does not draw them).</summary>
     private void DrawPairRampAndEnvironment(SC2MaterialPair pair, int i)
     {
-        EditorGUILayout.LabelField("Ramp / Environment Textures", EditorStyles.boldLabel);
+        SC2TerrainShell.DrawUnifiedSectionLabel("Ramp / Environment textures");
         if (DrawPairTextureSlot("Ramp", i, pair.RampPath, pair.RampSourceTag, pair.RampForceExport,
                 out var rampPath, out var rampTag, out var rampForce))
         {
@@ -1080,7 +1085,7 @@ public class SC2PairsMode
 
     private int MatPicker(int pairIndex, string label, int cur)
     {
-        EditorGUILayout.LabelField(label, EditorStyles.miniLabel);
+        EditorGUILayout.LabelField(label == "D1" ? "Material 1 (D1)" : "Material 2 (D2)", EditorStyles.miniLabel);
         EditorGUILayout.BeginHorizontal();
         if (cur >= 0 && cur < Data.Materials.Count)
         {

@@ -293,9 +293,24 @@ namespace UnityEditor
             EndHorizontal();
             return result;
         }
-        public static bool Toggle(string label, bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, label, options);
+        // A toggle's label does not wrap in the stock style, so its row can never be narrower than the full text: a long label
+        // pushed its container, and every row under it, wider than the panel (their right-hand buttons ended up off screen).
+        // The wrapping copy of the skin's toggle breaks the label across lines instead.
+        private static GUIStyle s_wrappingToggleSource;
+        private static GUIStyle s_wrappingToggle;
+        private static GUIStyle WrappingToggle()
+        {
+            var source = GUI.skin.toggle;
+            if (s_wrappingToggle == null || !ReferenceEquals(s_wrappingToggleSource, source))
+            {
+                s_wrappingToggleSource = source;
+                s_wrappingToggle = new GUIStyle(source) { wordWrap = true };
+            }
+            return s_wrappingToggle;
+        }
+        public static bool Toggle(string label, bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, label, WrappingToggle(), options);
         public static bool Toggle(bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, GUIContent.none, options);
-        public static bool ToggleLeft(string label, bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, label, options);
+        public static bool ToggleLeft(string label, bool value, params GUILayoutOption[] options) => GUILayout.Toggle(value, label, WrappingToggle(), options);
         public static int Popup(int selectedIndex, string[] displayedOptions, params GUILayoutOption[] options) =>
             Popup(selectedIndex, displayedOptions, null, options);
 
