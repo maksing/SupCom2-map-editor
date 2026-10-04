@@ -1253,7 +1253,7 @@ public class SC2TerrainShell : ScriptableObject
             return;
         }
 
-        DrawUnifiedSectionLabel("Water Plane");
+        DrawUnifiedSectionLabel("Water plane");
 
         var imported = GetImportedTerrainsForExport?.Invoke();
         var importedHasWater = imported != null && imported.Exists(
@@ -1261,37 +1261,70 @@ public class SC2TerrainShell : ScriptableObject
 
         if (importedHasWater)
         {
-            DrawUnifiedNote("An imported terrain.bdf already carries real water geometry — its material is kept bound to the live WaterElevation/Sun/Color values instead of generating a separate synthetic plane on top of it. The Plane Size setting below has no effect while this is the case.");
+            DrawUnifiedNote("An imported terrain.bdf already carries water geometry; its material stays bound to the live water values, so Plane Size does not apply.");
         }
         else
         {
             var info = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true);
-            if (info.WaterEnabled == 0)
-                DrawUnifiedNote("WaterEnabled is off (Environment > Water) — no plane is generated. Turn it on there to see one here.");
-            else
-                DrawUnifiedNote("A synthetic water plane is being generated for this from-scratch map (32x32 subdivided grid, real BSP tree) — see Plane Size below.");
+            DrawUnifiedNote(info.WaterEnabled == 0
+                ? "Water is off (Environment > Water): no plane is generated."
+                : "A generated plane covers this map (32x32 grid with a BSP tree).");
 
-            var newSize = Mathf.RoundToInt(DrawCompactSlider("Plane Size", _data.WaterPlaneSize, 128f, 8192f,
+            var newSize = Mathf.RoundToInt(DrawCompactSlider("Plane size", _data.WaterPlaneSize, 128f, 8192f,
                 onValueChangeStart: () => RecordUndoCheckpoint("Change Water Plane Size")));
             if (newSize != _data.WaterPlaneSize)
                 _data.WaterPlaneSize = newSize;
-            DrawUnifiedNote("World-space size (X and Z) of the generated plane — independent of the Costs/Hfield grid size, so the visible water surface can extend past, or stop short of, the playable footprint. Default 4096.");
+            DrawUnifiedNote("Size of the generated plane in world units (X and Z). It does not have to match the playable area. Default 4096.");
         }
 
-        EditorGUILayout.Space(6);
-        DrawUnifiedNote("Color, waves, elevation and depth falloff live in Environment > Water — this tab only covers the plane's own geometry.");
+        var currentUvScale = _data.WaterUvScale <= 0f ? 1024f : _data.WaterUvScale;
+        var nextUvScale = DrawCompactSlider("UV tiling scale", currentUvScale, 16f, 16384f,
+            onValueChangeStart: () => RecordUndoCheckpoint("Change Water UV Scale"));
+        if (nextUvScale > 0f && !Mathf.Approximately(nextUvScale, currentUvScale))
+        {
+            _data.WaterUvScale = nextUvScale;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote("World units per texture tile (UV1 and UV2) of the exported water material. Default 1024.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
-        DrawWaterTexturePaths();
+        _waterDepthExpanded = DrawFoldoutHeader("Water depth texture", _waterDepthExpanded);
+        if (_waterDepthExpanded)
+            DrawWaterDepthGeneratorPanel();
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+
+        _waterPathsExpanded = DrawFoldoutHeader("Water export texture paths", _waterPathsExpanded);
+        if (_waterPathsExpanded)
+            DrawWaterTexturePaths();
+        else
+            DrawWaterTextureThumbs();
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+
+        DrawUnifiedNote("Colour, waves, elevation and depth falloff are set in Environment > Water; this tab covers the plane's geometry and its textures.");
     }
+
+    private bool _waterDepthExpanded = true;
+    private bool _waterPathsExpanded = true;
 
     private static readonly string[] kWaterTextureSlotLabels =
     {
         "Diffuse1 (foam)", "Diffuse2 (foam)",
         "Normal1 (waves)", "Normal2 (waves)", "Normal3 (waves)", "Normal4 (waves)",
-        "Mask1 (waterDepth — blank = auto from Map Name)", "Mask2",
-        "Texture5 (wave animation)", "Texture6",
-        "RNM Volume", "Environment", "Texture8",
+        "Mask1 (waterDepth — blank = auto from Map Name)", "",
+        "Texture5 (wave animation)", "",
+        "", "Environment", "",
     };
+
+    // Letters of the folded thumbnails, in slot order.
+    private static readonly string[] kWaterTextureSlotLetters =
+    {
+        "D1", "D2", "N1", "N2", "N3", "N4", "M1", "", "T5", "", "", "Env", "",
+    };
+
+    // The slots of the water material that can be edited, as indices into WaterTexturePaths. Mask2, Texture6, the RNM volume and
+    // Texture8 are not offered: the export leaves them empty (SC2WaterPlane.BuildWaterMaterial).
+    private static readonly int[] kWaterEditableSlots = { 0, 1, 2, 3, 4, 5, 6, 8, 11 };
 
     /// <summary>The from-scratch water plane's (SC2WaterPlane)
     /// exported "Water" material texture paths — stored as plain path
@@ -1306,65 +1339,75 @@ public class SC2TerrainShell : ScriptableObject
     /// (mirroring DrawTextureField/BuildTextureReference's same round-trip
     /// for ordinary materials), not stored as a live Texture2D reference —
     /// the export format only ever wants the path string, real texture data
-    /// always comes from the user's own game installation at load time.
-    ///
-    /// Moved here from SC2MaterialsMode (the Materials tab) —
-    /// this is water-specific configuration, so it belongs
-    /// on the Water tab (this method), not tucked into the unrelated
-    /// Materials tab where it previously lived purely because that's where
-    /// per-material texture pickers already existed to copy the pattern
-    /// from.</summary>
+    /// always comes from the user's own game installation at load time.</summary>
     private void DrawWaterTexturePaths()
     {
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Water (export texture paths)", EditorStyles.boldLabel);
-
+        EnsureWaterTexturePaths();
         BeginUnifiedPanelBox();
-        DrawUnifiedNote(
-            "Real vanilla defaults for the from-scratch water plane's exported material. Pick a texture the " +
-            "same way as Diffuse/Normal/Mask on the Materials tab — only the real game path string is ever " +
-            "exported into terrain.bdf, your own game installation resolves the actual .dds file when the map loads.");
+        DrawUnifiedNote("Textures of the generated water material. Only the game path is exported; the game resolves the file when the map loads.");
 
-        var currentUvScale = _data.WaterUvScale <= 0f ? 1024f : _data.WaterUvScale;
-        var nextUvScale = EditorGUILayout.FloatField("UV Tiling Scale (world units/tile)", currentUvScale);
-        if (nextUvScale > 0f && !Mathf.Approximately(nextUvScale, currentUvScale))
-        {
-            RecordUndoCheckpoint("Change Water UV Scale");
-            _data.WaterUvScale = nextUvScale;
-            EditorUtility.SetDirty(_data);
-            MarkDirtyAndRepaint();
-        }
-        EditorGUILayout.Space(4);
-
-        if (_data.WaterTexturePaths == null || _data.WaterTexturePaths.Length != 13)
-            _data.WaterTexturePaths = new string[13];
-
-        for (var i = 0; i < 13; i++)
+        foreach (var i in kWaterEditableSlots)
         {
             var isMask1Slot = i == 6;
             if (isMask1Slot && _data.WaterDepthAutoGenerate)
                 EditorGUI.BeginDisabledGroup(true);
 
-            var currentPath = _data.WaterTexturePaths[i] ?? "";
-            var currentTex = SC2TerrainMaterialFactory.LoadTexturePublic(currentPath);
+            var currentTex = SC2TerrainMaterialFactory.LoadTexturePublic(_data.WaterTexturePaths[i] ?? "");
             var nextTex = DrawTexturePicker(kWaterTextureSlotLabels[i], currentTex, "Water:" + i) as Texture2D;
-            if (nextTex != currentTex && !(isMask1Slot && _data.WaterDepthAutoGenerate))
-            {
-                RecordUndoCheckpoint("Change Water Texture Path");
-                _data.WaterTexturePaths[i] = BuildWaterTexturePath(nextTex);
-                EditorUtility.SetDirty(_data);
-                MarkDirtyAndRepaint();
-            }
+            ApplyWaterTexturePick(i, currentTex, nextTex);
 
             if (isMask1Slot && _data.WaterDepthAutoGenerate)
             {
                 EditorGUI.EndDisabledGroup();
-                DrawUnifiedNote("Generated automatically at export time — see \"Water Depth Texture\" below. Turn Auto-Generate off to pick a texture here manually instead.");
+                DrawUnifiedNote("Generated at export (see Water depth texture above). Turn Auto-Generate off to pick a texture here.");
             }
         }
         EndUnifiedPanelBox();
+    }
 
-        DrawWaterDepthGeneratorPanel();
+    /// <summary>The folded form of the texture list: every slot as a small thumbnail with its letter, so the whole set can be read at
+    /// a glance and a texture assigned without unfolding. A thumbnail opens the browser under the key the full picker uses.</summary>
+    private void DrawWaterTextureThumbs()
+    {
+        EnsureWaterTexturePaths();
+        BeginUnifiedPanelBox();
+        var size = SC2UiScale.Pxf(34f);
+        const int perRow = 3;
+        for (var first = 0; first < kWaterEditableSlots.Length; first += perRow)
+        {
+            if (first > 0) EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+            GUILayout.BeginHorizontal();
+            for (var slotIndex = first; slotIndex < first + perRow && slotIndex < kWaterEditableSlots.Length; slotIndex++)
+            {
+                var i = kWaterEditableSlots[slotIndex];
+                var pickerKey = "Water:" + i;
+                // The auto-generated depth texture owns Mask1, so that slot only shows.
+                var locked = i == 6 && _data.WaterDepthAutoGenerate;
+                var previousEnabled = GUI.enabled;
+                if (locked) GUI.enabled = false;
+                var currentTex = SC2TerrainMaterialFactory.LoadTexturePublic(_data.WaterTexturePaths[i] ?? "");
+                var nextTex = DrawTextureThumb(pickerKey, kWaterTextureSlotLetters[i], TextureUsageForPicker(pickerKey), size, currentTex) as Texture2D;
+                GUI.enabled = previousEnabled;
+                ApplyWaterTexturePick(i, currentTex, nextTex);
+            }
+            GUILayout.EndHorizontal();
+        }
+        EndUnifiedPanelBox();
+    }
+
+    private void EnsureWaterTexturePaths()
+    {
+        if (_data.WaterTexturePaths == null || _data.WaterTexturePaths.Length != 13)
+            _data.WaterTexturePaths = new string[13];
+    }
+
+    private void ApplyWaterTexturePick(int slot, Texture2D current, Texture2D next)
+    {
+        if (next == current || (slot == 6 && _data.WaterDepthAutoGenerate)) return;
+        RecordUndoCheckpoint("Change Water Texture Path");
+        _data.WaterTexturePaths[slot] = BuildWaterTexturePath(next);
+        EditorUtility.SetDirty(_data);
+        MarkDirtyAndRepaint();
     }
 
     /// <summary>Generates a real waterDepth texture for the water material's
@@ -1379,15 +1422,12 @@ public class SC2TerrainShell : ScriptableObject
     /// the shoreline distance transform is real work at higher resolutions).</summary>
     private void DrawWaterDepthGeneratorPanel()
     {
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Water Depth Texture (Mask1 generator)", EditorStyles.boldLabel);
         BeginUnifiedPanelBox();
         DrawUnifiedNote(
-            "Generates the real waterDepth texture at export time from this map's own heightfield vs. WaterElevation: " +
-            "color = the water color (Environment > Water), alpha 0 = no water (land), alpha ramps from a low floor at " +
-            "the shoreline (strong foam) up to fully opaque in open water (no foam) — matches SC2/Water's own shore-foam convention.");
+            "Generated at export from the heightfield and the water elevation: land is transparent, the shoreline has a low alpha " +
+            "(strong foam) and open water is opaque (no foam). The colour comes from Environment > Water.");
 
-        var nextAuto = EditorGUILayout.Toggle("Auto-Generate Water Depth Texture", _data.WaterDepthAutoGenerate);
+        var nextAuto = EditorGUILayout.ToggleLeft(" Auto-generate water depth texture", _data.WaterDepthAutoGenerate);
         if (nextAuto != _data.WaterDepthAutoGenerate)
         {
             RecordUndoCheckpoint("Toggle Water Depth Auto-Generate");
@@ -1395,6 +1435,7 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
 
         EditorGUI.BeginDisabledGroup(!_data.WaterDepthAutoGenerate);
 
@@ -1410,8 +1451,9 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
 
-        var nextMargin = DrawCompactSlider("Shore Margin (world units)", _data.WaterDepthMargin, 4f, 512f,
+        var nextMargin = DrawCompactSlider("Shore margin (world units)", _data.WaterDepthMargin, 4f, 512f,
             onValueChangeStart: () => RecordUndoCheckpoint("Change Water Depth Margin"));
         if (!Mathf.Approximately(nextMargin, _data.WaterDepthMargin))
         {
@@ -1419,9 +1461,9 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
-        DrawUnifiedNote("How far from the shoreline (world units) the alpha gradient/foam falloff spreads before reaching open water.");
+        DrawUnifiedNote("Distance from the shoreline over which the foam fades out to open water.");
 
-        var nextFalloff = DrawCompactSlider("Alpha Falloff Coefficient", _data.WaterDepthFalloffPower, 0.25f, 8f,
+        var nextFalloff = DrawCompactSlider("Alpha falloff", _data.WaterDepthFalloffPower, 0.25f, 8f,
             onValueChangeStart: () => RecordUndoCheckpoint("Change Water Depth Falloff"));
         if (!Mathf.Approximately(nextFalloff, _data.WaterDepthFalloffPower))
         {
@@ -1429,9 +1471,9 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
-        DrawUnifiedNote("1 = linear ramp. Higher keeps foam strong closer to shore before rising sharply to open water; lower rises immediately.");
+        DrawUnifiedNote("1 = linear. Higher keeps the foam strong near the shore and then rises sharply; lower rises at once.");
 
-        var nextMinAlpha = DrawCompactSlider("Shoreline Min Alpha", _data.WaterDepthMinAlpha, 0.01f, 0.5f,
+        var nextMinAlpha = DrawCompactSlider("Shoreline min alpha", _data.WaterDepthMinAlpha, 0.01f, 0.5f,
             onValueChangeStart: () => RecordUndoCheckpoint("Change Water Depth Min Alpha"));
         if (!Mathf.Approximately(nextMinAlpha, _data.WaterDepthMinAlpha))
         {
@@ -1439,8 +1481,9 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
 
-        var nextLandBleed = DrawCompactSlider("Land Bleed (texels)", _data.WaterDepthLandBleedTexels, 0f, 50f,
+        var nextLandBleed = DrawCompactSlider("Land bleed (texels)", _data.WaterDepthLandBleedTexels, 0f, 50f,
             onValueChangeStart: () => RecordUndoCheckpoint("Change Water Depth Land Bleed"));
         if (!Mathf.Approximately(nextLandBleed, _data.WaterDepthLandBleedTexels))
         {
@@ -1448,9 +1491,9 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
-        DrawUnifiedNote("How many texels the water-depth pixels extend into the terrain boundary (land texels near the shore keep a non-zero alpha instead of a hard cutoff). Applies to the Game View on Regenerate Preview, and to the exported texture. 0 = hard cutoff.");
+        DrawUnifiedNote("How far the water alpha reaches onto the land, in texels, instead of a hard cutoff (0). Applies to the preview and to the export.");
 
-        var nextBorder = EditorGUILayout.Toggle("Paint Water At Image Border", _data.WaterDepthPaintBorder);
+        var nextBorder = EditorGUILayout.ToggleLeft(" Paint water at the image border", _data.WaterDepthPaintBorder);
         if (nextBorder != _data.WaterDepthPaintBorder)
         {
             RecordUndoCheckpoint("Toggle Water Depth Border Paint");
@@ -1458,9 +1501,9 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
-        DrawUnifiedNote("Forces the outer ring of the texture to read as water — for a water body that runs off the edge of the map's own footprint.");
+        DrawUnifiedNote("Makes the outer ring read as water, for a water body that runs off the edge of the map.");
 
-        var nextImageBorderOutline = EditorGUILayout.Toggle("Outline Image Border (1px)", _data.WaterDepthImageBorderOutline);
+        var nextImageBorderOutline = EditorGUILayout.ToggleLeft(" Outline the image border (1 px)", _data.WaterDepthImageBorderOutline);
         if (nextImageBorderOutline != _data.WaterDepthImageBorderOutline)
         {
             RecordUndoCheckpoint("Toggle Water Depth Image Border Outline");
@@ -1468,14 +1511,14 @@ public class SC2TerrainShell : ScriptableObject
             EditorUtility.SetDirty(_data);
             MarkDirtyAndRepaint();
         }
-        DrawUnifiedNote("Paints a hard 1-pixel ring of solid, fully-opaque water color around the texture's own outer edge — a visible frame around the whole texture, applied last so it always wins over the other options above.");
+        DrawUnifiedNote("Draws a solid, opaque 1 px ring of water colour around the texture. Applied last, so it wins over the options above.");
 
         // Ends here, not after Regenerate Preview below — the button used to sit inside this
         // group, making it unclickable whenever Auto-Generate was off.
         EditorGUI.EndDisabledGroup();
 
-        EditorGUILayout.Space(4);
-        if (GUILayout.Button("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(22f))))
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+        if (GUILayout.Button("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(26f))))
             RegenerateWaterDepthPreview();
 
         if (_waterDepthPreviewTex != null)
@@ -2955,7 +2998,7 @@ public class SC2TerrainShell : ScriptableObject
         }
 
         var e = Event.current;
-        var hovered = e != null && rect.Contains(e.mousePosition);
+        var hovered = e != null && GUI.enabled && rect.Contains(e.mousePosition);
         if (hovered && e.type == EventType.Repaint)
             DrawOutline(rect, new Color(0.55f, 0.78f, 1f, 0.95f));
         // Wide enough for a longer letter group ("Env", "RNM1") without the next thumbnail being pushed over it.

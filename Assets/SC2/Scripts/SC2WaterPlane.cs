@@ -147,6 +147,9 @@ public static class SC2WaterPlane
         var paths = data.WaterTexturePaths;
         for (var i = 0; i < mat.TexturePaths.Length && i < paths.Length; i++)
         {
+            // Mask2, Texture6, the RNM volume and Texture8 are not editable any more, so a value an older save still holds there
+            // is not exported either.
+            if (i == 7 || i == 9 || i == 10 || i == 12) continue;
             var p = paths[i];
             mat.TexturePaths[i] = string.IsNullOrEmpty(p) ? null : p;
         }
