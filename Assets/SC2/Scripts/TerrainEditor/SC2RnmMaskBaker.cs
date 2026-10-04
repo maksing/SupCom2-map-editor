@@ -76,6 +76,13 @@ public static class SC2RnmMaskBaker
         /// depends on which object it belongs to (SC2ShadowCasting). Null, or a null result, = <see cref="Hfield"/>. It has to
         /// share <see cref="HfieldOffset"/>'s frame.</summary>
         public Func<int, HfieldModel> HfieldForLayer;
+        /// <summary>World units one texel of the reference mask covers (the core's), or 0 for none. When set, the shadow's
+        /// penumbra keeps the width in world units that <see cref="ShadowSoftRadius"/> gives on that mask: a texel that covers
+        /// more ground (the floor of an imported object, packed coarsely into its own UV2) is blurred over fewer texels, one that
+        /// covers less over more. At 0 every texel is blurred by <see cref="ShadowSoftRadius"/> texels, whatever it covers.</summary>
+        public float ReferenceTexelWorld;
+        /// <summary>The march's view of each heightmap this bake meets, made once per heightmap however many masks use it.</summary>
+        internal readonly Dictionary<HfieldModel, ShadowGrid> Grids = new Dictionary<HfieldModel, ShadowGrid>();
         public bool WaterEnabled;
         public float WaterElevation;
         public float MaxWaterDepth = DefaultMaxWaterDepthForBlur;
@@ -125,6 +132,13 @@ public static class SC2RnmMaskBaker
         var t2Raw = new float[n];
         var occlusionRaw = new float[n];
         var depthUnderwater = new float[n];
+        // Where each covered texel sits in the world and which heightmap shades it; the sun test itself runs afterwards, in parallel.
+        var posX = new float[n];
+        var posY = new float[n];
+        var posZ = new float[n];
+        var gridOfTexel = new byte[n];
+        var texelWorld = new float[n]; // world units across one texel, where a triangle covers it
+        var grids = new List<ShadowGrid>();
 
         foreach (var li in layerIndices)
         {
@@ -133,7 +147,7 @@ public static class SC2RnmMaskBaker
             var triStart = layer.CumulativeIndices / 3;
             var triEnd = li + 1 < model.Layers.Count ? model.Layers[li + 1].CumulativeIndices / 3 : model.Triangles.Count;
             var sampler = blendSamplerForLayer?.Invoke(li);
-            var layerHfield = settings.HfieldForLayer?.Invoke(li) ?? settings.Hfield;
+            var layerGrid = (byte)GridIndex(settings, grids, settings.HfieldForLayer?.Invoke(li) ?? settings.Hfield);
             for (var t = triStart; t < triEnd; t++)
             {
                 var tri = model.Triangles[t];
@@ -144,12 +158,28 @@ public static class SC2RnmMaskBaker
                 var v1 = model.Vertices[i1];
                 var v2 = model.Vertices[i2];
                 RasterizeTriangleGeometry(v0, v1, v2, tangents[i0], tangents[i1], tangents[i2],
-                    mw, mh, settings.ToSun, layerHfield, settings.HfieldOffset, t0Raw, t1Raw, t2Raw, occlusionRaw, written,
+                    mw, mh, settings.ToSun, t0Raw, t1Raw, t2Raw, posX, posY, posZ, gridOfTexel, layerGrid, texelWorld, written,
                     settings.WaterEnabled, settings.WaterElevation, depthUnderwater, blend, sampler);
             }
         }
 
-        var occlusionSoft = BoxBlurOcclusion(occlusionRaw, written, mw, mh, settings.ShadowSoftRadius);
+        // Every texel's sun test is independent of the others, so the rows are shared out over all cores.
+        var toSun = settings.ToSun;
+        var offset = settings.HfieldOffset;
+        System.Threading.Tasks.Parallel.For(0, mh, row =>
+        {
+            for (var idx = row * mw; idx < (row + 1) * mw; idx++)
+            {
+                if (!written[idx]) continue;
+                var grid = grids[gridOfTexel[idx]];
+                occlusionRaw[idx] = grid != null && IsShadowed(posX[idx] - offset.x, posY[idx] - offset.y, posZ[idx] - offset.z, toSun, grid) ? 1f : 0f;
+            }
+        });
+
+        var reference = settings.ReferenceTexelWorld;
+        var densityAware = reference > 0f;
+        var occlusionSoft = BoxBlurOcclusion(occlusionRaw, written, mw, mh, settings.ShadowSoftRadius,
+            densityAware ? (Func<int, int>)(idx => ScaleRadius(settings.ShadowSoftRadius, reference, texelWorld[idx])) : null);
         // Underwater texels get a second, much wider blur pass blended in
         // by depth (0 at the waterline, full at/beyond maxWaterDepth) -
         // scattering widens the penumbra the deeper the point sits below
@@ -160,7 +190,8 @@ public static class SC2RnmMaskBaker
         var occlusionFinal = occlusionSoft;
         if (settings.WaterEnabled)
         {
-            var occlusionSoftUnderwater = BoxBlurOcclusion(occlusionRaw, written, mw, mh, settings.ShadowSoftRadiusUnderwater);
+            var occlusionSoftUnderwater = BoxBlurOcclusion(occlusionRaw, written, mw, mh, settings.ShadowSoftRadiusUnderwater,
+                densityAware ? (Func<int, int>)(idx => ScaleRadius(settings.ShadowSoftRadiusUnderwater, reference, texelWorld[idx])) : null);
             occlusionFinal = new float[n];
             for (var idx = 0; idx < n; idx++)
             {
@@ -244,8 +275,9 @@ public static class SC2RnmMaskBaker
     private static void RasterizeTriangleGeometry(
         TerrainVertex v0, TerrainVertex v1, TerrainVertex v2,
         Vector3 tan0, Vector3 tan1, Vector3 tan2,
-        int mw, int mh, Vector3 toSun, HfieldModel hfield, Vector3 hfieldOffset,
-        float[] t0Raw, float[] t1Raw, float[] t2Raw, float[] occlusionRaw, bool[] written,
+        int mw, int mh, Vector3 toSun,
+        float[] t0Raw, float[] t1Raw, float[] t2Raw, float[] posX, float[] posY, float[] posZ, byte[] gridOfTexel, byte layerGrid,
+        float[] texelWorld, bool[] written,
         bool waterEnabled, float waterElevation, float[] depthUnderwater,
         byte[] blendOut = null, Func<float, float, byte> blendSampler = null)
     {
@@ -264,6 +296,11 @@ public static class SC2RnmMaskBaker
 
         var denom = (p1.y - p2.y) * (p0.x - p2.x) + (p2.x - p1.x) * (p0.y - p2.y);
         if (Mathf.Abs(denom) < 1e-8f) return; // degenerate triangle in UV2 space
+
+        // World units across one texel of this triangle: the square root of its area on the ground over its area on the mask.
+        var edge1 = new Vector3(v1.PosX - v0.PosX, v1.PosY - v0.PosY, v1.PosZ - v0.PosZ);
+        var edge2 = new Vector3(v2.PosX - v0.PosX, v2.PosY - v0.PosY, v2.PosZ - v0.PosZ);
+        var worldPerTexel = Mathf.Sqrt(Vector3.Cross(edge1, edge2).magnitude / Mathf.Abs(denom));
 
         var n0 = new Vector3(v0.NormalX, v0.NormalY, v0.NormalZ);
         var n1 = new Vector3(v1.NormalX, v1.NormalY, v1.NormalZ);
@@ -337,19 +374,17 @@ public static class SC2RnmMaskBaker
             // directly would bake a hard, 1-texel-wide shadow edge with no
             // penumbra, which is exactly the "shadows come out too hard
             // in-game" symptom this two-pass split fixes.
-            // hfieldOffset is nonzero exactly when this triangle's own
-            // world-space frame doesn't already match hfield's (the
-            // unified core+background heightmap is expressed in
-            // background-local space — see BuildShadowHfield) — subtracted
-            // here only for the hfield lookup, never affecting worldX/Y/Z
-            // themselves (still used below for the water-depth calc, which
-            // needs the real absolute world Y regardless of XZ frame).
-            var occluded = IsShadowed(worldX - hfieldOffset.x, worldY - hfieldOffset.y, worldZ - hfieldOffset.z, toSun, hfield);
+            // The occlusion itself is tested after the whole mask is rasterised (BakeMaskGroup), from the position
+            // kept here. The heightmap's frame offset (nonzero exactly when this triangle's own world-space frame
+            // doesn't already match the heightmap's - see BuildShadowCasters) is subtracted there, only for the
+            // lookup, so these positions stay absolute (the water-depth calc below needs the real world Y).
+            posX[idx] = worldX; posY[idx] = worldY; posZ[idx] = worldZ;
+            gridOfTexel[idx] = layerGrid;
+            texelWorld[idx] = worldPerTexel;
 
             t0Raw[idx] = Mathf.Clamp01(Vector3.Dot(w0dir, toSun));
             t1Raw[idx] = Mathf.Clamp01(Vector3.Dot(w1dir, toSun));
             t2Raw[idx] = Mathf.Clamp01(Vector3.Dot(w2dir, toSun));
-            occlusionRaw[idx] = occluded ? 1f : 0f;
             depthUnderwater[idx] = waterEnabled ? Mathf.Max(0f, waterElevation - worldY) : 0f;
             if (blendOut != null && blendSampler != null)
                 blendOut[idx] = blendSampler((tx + 0.5f) / mw, (ty + 0.5f) / mh);
@@ -375,7 +410,7 @@ public static class SC2RnmMaskBaker
     /// per-texel box blur regardless of radius. Unwritten texels (map edges/
     /// UV gaps) are excluded from both the sum and the neighbour count, so
     /// they don't pull the blur toward "lit" at real geometry boundaries.</summary>
-    private static float[] BoxBlurOcclusion(float[] raw, bool[] written, int w, int h, int radius)
+    internal static float[] BoxBlurOcclusion(float[] raw, bool[] written, int w, int h, int radius, Func<int, int> radiusAt = null)
     {
         var W = w + 1;
         var sumVal = new double[W * (h + 1)];
@@ -400,14 +435,25 @@ public static class SC2RnmMaskBaker
         {
             var idx = y * w + x;
             if (!written[idx]) continue;
-            var x0 = Mathf.Max(0, x - radius);
-            var x1 = Mathf.Min(w - 1, x + radius);
-            var y0 = Mathf.Max(0, y - radius);
-            var y1 = Mathf.Min(h - 1, y + radius);
+            var r = radiusAt != null ? radiusAt(idx) : radius;
+            var x0 = Mathf.Max(0, x - r);
+            var x1 = Mathf.Min(w - 1, x + r);
+            var y0 = Mathf.Max(0, y - r);
+            var y1 = Mathf.Min(h - 1, y + r);
             var cnt = Query(sumCnt, x0, y0, x1, y1);
             result[idx] = cnt > 0 ? (float)(Query(sumVal, x0, y0, x1, y1) / cnt) : 0f;
         }
         return result;
+    }
+
+    /// <summary>The blur radius, in texels, that gives a texel covering <paramref name="texelWorld"/> world units the same
+    /// penumbra width in world units as <paramref name="radius"/> texels give on a mask whose texel covers
+    /// <paramref name="referenceTexelWorld"/>. A texel no triangle measured (0) keeps <paramref name="radius"/>; the result is
+    /// held between 0 and four times <paramref name="radius"/>.</summary>
+    internal static int ScaleRadius(int radius, float referenceTexelWorld, float texelWorld)
+    {
+        if (radius <= 0 || referenceTexelWorld <= 0f || texelWorld <= 0f) return radius;
+        return Mathf.Clamp(Mathf.RoundToInt(radius * referenceTexelWorld / texelWorld), 0, radius * 4);
     }
 
     /// <summary>Combines the raw per-basis NdotL with the softened occlusion
@@ -471,7 +517,7 @@ public static class SC2RnmMaskBaker
     /// self-shadowing - avoids needing a queryable 3D mesh/BSP raycaster
     /// (TerrainBspBuilder's BSP is a write-only serialization target for the
     /// game engine, not exposed for C# queries).</summary>
-    private static bool IsShadowed(float worldX, float worldY, float worldZ, Vector3 toSun, HfieldModel hfield)
+    internal static bool IsShadowed(float worldX, float worldY, float worldZ, Vector3 toSun, ShadowGrid grid)
     {
         var horizontal = new Vector2(toSun.x, toSun.z);
         var horizontalLen = horizontal.magnitude;
@@ -486,29 +532,143 @@ public static class SC2RnmMaskBaker
             var d = i * ShadowStepSize;
             var sampleX = worldX + horizontal.x * d;
             var sampleZ = worldZ + horizontal.y * d;
-            if (sampleX < 0f || sampleX >= hfield.MapX - 1 || sampleZ < 0f || sampleZ >= hfield.MapY - 1)
+            if (sampleX < 0f || sampleX >= grid.MapX - 1 || sampleZ < 0f || sampleZ >= grid.MapY - 1)
                 return false; // marched off the map edge - nothing left to occlude it
             var rayHeight = worldY + d * slope;
-            var terrainHeight = SampleHeightmapBilinear(hfield, sampleX, sampleZ);
+
+            // The ray only climbs, so once it is above everything in a block of the map it stays above all of it, and the
+            // steps that land in that block need no sampling. Same answer as testing every step, only faster.
+            var skipTo = grid.StepsSafeToSkip(sampleX, sampleZ, rayHeight, d, horizontal.x, horizontal.y, ShadowStepSize);
+            if (skipTo > i) { i = skipTo - 1; continue; }
+
+            var terrainHeight = grid.SampleBilinear(sampleX, sampleZ);
             if (terrainHeight > rayHeight) return true;
         }
         return false;
     }
 
-    private static float SampleHeightmapBilinear(HfieldModel hfield, float x, float z)
+    /// <summary>Which of the <see cref="ShadowGrid"/> list belongs to a heightmap (added to it on first use); null = none.</summary>
+    private static int GridIndex(Settings settings, List<ShadowGrid> grids, HfieldModel hfield)
     {
-        var x0 = Mathf.FloorToInt(x);
-        var z0 = Mathf.FloorToInt(z);
-        var x1 = Mathf.Min(x0 + 1, (int)hfield.MapX - 1);
-        var z1 = Mathf.Min(z0 + 1, (int)hfield.MapY - 1);
-        var fx = x - x0;
-        var fz = z - z0;
-        float H(int gx, int gz) => hfield.Heightmap[gz * (int)hfield.MapX + gx] / HeightRawScale;
-        var h00 = H(x0, z0);
-        var h10 = H(x1, z0);
-        var h01 = H(x0, z1);
-        var h11 = H(x1, z1);
-        return Mathf.Lerp(Mathf.Lerp(h00, h10, fx), Mathf.Lerp(h01, h11, fx), fz);
+        if (hfield == null)
+        {
+            var none = grids.IndexOf(null);
+            if (none >= 0) return none;
+            grids.Add(null);
+            return grids.Count - 1;
+        }
+        if (!settings.Grids.TryGetValue(hfield, out var grid)) settings.Grids[hfield] = grid = new ShadowGrid(hfield);
+        var index = grids.IndexOf(grid);
+        if (index >= 0) return index;
+        if (grids.Count >= byte.MaxValue) throw new InvalidOperationException("Too many different shadow heightmaps in one mask.");
+        grids.Add(grid);
+        return grids.Count - 1;
+    }
+
+    /// <summary>A heightmap for the horizon march, with the highest value of every 16x16 and 64x64 block of cells next to it so
+    /// the march can leap over stretches that cannot hold a hit.</summary>
+    internal sealed class ShadowGrid
+    {
+        private const int Fine = 16, Coarse = 64;
+        // Added to a block's maximum before it is compared with the ray: the bilinear sample is mathematically never above the
+        // highest of its four cells, but the float arithmetic can land a hair over.
+        private const float Margin = 1e-3f;
+
+        public readonly int MapX, MapY;
+        private readonly ushort[] _heights;
+        private readonly float[] _fineMax, _coarseMax;
+        private readonly int _fineW, _coarseW;
+
+        public ShadowGrid(HfieldModel hfield)
+        {
+            MapX = (int)hfield.MapX; MapY = (int)hfield.MapY;
+            _heights = hfield.Heightmap;
+            _fineW = (MapX + Fine - 1) / Fine;
+            _coarseW = (MapX + Coarse - 1) / Coarse;
+            _fineMax = BlockMax(Fine, _fineW);
+            _coarseMax = BlockMax(Coarse, _coarseW);
+        }
+
+        // A block of cells [b*size, b*size + size] on each axis (one cell more than its width, which is the last cell a
+        // bilinear sample that starts inside the block reads).
+        private float[] BlockMax(int size, int blocksX)
+        {
+            var blocksY = (MapY + size - 1) / size;
+            var max = new ushort[blocksX * blocksY];
+            for (var z = 0; z < MapY; z++)
+            {
+                var rowBlock = z / size;
+                var rowBlockBelow = z % size == 0 && z > 0 ? rowBlock - 1 : -1; // the block above also reads this row as its last
+                var rowOffset = z * MapX;
+                for (var x = 0; x < MapX; x++)
+                {
+                    var h = _heights[rowOffset + x];
+                    var colBlock = x / size;
+                    var colBlockLeft = x % size == 0 && x > 0 ? colBlock - 1 : -1;
+                    Raise(max, rowBlock * blocksX + colBlock, h);
+                    if (colBlockLeft >= 0) Raise(max, rowBlock * blocksX + colBlockLeft, h);
+                    if (rowBlockBelow >= 0)
+                    {
+                        Raise(max, rowBlockBelow * blocksX + colBlock, h);
+                        if (colBlockLeft >= 0) Raise(max, rowBlockBelow * blocksX + colBlockLeft, h);
+                    }
+                }
+            }
+            var result = new float[max.Length];
+            for (var i = 0; i < max.Length; i++) result[i] = max[i] / HeightRawScale;
+            return result;
+        }
+
+        private static void Raise(ushort[] max, int index, ushort value)
+        {
+            if (value > max[index]) max[index] = value;
+        }
+
+        /// <summary>The step to continue the march at when the ray, at step distance <paramref name="d"/> and height
+        /// <paramref name="rayHeight"/>, is above everything in the block it is in, so that every step up to there is a miss;
+        /// 0 when it is not above a block. Steps are <paramref name="stepSize"/> apart along the unit direction (dirX, dirZ).</summary>
+        public int StepsSafeToSkip(float x, float z, float rayHeight, float d, float dirX, float dirZ, float stepSize)
+        {
+            var coarse = ExitStep(_coarseMax, _coarseW, Coarse, x, z, rayHeight, d, dirX, dirZ, stepSize);
+            if (coarse > 0) return coarse;
+            return ExitStep(_fineMax, _fineW, Fine, x, z, rayHeight, d, dirX, dirZ, stepSize);
+        }
+
+        private static int ExitStep(float[] blockMax, int blocksX, int size, float x, float z, float rayHeight, float d,
+            float dirX, float dirZ, float stepSize)
+        {
+            var bx = (int)x / size; var bz = (int)z / size;
+            if (rayHeight <= blockMax[bz * blocksX + bx] + Margin) return 0;
+
+            // The ray leaves the block (as sampled: the cell index of a sample is floor(position)) at the first distance where
+            // an axis crosses the block's edge.
+            var exit = float.MaxValue;
+            if (dirX > 1e-6f) exit = Mathf.Min(exit, d + ((bx + 1) * size - x) / dirX);
+            else if (dirX < -1e-6f) exit = Mathf.Min(exit, d + (bx * size - x) / dirX);
+            if (dirZ > 1e-6f) exit = Mathf.Min(exit, d + ((bz + 1) * size - z) / dirZ);
+            else if (dirZ < -1e-6f) exit = Mathf.Min(exit, d + (bz * size - z) / dirZ);
+            if (exit >= float.MaxValue) return 0;
+
+            // Every step before this one lies inside the block; the small deduction keeps float rounding from letting the
+            // last of them stray over the edge.
+            return Mathf.FloorToInt((exit - 0.01f) / stepSize);
+        }
+
+        public float SampleBilinear(float x, float z)
+        {
+            var x0 = Mathf.FloorToInt(x);
+            var z0 = Mathf.FloorToInt(z);
+            var x1 = Mathf.Min(x0 + 1, MapX - 1);
+            var z1 = Mathf.Min(z0 + 1, MapY - 1);
+            var fx = x - x0;
+            var fz = z - z0;
+            float H(int gx, int gz) => _heights[gz * MapX + gx] / HeightRawScale;
+            var h00 = H(x0, z0);
+            var h10 = H(x1, z0);
+            var h01 = H(x0, z1);
+            var h11 = H(x1, z1);
+            return Mathf.Lerp(Mathf.Lerp(h00, h10, fx), Mathf.Lerp(h01, h11, fx), fz);
+        }
     }
 
     /// <summary>Mirrors SC2HfieldProjectionService.FillGaps, extended to 3 RGB

@@ -471,6 +471,7 @@ public static class SC2RnmBakeService
 
         var outcome = new BakeOutcome();
         var maskNumber = 0;
+        var coreTexelWorld = 0f;
         foreach (var kv in maskGroups)
         {
             var layerIndices = kv.Value;
@@ -481,7 +482,15 @@ public static class SC2RnmBakeService
             var repPair = pairs[pairIndexPerLayer[layerIndices[0]]];
             var result = SC2RnmMaskBaker.BakeMaskGroup(model, tangents, layerIndices, repPair.MaskWidth, repPair.MaskHeight, settings);
             outcome.PairMasks.Add((layerIndices, result));
+            if (coreTexelWorld <= 0f && repPair.MaskWidth > 0)
+                coreTexelWorld = Mathf.Max(1f, bakeSettingsSource.GridWidth * bakeSettingsSource.CellSize) / repPair.MaskWidth;
         }
+
+        // The masks of imported objects pack each object's floor and walls into their own UV2 at whatever density the artist
+        // chose (a few world units per texel for a large floor, against the core's fraction of a unit), so a penumbra of a
+        // fixed number of texels would come out many times wider there. Their shadows keep the width in world units that the
+        // Shadow Sharpness setting gives on the core's own masks.
+        settings.ReferenceTexelWorld = coreTexelWorld;
 
         // Imported terrain.bdf layers that were given a target mask
         // (Lighting Bake > Imported Objects) are baked by THEIR OWN UV2 into
