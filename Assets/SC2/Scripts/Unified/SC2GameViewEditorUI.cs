@@ -3459,7 +3459,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawCostsInspector()
     {
         DrawInspectorHeader("Costs",
-            "Costs and Terrain Types paint live over the current procedural terrain, exactly as sculpted — brush in the viewport below, both persist with the terrain (Save Terrain).");
+            "Paint passability and terrain types over the sculpted terrain with the brush in the viewport. Both are saved with the terrain.");
         EnsureCostsShell();
         // Same reasoning as the try/catch in HandleCostsGameViewInput — an
         // exception thrown while drawing this panel's controls would

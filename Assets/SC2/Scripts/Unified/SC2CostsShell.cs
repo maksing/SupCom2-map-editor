@@ -291,27 +291,24 @@ public sealed class SC2CostsShell
             _lastSubTab = subTab;
         }
 
+        // The grid size is fixed when the map is created, so only the block set is offered here.
         DrawBlockSetSwitcher(w);
-        EditorGUILayout.Space(4);
-
-        DrawGridSizeControl(w);
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
         if (ActiveTarget == PaintTarget.Costs && _activeBlock >= 0 && _activeBlock < Data.CostsBlocks.Count)
-            EditorGUILayout.LabelField($"Editing block: {Data.CostsBlocks[_activeBlock].Name}", EditorStyles.boldLabel, GUILayout.Width(w), GUILayout.MaxWidth(w));
-
-        EditorGUILayout.Space(4);
+            SC2TerrainShell.DrawUnifiedSectionLabel($"Block: {Data.CostsBlocks[_activeBlock].Name}");
 
         if (ActiveTarget == PaintTarget.Costs)
         {
-            var newManual = EditorGUILayout.ToggleLeft("Manual Mode (paint every block directly, no auto-resync)", _manualCostsMode, GUILayout.Width(w), GUILayout.MaxWidth(w));
+            var newManual = EditorGUILayout.ToggleLeft(" Manual mode (no auto-resync)", _manualCostsMode, GUILayout.Width(w), GUILayout.MaxWidth(w));
             if (newManual != _manualCostsMode)
             {
                 RecordUndo();
                 _manualCostsMode = newManual;
                 EnforceCostsModeForActiveBlock();
             }
-            EditorGUILayout.Space(4);
+            SC2TerrainShell.DrawUnifiedNote("Paint every block directly instead of deriving blocks 1+ from block 0.");
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
         }
 
         // Every block besides block 0 (and
@@ -324,81 +321,32 @@ public sealed class SC2CostsShell
         if (autoManaged)
         {
             SC2TerrainShell.DrawUnifiedNote(
-                "Automatically derived from block 0 — its walls are not directly paintable. It resyncs whenever block 0 " +
-                "(or the shore-hint block) changes: a paint stroke, Auto-generate, Dilate, or Copy. Use the " +
-                "button below to resync it by hand (e.g. right after loading an older save).");
-            if (GUILayout.Button("Resync derived blocks now", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+                "Derived from block 0, so its walls cannot be painted. It resyncs when block 0 (or the shore block) changes: a stroke, " +
+                "Auto-generate, Grow or Copy. Resync by hand after loading an older save.");
+            if (GUILayout.Button("Resync derived blocks now", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
             {
                 RecordUndo();
                 RecomputeDerivedCostsBlocks();
                 SyncDocumentFromLive();
             }
-            EditorGUILayout.Space(4);
+            EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+            SC2TerrainShell.DrawUnifiedSectionLabel("Painting");
             DrawPaintToggleAndRadius(w);
-            EditorGUILayout.Space(4);
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
             DrawOutlineControls(w);
         }
         else
         {
+            SC2TerrainShell.DrawUnifiedSectionLabel("Painting");
             DrawPaintToggleAndRadius(w);
-
-            EditorGUILayout.Space(4);
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
             if (ActiveTarget == PaintTarget.Costs)
                 DrawCostsControls(w);
             else
                 DrawTerrainTypesControls(w);
         }
 
-        EditorGUILayout.Space(6);
-        DrawUndoRedoRow(w);
-
-        EditorGUILayout.Space(6);
-        if (GUILayout.Button("Save Terrain (incl. Costs + Terrain Types)", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
-        {
-            SyncDocumentFromLive();
-            _terrainShell.SaveTerrainState(writeAssets: true);
-        }
-
         EditorGUILayout.EndVertical();
-    }
-
-    // Real vanilla maps use 512/1024/2048/4096, not
-    // just the previously-hardcoded 1024 (measured directly against the
-    // 56-map vanilla corpus: some real shipped maps use 512, others use
-    // 2048; 4096 isn't attested in that corpus but is included
-    // since the underlying format has no fixed ceiling).
-    private static readonly int[] GridSizeOptions = { 512, 1024, 2048, 4096 };
-
-    private void DrawGridSizeControl(float w)
-    {
-        var current = Data.CostsGridSize;
-        var currentIndex = System.Array.IndexOf(GridSizeOptions, current);
-        var labels = GridSizeOptions.Select(s => s.ToString()).ToArray();
-        EditorGUILayout.LabelField("Costs/Hfield grid size", EditorStyles.miniLabel);
-        var nextIndex = SC2TerrainShell.DrawUnifiedSegmentGrid(Mathf.Max(0, currentIndex), labels, 4);
-        var nextSize = GridSizeOptions[Mathf.Clamp(nextIndex, 0, GridSizeOptions.Length - 1)];
-        if (nextSize != current)
-        {
-            var proceed = EditorUtility.DisplayDialog("Change grid size",
-                $"Changing the Costs/Hfield grid size from {current} to {nextSize} resizes " +
-                "every Costs block and the TerrainTypes grid to match, discarding any " +
-                "hand-painted data outside the new size (and re-filling with defaults if " +
-                "the new size is larger). This cannot be undone via ↩ Undo.\n\nProceed?",
-                "Change Size", "Cancel");
-            if (proceed)
-            {
-                RecordUndo();
-                Data.CostsGridSize = nextSize;
-                Data.EnsureCostsAndTerrainTypes();
-                _overlayDirty = true;
-                SyncDocumentFromLive();
-                // The live height grid's own
-                // resolution (mapX/mapY = CostsGridSize+1) just changed.
-                _terrainShell?.InvalidateLiveHeightGrid();
-            }
-        }
-        if (current != 1024)
-            SC2TerrainShell.DrawUnifiedNote($"Non-default grid size ({current}) — make sure the terrain's actual world-space footprint matches this size (0..{current}); the grid is still anchored at world origin.");
     }
 
     /// <summary>Moved to the very top of the whole Costs panel (above grid
@@ -429,16 +377,16 @@ public sealed class SC2CostsShell
         // _painting is a tool-armed toggle, not paintable data — deliberately
         // not part of Snapshot/undo, same reasoning as SC2PairsMode's
         // selected-pair index staying untracked.
-        var paintingLabel = _painting ? "■ Painting ACTIVE (click terrain)" : "▶ Enable Painting";
-        var painting = GUILayout.Toggle(_painting, paintingLabel, "Button", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var paintingLabel = _painting ? "■ Painting is on (click the terrain)" : "▶ Enable painting";
+        var painting = GUILayout.Toggle(_painting, paintingLabel, "Button", GUILayout.Height(SC2UiScale.Pxf(30f)), GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (painting != _painting)
             _painting = painting;
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
 
-        _brushRadius = SC2TerrainShell.DrawCompactSlider("Radius (F resize)", _brushRadius, 1f, 128f,
+        _brushRadius = SC2TerrainShell.DrawCompactSlider("Radius", _brushRadius, 1f, 128f,
             onValueChangeStart: RecordUndo);
-
-        if (Data.Symmetry != SymmetryMode.None)
-            EditorGUILayout.LabelField($"Symmetry: {Data.Symmetry} (Terrain tab settings)", EditorStyles.centeredGreyMiniLabel);
+        SC2TerrainShell.DrawUnifiedNote($"Hold {SC2Hotkeys.Label("Brush.RadiusResizeGesture")} and move the mouse to resize the brush."
+            + (Data.Symmetry != SymmetryMode.None ? $" Symmetry: {Data.Symmetry} (set on the Terrain tab)." : ""));
     }
 
     /// <summary>Blocks 1+ are derived from block 0, but their automatic outline (the walls
@@ -467,9 +415,9 @@ public sealed class SC2CostsShell
         EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
         var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(16f), SC2UiScale.Pxf(16f), GUILayout.Width(SC2UiScale.Pxf(16f)));
         EditorGUI.DrawRect(swatch, OutlineOpenedColor);
-        GUILayout.Label("Marked as unneeded outline (passable)", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
+        GUILayout.Label("Outline marked as unneeded (passable)", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
         EditorGUILayout.EndHorizontal();
-        SC2TerrainShell.DrawUnifiedNote("Outline brush: the lighter walls on this block are the outline added automatically around block 0's walls. Click paints them passable (they turn green); the cost ring is recomputed around what remains. Only outline cells are affected. Hold Ctrl to restore the outline.");
+        SC2TerrainShell.DrawUnifiedNote("Outline brush: click makes the lighter outline walls around block 0's walls passable (they turn green) and the cost ring is recomputed around what remains. Only outline cells change. Hold Ctrl to restore the outline.");
     }
 
     private void DrawCostsControls(float w)
@@ -505,12 +453,12 @@ public sealed class SC2CostsShell
             EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
             var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(16f), SC2UiScale.Pxf(16f), GUILayout.Width(SC2UiScale.Pxf(16f)));
             EditorGUI.DrawRect(swatch, ShoreHintOverrideColor);
-            GUILayout.Label("Shore color — every pinned cell renders this color, regardless of passable/impassable", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
+            GUILayout.Label("Shore colour: every pinned cell shows it", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
             EditorGUILayout.EndHorizontal();
             if (_costsMode == OutlineMode)
                 DrawOutlineControls(w);
             if (_costsMode == 2)
-                SC2TerrainShell.DrawUnifiedNote("Shore mode: click paints any currently-impassable cell passable and pins it (survives every auto-resync). Already-passable cells are left untouched. Hold Ctrl to unpin instead (the cell reverts to the automatic value on the next resync).");
+                SC2TerrainShell.DrawUnifiedNote("Shore: click makes an impassable cell passable and pins it, and it stays through every resync. Passable cells are left alone. Hold Ctrl to unpin.");
         }
 
         // Which block is "active" for painting is now driven by the host's
@@ -518,27 +466,36 @@ public sealed class SC2CostsShell
         // toggle is the one remaining override, for strokes meant to apply
         // uniformly across every block regardless of which one's tab is open
         // (e.g. marking an area impassable everywhere at once).
-        var newAllBlocks = EditorGUILayout.ToggleLeft("All blocks at once (ignore active tab)", _allBlocks, GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var newAllBlocks = EditorGUILayout.ToggleLeft(" All blocks at once (ignore the active tab)", _allBlocks, GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (newAllBlocks != _allBlocks)
         {
             RecordUndo();
             _allBlocks = newAllBlocks;
         }
 
-        EditorGUILayout.Space(4);
-        if (GUILayout.Button("Recompute Islands (all blocks)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Tools");
+        // Auto-generate is the usual first step, so it starts open; the other tools are used less often and start folded.
+        _autoGenExpanded = SC2TerrainShell.DrawFoldoutHeader("Auto-generate from height", _autoGenExpanded);
+        if (_autoGenExpanded) DrawAutoGenerateControls(w);
+        if (Data.CostsBlocks.Count >= 2)
         {
-            RecordUndo();
-            RecomputeAllIslandsOnly();
-            SyncDocumentFromLive();
+            _copyExpanded = SC2TerrainShell.DrawFoldoutHeader("Copy block", _copyExpanded);
+            if (_copyExpanded) DrawCopyBlockControls(w);
         }
+        _growExpanded = SC2TerrainShell.DrawFoldoutHeader("Grow impassable area", _growExpanded);
+        if (_growExpanded) DrawDilateControls(w);
+        _importExpanded = SC2TerrainShell.DrawFoldoutHeader("Import Costs image", _importExpanded);
+        if (_importExpanded) DrawImportCostsImageControls(w);
+    }
 
-        DrawCopyBlockControls(w);
-        DrawDilateControls(w);
-        DrawImportCostsImageControls(w);
+    private bool _autoGenExpanded = true;
+    private bool _copyExpanded;
+    private bool _growExpanded;
+    private bool _importExpanded;
 
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("Auto-generate from height", EditorStyles.miniLabel);
+    private void DrawAutoGenerateControls(float w)
+    {
         // SC2EnvFieldGui.Slider — the same real slider widget Environment's
         // own tabs use (label + drag handle + a manually-editable, non-
         // clamped number box), not the plain EditorGUILayout.Slider used
@@ -568,8 +525,8 @@ public sealed class SC2CostsShell
         var blockCount = Data.CostsBlocks.Count;
         var cascadeSupported = blockCount == 3 || blockCount == 5;
         SC2TerrainShell.DrawUnifiedNote(cascadeSupported
-            ? "Real slope/water-depth generation, calibrated against in-game testing, not asserted vanilla-exact values. Only block 0 is ever generated from height — every other block (and the shore-hint-capable block's own auto base) is immediately re-derived from this result, see the note on those tabs."
-            : $"Real slope/water-depth generation for block 0. Note: auto-derivation of the other blocks only supports the real 3-block (land-only) or 5-block (playable-water) vanilla profiles — this map currently has {blockCount} blocks, so they won't resync automatically.");
+            ? "Generates block 0 from slope (and from water depth with playable water). Every other block is derived from the result. Calibrated in-game, not guaranteed vanilla-exact."
+            : $"Generates block 0 from slope and water depth. The other blocks only resync automatically for the 3-block (land) and 5-block (water) profiles; this map has {blockCount} blocks.");
     }
 
     /// <summary>Lets one Costs block's
@@ -582,17 +539,25 @@ public sealed class SC2CostsShell
     private void DrawCopyBlockControls(float w)
     {
         if (Data.CostsBlocks.Count < 2) return;
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("Copy block", EditorStyles.miniLabel);
-        var labels = Data.CostsBlocks.Select(b => b.Name).ToArray();
-        _copySourceBlock = Mathf.Clamp(_copySourceBlock, 0, labels.Length - 1);
-        _copySourceBlock = SC2TerrainShell.DrawUnifiedSegmentGrid(_copySourceBlock, labels, Mathf.Min(3, labels.Length));
-
         var hasActiveBlock = _activeBlock >= 0 && _activeBlock < Data.CostsBlocks.Count;
-        var canCopy = hasActiveBlock && _copySourceBlock != _activeBlock;
-        var destLabel = hasActiveBlock ? labels[_activeBlock] : "(no active block)";
-        EditorGUI.BeginDisabledGroup(!canCopy);
-        if (GUILayout.Button($"Copy '{labels[_copySourceBlock]}' → '{destLabel}'", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        if (!hasActiveBlock)
+        {
+            SC2TerrainShell.DrawUnifiedNote("Open a block tab to copy into it.");
+            return;
+        }
+
+        // Every other block is a possible source, listed one per row: block names run up to 35 characters
+        // ("Land_Small_water_Surface_ShoreLine"), which no multi-column row can show whole.
+        var sources = new List<int>();
+        for (var i = 0; i < Data.CostsBlocks.Count; i++)
+            if (i != _activeBlock) sources.Add(i);
+        var labels = sources.Select(i => Data.CostsBlocks[i].Name).ToArray();
+        var selected = Mathf.Max(0, sources.IndexOf(_copySourceBlock));
+        _copySourceBlock = sources[SC2TerrainShell.DrawUnifiedSegmentGrid(selected, labels, 1)];
+
+        var activeName = Data.CostsBlocks[_activeBlock].Name;
+        SC2TerrainShell.DrawUnifiedNote($"Replaces the navmesh of \"{activeName}\" with a copy of \"{Data.CostsBlocks[_copySourceBlock].Name}\".");
+        if (GUILayout.Button("Copy into this block", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
         {
             RecordUndo();
             Data.CostsBlocks[_activeBlock].Navmesh = (byte[])Data.CostsBlocks[_copySourceBlock].Navmesh.Clone();
@@ -606,7 +571,6 @@ public sealed class SC2CostsShell
             _overlayDirty = true;
             SyncDocumentFromLive();
         }
-        EditorGUI.EndDisabledGroup();
     }
 
     /// <summary>Grows the active block's (or every block's, if "All blocks
@@ -615,15 +579,13 @@ public sealed class SC2CostsShell
     /// distinct from the navmesh format's own fixed 2px border marker.</summary>
     private void DrawDilateControls(float w)
     {
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("Grow impassable area (safety margin)", EditorStyles.miniLabel);
         _dilateMargin = Mathf.RoundToInt(SC2EnvFieldGui.Slider("Margin (cells)", _dilateMargin, 1f, 20f, "costs:dilateMargin"));
         var hasTarget = _allBlocks || (_activeBlock >= 0 && _activeBlock < Data.CostsBlocks.Count);
         EditorGUI.BeginDisabledGroup(!hasTarget);
         if (GUILayout.Button($"Grow impassable by {_dilateMargin} cell(s)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
             ApplyDilateImpassable();
         EditorGUI.EndDisabledGroup();
-        SC2TerrainShell.DrawUnifiedNote("Adds real impassable cells within the chosen distance of any already-impassable cell — a pathing safety buffer around obstacles, not just a visual outline. Applies to the active block, or every block at once if 'All blocks at once' above is checked.");
+        SC2TerrainShell.DrawUnifiedNote("Makes every cell within the margin of an impassable cell impassable too: a real pathing buffer around obstacles. Applies to the active block, or to all blocks when \"All blocks at once\" is on.");
     }
 
     private void ApplyDilateImpassable()
@@ -667,9 +629,7 @@ public sealed class SC2CostsShell
     /// Mode is on.</summary>
     private void DrawImportCostsImageControls(float w)
     {
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("Import Costs image", EditorStyles.miniLabel);
-        var newInvert = EditorGUILayout.ToggleLeft("Invert (black = passable, white = impassable)", _importCostsInvertColors, GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var newInvert = EditorGUILayout.ToggleLeft(" Invert (black = passable, white = impassable)", _importCostsInvertColors, GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (newInvert != _importCostsInvertColors)
         {
             RecordUndo();
@@ -681,8 +641,8 @@ public sealed class SC2CostsShell
             ImportCostsImageFromFile();
         EditorGUI.EndDisabledGroup();
         SC2TerrainShell.DrawUnifiedNote(canImport
-            ? "Resamples any image to the current grid size — white cells become passable, black become impassable (Invert flips that). Overwrites this block's whole navmesh."
-            : "This block is automatically derived from block 0 — switch to block 0 (or the shore-hint block), or enable Manual Mode above, to import here.");
+            ? "Resamples any image to the grid: white = passable, black = impassable (Invert flips it). Overwrites this block's whole navmesh."
+            : "This block is derived from block 0. Switch to block 0 (or the shore block) or turn on Manual mode to import here.");
     }
 
     private void ImportCostsImageFromFile()
@@ -968,7 +928,9 @@ public sealed class SC2CostsShell
 
     private void DrawTerrainTypesControls(float w)
     {
-        SC2TerrainShell.DrawUnifiedNote("Paints the map's TerrainTypes grid (baked into hfield.bdf at export). Presets are editable labels/colors, not a confirmed vanilla-game id table.");
+        SC2TerrainShell.DrawUnifiedSectionLabel("Terrain type");
+        SC2TerrainShell.DrawUnifiedNote("Paints the TerrainTypes grid that is baked into hfield.bdf at export.");
+        SC2TerrainShell.DrawUnifiedNote("Default: the zone where units leave reclaim after they die. Chasm_Bottom: units leave no reclaim there.");
         for (var i = 0; i < _presets.Count; i++)
         {
             EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
@@ -986,18 +948,6 @@ public sealed class SC2CostsShell
             GUILayout.Label(_presets[i].Label, GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
             EditorGUILayout.EndHorizontal();
         }
-    }
-
-    private void DrawUndoRedoRow(float w)
-    {
-        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        EditorGUI.BeginDisabledGroup(UndoCount == 0);
-        if (GUILayout.Button($"↩ Undo ({UndoCount})")) Undo();
-        EditorGUI.EndDisabledGroup();
-        EditorGUI.BeginDisabledGroup(RedoCount == 0);
-        if (GUILayout.Button($"↪ Redo ({RedoCount})")) Redo();
-        EditorGUI.EndDisabledGroup();
-        EditorGUILayout.EndHorizontal();
     }
 
     // ==================================================================
@@ -1321,17 +1271,6 @@ public sealed class SC2CostsShell
                 }
             }
         }
-    }
-
-    private void RecomputeAllIslandsOnly()
-    {
-        var gridSize = Data.CostsGridSize;
-        foreach (var block in Data.CostsBlocks)
-        {
-            var impassable = SC2CostsAutoGen.NavmeshToImpassable(block.Navmesh);
-            SC2CostsAutoGen.ApplyImpassableToNavmesh(impassable, block.Navmesh, gridSize, gridSize);
-        }
-        _overlayDirty = true;
     }
 
     // ==================================================================

@@ -22,9 +22,8 @@ using BdfIO.Formats.Costs;
 /// SC2CostsAutoGen/SC2CostsLegacyBridge already use elsewhere.
 ///
 /// Islandmap/LongInts are deliberately NOT imported: Islandmap is a derived
-/// connectivity map the existing "Recompute Islands" button already
-/// regenerates correctly from Navmesh, and LongInts' meaning is unconfirmed
-/// and not needed for editing.
+/// connectivity map that export recomputes from Navmesh, and LongInts'
+/// meaning is unconfirmed and not needed for editing.
 /// </summary>
 public static class SC2CostsBdfImporter
 {
@@ -100,8 +99,7 @@ public static class SC2CostsBdfImporter
         {
             Success = true,
             BlocksImported = newBlocks.Count,
-            Summary = $"Imported {newBlocks.Count} Costs block(s), grid {gridSize}x{gridSize}. " +
-                      "Run \"Recompute Islands\" on the Costs tab to rebuild the island map from this data."
+            Summary = $"Imported {newBlocks.Count} Costs block(s), grid {gridSize}x{gridSize}."
         };
     }
 }
