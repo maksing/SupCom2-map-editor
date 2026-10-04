@@ -375,15 +375,9 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// past the texture's own bounds.</summary>
     public bool WaterDepthPaintBorder = true;
 
-    /// <summary>When on, forces a hard 1-texel-wide ring of fully-opaque
-    /// water color (alpha 255) around the OUTER EDGE of the generated
-    /// texture itself (x/z == 0 or texSize-1) — a visible solid frame around
-    /// the whole texture. Applied last, after every other pass (including
-    /// WaterDepthPaintBorder and the shore-edge alpha shift — see
-    /// SC2WaterDepthTextureGenerator.ShoreOutlineWidthTexels), so turning
-    /// this on always wins the outer ring. Same "full alpha, not zero"
-    /// reasoning as the shore-edge shift — a zero-alpha ring wouldn't read
-    /// as a visible outline, just a gap.</summary>
+    /// <summary>DEAD — kept only so saved maps and undo snapshots still read and write the same data. The generated waterDepth
+    /// texture always gets a 1-texel ring of alpha 255 around its outer edge (SC2WaterDepthTextureGenerator.Generate), whatever
+    /// this holds; the Water tab has no switch for it any more.</summary>
     public bool WaterDepthImageBorderOutline = false;
 
     /// <summary>Optional low-detail decorative terrain surrounding the

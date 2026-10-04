@@ -198,25 +198,18 @@ public static class SC2WaterDepthTextureGenerator
             alpha[i] = (byte)Mathf.RoundToInt(Mathf.Clamp01(a) * 255f);
         }
 
-        // See SC2TerrainData.WaterDepthImageBorderOutline's own doc comment —
-        // applied last, as a hard override over everything above (including
-        // WaterDepthPaintBorder). A visible solid stroke of fully-opaque
-        // water color (RGB is already the flat water fill above) around the
-        // texture's own outer edge, not a zero-alpha cutout — alpha 0 there
-        // would just read as "not water" and disappear instead of showing
-        // as an outline.
-        if (data.WaterDepthImageBorderOutline)
+        // The outermost texels of the image are always fully opaque (alpha 255), applied last as a hard override over everything
+        // above (including WaterDepthPaintBorder): a solid ring of the flat water colour around the texture's own edge, not a
+        // zero-alpha cutout, which would read as "not water".
+        for (var x = 0; x < texSize; x++)
         {
-            for (var x = 0; x < texSize; x++)
-            {
-                alpha[x] = 255;                                  // z = 0
-                alpha[(texSize - 1) * texSize + x] = 255;         // z = texSize-1
-            }
-            for (var z = 0; z < texSize; z++)
-            {
-                alpha[z * texSize] = 255;                         // x = 0
-                alpha[z * texSize + (texSize - 1)] = 255;         // x = texSize-1
-            }
+            alpha[x] = 255;                                  // z = 0
+            alpha[(texSize - 1) * texSize + x] = 255;         // z = texSize-1
+        }
+        for (var z = 0; z < texSize; z++)
+        {
+            alpha[z * texSize] = 255;                         // x = 0
+            alpha[z * texSize + (texSize - 1)] = 255;         // x = texSize-1
         }
     }
 

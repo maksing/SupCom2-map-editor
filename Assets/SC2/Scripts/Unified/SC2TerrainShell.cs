@@ -1504,15 +1504,7 @@ public class SC2TerrainShell : ScriptableObject
         }
         DrawUnifiedNote("Makes the outer ring read as water, for a water body that runs off the edge of the map.");
 
-        var nextImageBorderOutline = EditorGUILayout.ToggleLeft(" Outline the image border (1 px)", _data.WaterDepthImageBorderOutline);
-        if (nextImageBorderOutline != _data.WaterDepthImageBorderOutline)
-        {
-            RecordUndoCheckpoint("Toggle Water Depth Image Border Outline");
-            _data.WaterDepthImageBorderOutline = nextImageBorderOutline;
-            EditorUtility.SetDirty(_data);
-            MarkDirtyAndRepaint();
-        }
-        DrawUnifiedNote("Draws a solid, opaque 1 px ring of water colour around the texture. Applied last, so it wins over the options above.");
+        DrawUnifiedNote("The outermost pixels of the image always have alpha 255.");
 
         // Ends here, not after Regenerate Preview below — the button used to sit inside this
         // group, making it unclickable whenever Auto-Generate was off.
