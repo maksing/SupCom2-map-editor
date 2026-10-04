@@ -3280,6 +3280,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _terrainShell.SetWaterOverlayVisible(OverlayWater);
         _terrainShell.SetHeightGridOverlay(OverlayGrid);
         _terrainShell.SetWireframeOverlay(OverlayWireframe);
+
+        // The simplified mesh replaces the live terrain, and SyncTerrainShellSubtab only runs while the Terrain tab is drawn,
+        // so leaving for another main tab has to drop it here. Coming back finds the shell's mode differing from the
+        // subtab and re-enters Simplified, which rebuilds the preview.
+        if (_mainTab != 0 && _terrainShell.Mode == SC2TerrainShell.EditorMode.Simplified)
+            _terrainShell.SetMode(SC2TerrainShell.EditorMode.Geometry);
     }
 
     private SC2CostsShell _costsShell;
