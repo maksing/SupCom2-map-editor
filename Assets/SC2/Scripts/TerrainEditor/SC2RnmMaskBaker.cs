@@ -179,7 +179,7 @@ public static class SC2RnmMaskBaker
         var reference = settings.ReferenceTexelWorld;
         var densityAware = reference > 0f;
         var occlusionSoft = BoxBlurOcclusion(occlusionRaw, written, mw, mh, settings.ShadowSoftRadius,
-            densityAware ? (Func<int, int>)(idx => ScaleRadius(settings.ShadowSoftRadius, reference, texelWorld[idx])) : null);
+            densityAware ? (Func<int, float>)(idx => ScaleRadius(settings.ShadowSoftRadius, reference, texelWorld[idx])) : null);
         // Underwater texels get a second, much wider blur pass blended in
         // by depth (0 at the waterline, full at/beyond maxWaterDepth) -
         // scattering widens the penumbra the deeper the point sits below
@@ -191,7 +191,7 @@ public static class SC2RnmMaskBaker
         if (settings.WaterEnabled)
         {
             var occlusionSoftUnderwater = BoxBlurOcclusion(occlusionRaw, written, mw, mh, settings.ShadowSoftRadiusUnderwater,
-                densityAware ? (Func<int, int>)(idx => ScaleRadius(settings.ShadowSoftRadiusUnderwater, reference, texelWorld[idx])) : null);
+                densityAware ? (Func<int, float>)(idx => ScaleRadius(settings.ShadowSoftRadiusUnderwater, reference, texelWorld[idx])) : null);
             occlusionFinal = new float[n];
             for (var idx = 0; idx < n; idx++)
             {
@@ -410,7 +410,7 @@ public static class SC2RnmMaskBaker
     /// per-texel box blur regardless of radius. Unwritten texels (map edges/
     /// UV gaps) are excluded from both the sum and the neighbour count, so
     /// they don't pull the blur toward "lit" at real geometry boundaries.</summary>
-    internal static float[] BoxBlurOcclusion(float[] raw, bool[] written, int w, int h, int radius, Func<int, int> radiusAt = null)
+    internal static float[] BoxBlurOcclusion(float[] raw, bool[] written, int w, int h, int radius, Func<int, float> radiusAt = null)
     {
         var W = w + 1;
         var sumVal = new double[W * (h + 1)];
@@ -429,31 +429,41 @@ public static class SC2RnmMaskBaker
         double Query(double[] sat, int x0, int y0, int x1, int y1) =>
             sat[(y1 + 1) * W + (x1 + 1)] - sat[y0 * W + (x1 + 1)] - sat[(y1 + 1) * W + x0] + sat[y0 * W + x0];
 
+        float Blur(int x, int y, int r)
+        {
+            var x0 = Mathf.Max(0, x - r);
+            var x1 = Mathf.Min(w - 1, x + r);
+            var y0 = Mathf.Max(0, y - r);
+            var y1 = Mathf.Min(h - 1, y + r);
+            var cnt = Query(sumCnt, x0, y0, x1, y1);
+            return cnt > 0 ? (float)(Query(sumVal, x0, y0, x1, y1) / cnt) : 0f;
+        }
+
         var result = new float[w * h];
         for (var y = 0; y < h; y++)
         for (var x = 0; x < w; x++)
         {
             var idx = y * w + x;
             if (!written[idx]) continue;
+            // A radius that falls between two whole texels blends the blur of the one below with the one above, so the
+            // penumbra width follows the setting smoothly instead of in steps of a whole texel.
             var r = radiusAt != null ? radiusAt(idx) : radius;
-            var x0 = Mathf.Max(0, x - r);
-            var x1 = Mathf.Min(w - 1, x + r);
-            var y0 = Mathf.Max(0, y - r);
-            var y1 = Mathf.Min(h - 1, y + r);
-            var cnt = Query(sumCnt, x0, y0, x1, y1);
-            result[idx] = cnt > 0 ? (float)(Query(sumVal, x0, y0, x1, y1) / cnt) : 0f;
+            var whole = (int)r;
+            var fraction = r - whole;
+            var blur = Blur(x, y, whole);
+            result[idx] = fraction > 1e-4f ? Mathf.Lerp(blur, Blur(x, y, whole + 1), fraction) : blur;
         }
         return result;
     }
 
-    /// <summary>The blur radius, in texels, that gives a texel covering <paramref name="texelWorld"/> world units the same
-    /// penumbra width in world units as <paramref name="radius"/> texels give on a mask whose texel covers
+    /// <summary>The blur radius, in texels (fractional), that gives a texel covering <paramref name="texelWorld"/> world units
+    /// the same penumbra width in world units as <paramref name="radius"/> texels give on a mask whose texel covers
     /// <paramref name="referenceTexelWorld"/>. A texel no triangle measured (0) keeps <paramref name="radius"/>; the result is
     /// held between 0 and four times <paramref name="radius"/>.</summary>
-    internal static int ScaleRadius(int radius, float referenceTexelWorld, float texelWorld)
+    internal static float ScaleRadius(int radius, float referenceTexelWorld, float texelWorld)
     {
         if (radius <= 0 || referenceTexelWorld <= 0f || texelWorld <= 0f) return radius;
-        return Mathf.Clamp(Mathf.RoundToInt(radius * referenceTexelWorld / texelWorld), 0, radius * 4);
+        return Mathf.Clamp(radius * referenceTexelWorld / texelWorld, 0f, radius * 4f);
     }
 
     /// <summary>Combines the raw per-basis NdotL with the softened occlusion
