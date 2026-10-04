@@ -2307,6 +2307,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (_data != null) EditorUtility.SetDirty(_data);
         _simplifiedMode?.MarkDirty();
+        MarkSimplifiedCountsStale();
         _previewDirty = true;
         if (geometryChanged) s_terrainGeometryVersion++;
         // Cheap (one SetActive call) and idempotent - resyncing here means
@@ -3048,6 +3049,100 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), color);
         EditorGUI.DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), color);
     }
+
+    // ── Triangle counts after simplification ───────────────────────────────────────────────────────────────────────────────────────
+    // The Simplified tab and the Export tab both show, per pair, how many triangles the simplification leaves. The numbers come from
+    // a real simplification run (the preview's, or RequestSimplifiedCounts), kept here so both tabs read the same ones; any later
+    // change marks them stale until the next run.
+
+    public sealed class SimplifiedCounts
+    {
+        /// <summary>Triangles before and after simplification, by pair index of the core and of the generated background.</summary>
+        public int[] CoreSource = System.Array.Empty<int>();
+        public int[] CoreBuilt = System.Array.Empty<int>();
+        public int[] BackgroundSource = System.Array.Empty<int>();
+        public int[] BackgroundBuilt = System.Array.Empty<int>();
+        /// <summary>True once something changed after the run these numbers come from.</summary>
+        public bool Stale;
+    }
+
+    public SimplifiedCounts LastSimplifiedCounts { get; private set; }
+
+    public void StoreSimplifiedCounts(SC2TerrainBuildResult core, SC2TerrainBuildResult background)
+    {
+        var counts = new SimplifiedCounts();
+        if (_data != null) PerPairCounts(core, _data.Pairs.Count, out counts.CoreSource, out counts.CoreBuilt);
+        var backgroundData = _data?.BackgroundTerrainData;
+        if (backgroundData != null) PerPairCounts(background, backgroundData.Pairs.Count, out counts.BackgroundSource, out counts.BackgroundBuilt);
+        LastSimplifiedCounts = counts;
+    }
+
+    public void MarkSimplifiedCountsStale()
+    {
+        if (LastSimplifiedCounts != null) LastSimplifiedCounts.Stale = true;
+    }
+
+    private static void PerPairCounts(SC2TerrainBuildResult build, int pairCount, out int[] source, out int[] built)
+    {
+        source = new int[pairCount];
+        built = new int[pairCount];
+        if (build == null) return;
+        foreach (var layer in build.Layers)
+        {
+            if (layer.PairIndex < 0 || layer.PairIndex >= pairCount) continue;
+            source[layer.PairIndex] += layer.SourceTriangleCount;
+            built[layer.PairIndex] += layer.Mesh.Triangles != null ? layer.Mesh.Triangles.Length / 3 : 0;
+        }
+    }
+
+    /// <summary>Runs the same simplification the export does, behind the busy plate, only to count the triangles it leaves per pair
+    /// (nothing is shown in the scene): the Export tab's way of getting the numbers without the Simplified preview.</summary>
+    public void RequestSimplifiedCounts()
+    {
+        if (_data == null || !_data.IsInitialized) return;
+        FlushPaintToCPU();
+        var core = _data;
+        var background = ProceduralBackgroundData;
+        SC2BusyOverlay.RunInBackground("Counting triangles",
+            "Simplifying the core and the background the way the export does. This can take a while.", () =>
+            {
+                return () =>
+                {
+                    var coreBuild = SC2TerrainLayerBuilder.Build(core, sortByTriangleCount: false, null, SC2TerrainSimplifier.FindOuterPerimeterVertices(core));
+                    var backgroundBuild = background != null ? SC2BackgroundTerrain.BuildForExportOrPreview(core, out _) : null;
+                    return () => StoreSimplifiedCounts(coreBuild, backgroundBuild);
+                };
+            });
+    }
+
+    /// <summary>Opens a pair's card (the caller draws its controls and closes it with EndUnifiedPanelBox) with the colour chip, the
+    /// name and, on the right, a short text such as the pair's triangle count.</summary>
+    public static void DrawPairCardHeader(Color color, string name, string rightText)
+    {
+        BeginUnifiedPanelBox();
+        GUILayout.BeginHorizontal();
+        var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
+        EditorGUI.DrawRect(swatch, color);
+        var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
+        GUILayout.Label(name, nameStyle, GUILayout.MinWidth(32f), GUILayout.ExpandWidth(true));
+        if (!string.IsNullOrEmpty(rightText))
+        {
+            var rightStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight, clipping = TextClipping.Clip };
+            GUILayout.Label(rightText, rightStyle, GUILayout.MinWidth(SC2UiScale.Pxf(90f)));
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    // 4,194,304 -> "4.2M", 57,603 -> "58k": a pair can have far more triangles than the label has room for.
+    public static string CompactCount(int n) =>
+        n >= 1_000_000 ? (n / 1_000_000f).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "M"
+        : n >= 1_000 ? Mathf.RoundToInt(n / 1_000f) + "k"
+        : n.ToString();
+
+    /// <summary>"292k → 42k tris": the triangles of a pair before and after simplification; a trailing * when the numbers predate a
+    /// change.</summary>
+    public static string TrianglesBeforeAfter(int source, int built, bool stale) =>
+        $"{CompactCount(source)} → {CompactCount(built)} tris" + (stale ? " *" : "");
 
     /// <summary>Opens a slot: draws the thumbnail and the slot's header (its name, and the lock when <paramref name="lockKey"/> is
     /// given) and the texture's name, and leaves the slot's right-hand column open for the caller to add to. Close it with

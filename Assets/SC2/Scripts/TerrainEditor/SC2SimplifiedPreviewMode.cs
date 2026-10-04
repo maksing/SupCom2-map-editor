@@ -66,7 +66,7 @@ public sealed class SC2SimplifiedPreviewMode
         var problems = _lastBuild != null ? _lastBuild.ProblemTriangleCount : 0;
 
         EditorGUILayout.LabelField($"Source: {sourceTris:N0} tris", EditorStyles.miniLabel);
-        EditorGUILayout.LabelField($"Preview: {builtTris:N0} tris, {builtVerts:N0} verts, {_buildMs:F0} ms", EditorStyles.miniLabel);
+        EditorGUILayout.LabelField($"After simplification: {builtTris:N0} tris, {builtVerts:N0} verts, {_buildMs:F0} ms", EditorStyles.miniLabel);
         EditorGUILayout.LabelField($"Locked: {locked:N0} verts", EditorStyles.miniLabel);
         EditorGUILayout.LabelField($"Components: {components:N0}, Raw: {skipped:N0}, Rejected: {problems:N0}", EditorStyles.miniLabel);
 
@@ -74,13 +74,7 @@ public sealed class SC2SimplifiedPreviewMode
         for (var i = 0; i < Data.Pairs.Count; i++)
         {
             var p = Data.Pairs[i];
-            SC2TerrainShell.BeginUnifiedPanelBox();
-            EditorGUILayout.BeginHorizontal();
-            var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
-            EditorGUI.DrawRect(swatch, Data.PairColor(i));
-            var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
-            EditorGUILayout.LabelField(p.Name, nameStyle, GUILayout.MinWidth(32), GUILayout.ExpandWidth(true));
-            EditorGUILayout.EndHorizontal();
+            SC2TerrainShell.DrawPairCardHeader(Data.PairColor(i), p.Name, PairTriangles(_lastBuild, i));
             var next = SC2TerrainShell.DrawCompactSlider("Simplify", p.SimplifyRatio, 0f, 1f, $"simplified-{i}",
                 onValueChangeStart: () => _win.RecordUndoCheckpoint("Simplify Ratio"));
             if (!Mathf.Approximately(next, p.SimplifyRatio))
@@ -105,13 +99,7 @@ public sealed class SC2SimplifiedPreviewMode
             for (var i = 0; i < background.Pairs.Count; i++)
             {
                 var p = background.Pairs[i];
-                SC2TerrainShell.BeginUnifiedPanelBox();
-                EditorGUILayout.BeginHorizontal();
-                var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
-                EditorGUI.DrawRect(swatch, background.PairColor(i));
-                var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
-                EditorGUILayout.LabelField(p.Name, nameStyle, GUILayout.MinWidth(32), GUILayout.ExpandWidth(true));
-                EditorGUILayout.EndHorizontal();
+                SC2TerrainShell.DrawPairCardHeader(background.PairColor(i), p.Name, PairTriangles(_lastBackgroundBuild, i));
                 _win.DrawBackgroundDetailSlider(background, p, $"simplified-bg-{i}", null, MarkDirty);
                 SC2TerrainShell.EndUnifiedPanelBox();
             }
@@ -129,9 +117,26 @@ public sealed class SC2SimplifiedPreviewMode
             SC2TerrainShell.DrawUnifiedNote("Preview is stale. Rebuild to see current simplify settings.");
     }
 
+    /// <summary>"292k → 42k tris" for one pair of a build: its triangles before and after simplification (a trailing * once the
+    /// settings changed after that build); empty before the first build.</summary>
+    private string PairTriangles(SC2TerrainBuildResult build, int pairIndex)
+    {
+        if (build == null) return "";
+        var source = 0;
+        var built = 0;
+        foreach (var layer in build.Layers)
+        {
+            if (layer.PairIndex != pairIndex) continue;
+            source += layer.SourceTriangleCount;
+            built += layer.Mesh.Triangles != null ? layer.Mesh.Triangles.Length / 3 : 0;
+        }
+        return SC2TerrainShell.TrianglesBeforeAfter(source, built, _dirty);
+    }
+
     public void MarkDirty()
     {
         _dirty = true;
+        _win.MarkSimplifiedCountsStale();
     }
 
     public void Rebuild()
@@ -192,6 +197,7 @@ public sealed class SC2SimplifiedPreviewMode
     {
         _buildMs = buildMs;
         _dirty = false;
+        _win.StoreSimplifiedCounts(_lastBuild, _lastBackgroundBuild);
         SceneView.RepaintAll();
         _win.Repaint();
     }

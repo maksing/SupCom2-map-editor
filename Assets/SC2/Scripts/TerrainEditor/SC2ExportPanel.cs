@@ -104,36 +104,79 @@ public sealed class SC2ExportPanel
         EditorGUILayout.EndVertical();
     }
 
+    private bool _simplificationExpanded = true;
+    private bool _backgroundSimplificationExpanded = true;
+    private bool _advancedExpanded;
+
     private void DrawPanelContent(float w)
     {
-        EditorGUILayout.LabelField("Export terrain.bdf", EditorStyles.boldLabel, GUILayout.Width(w), GUILayout.MaxWidth(w));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Export");
         if (_win.IsPairCpuDataStale)
             SC2TerrainShell.DrawUnifiedNote("CPU pair data is pending GPU readback. Export will force sync before building geometry.");
 
-        // Map Name is edited on Scenario → Info now (SC2ScenarioShell) — shown
-        // here read-only so the export summary is still self-contained
-        // without a second editable copy of the same SC2TerrainData.MapName.
-        EditorGUILayout.LabelField($"Map Name: {Data.MapName}  (set on Scenario → Info)", GUILayout.Width(w), GUILayout.MaxWidth(w));
-        // EditorGUILayout.ObjectField's label-less overload is now backed by
-        // SC2RuntimeObjectPicker in a build too (see UnityEditorRuntimeShim),
-        // so this no longer needs a separate Editor-only vs. build-only
-        // branch — the old #else fallback just showed a permanently
-        // read-only "None"/name label with no way to pick a different
-        // SC2MapRawData asset in Build & Run.
-        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        GUILayout.Label("RawData", GUILayout.Width(SC2UiScale.Pxf(54f)));
-        var nextRawData = (SC2MapRawData)EditorGUILayout.ObjectField(Data.RawData, typeof(SC2MapRawData), false, GUILayout.Width(Mathf.Max(1f, w - 58f)), GUILayout.MaxWidth(Mathf.Max(1f, w - 58f)));
-        if (nextRawData != Data.RawData)
-        {
-            _win.RecordUndoCheckpoint("Change RawData");
-            Data.RawData = nextRawData;
-        }
-        EditorGUILayout.EndHorizontal();
+        // Map Name is edited on Scenario → Info (SC2ScenarioShell) — shown here read-only so the export summary is still
+        // self-contained without a second editable copy of the same SC2TerrainData.MapName.
+        SC2TerrainShell.DrawUnifiedNote($"Map: {Data.MapName}. The name is set on Scenario > Info.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
 
-        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        GUILayout.Label("Output", GUILayout.Width(SC2UiScale.Pxf(54f)));
-        GUILayout.FlexibleSpace();
-        if (GUILayout.Button("Choose Folder...", GUILayout.Width(SC2UiScale.Pxf(120f))))
+        DrawOutputSection(w);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        DrawExportButtons(w);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+
+        _simplificationExpanded = SC2TerrainShell.DrawFoldoutHeader("Simplification (per pair)", _simplificationExpanded);
+        if (_simplificationExpanded)
+            DrawPairSimplification();
+
+        // The generated background is simplified per pair too: 1.0 is its export budget (the most it can be), lower values go
+        // lighter. The same slider as on the Background, Pairs and Simplified tabs.
+        var background = _win.ProceduralBackgroundData;
+        if (background != null && background.Pairs.Count > 0)
+        {
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+            _backgroundSimplificationExpanded = SC2TerrainShell.DrawFoldoutHeader("Background simplification (per pair)", _backgroundSimplificationExpanded);
+            if (_backgroundSimplificationExpanded)
+                DrawBackgroundSimplification(background);
+        }
+
+        var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
+        if (importedTerrains != null && importedTerrains.Count > 0)
+        {
+            EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+            SC2TerrainShell.DrawUnifiedSectionLabel($"Imported objects ({importedTerrains.Count})");
+            SC2TerrainShell.BeginUnifiedPanelBox();
+            foreach (var imported in importedTerrains)
+            {
+                var nameStyle = new GUIStyle(EditorStyles.miniLabel) { clipping = TextClipping.Clip };
+                GUILayout.Label(imported.Name, nameStyle, GUILayout.ExpandWidth(true));
+            }
+            SC2TerrainShell.EndUnifiedPanelBox();
+            SC2TerrainShell.DrawUnifiedNote("Merged into the same terrain.bdf at their current position, rotation and scale.");
+        }
+
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        _advancedExpanded = SC2TerrainShell.DrawFoldoutHeader("Advanced", _advancedExpanded);
+        if (_advancedExpanded)
+            DrawAdvanced(w);
+
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        SC2TerrainShell.DrawUnifiedNote("The minimap is rendered fresh into minimap.win.dds on every export. To review its framing or capture the map-select screenshot, see Scenario > Preview.");
+    }
+
+    private void DrawOutputSection(float w)
+    {
+        SC2TerrainShell.DrawUnifiedSectionLabel("Output folder");
+        // A wrapping, full-width TextArea instead of a single-line TextField: a long path is shown whole, wrapping mid-path when
+        // it has to (Unity's text layout falls back to a character break for one "word" wider than the line, which is exactly
+        // the common case for an unbroken path).
+        GUI.SetNextControlName("SC2_ExportOutputFolder");
+        var nextExportDir = EditorGUILayout.TextArea(_exportDir ?? "", ExportDirAreaStyle, GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.MinHeight(SC2UiScale.Pxf(20f)));
+        if (nextExportDir != _exportDir)
+        {
+            _win.RecordUndoCheckpoint("Change Export Folder");
+            SetExportDir(nextExportDir);
+        }
+        if (GUILayout.Button("Choose folder...", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
         {
 #if UNITY_EDITOR
             var d = EditorUtility.OpenFolderPanel("Export Folder", "Assets", "");
@@ -158,167 +201,118 @@ public sealed class SC2ExportPanel
             }
 #endif
         }
-        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
 
-        // A single-line TextField clipped long paths with no way to read the
-        // rest short of clicking in and scrolling character-by-character — a
-        // wrapping, full-width TextArea instead shows the entire path,
-        // wrapping mid-path when necessary (Unity's own text layout already
-        // falls back to a character break for one "word" wider than the
-        // line, which is exactly the common case for an unbroken path).
-        GUI.SetNextControlName("SC2_ExportOutputFolder");
-        var nextExportDir = EditorGUILayout.TextArea(_exportDir ?? "", ExportDirAreaStyle, GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.MinHeight(SC2UiScale.Pxf(20f)));
-        if (nextExportDir != _exportDir)
-        {
-            _win.RecordUndoCheckpoint("Change Export Folder");
-            SetExportDir(nextExportDir);
-        }
-
-        SC2TerrainShell.DrawUnifiedNote(
-            "Output: one folder per map, named \"<Map Name>.scd\" (matching a real\n" +
-            "game install's own per-map .scd, e.g. gamedata/eclipse.scd):\n" +
-            "  <mapName>.scd/maps/<mapName>/<mapName>.terrain.win.bdf\n" +
-            "  <mapName>.scd/maps/<mapName>/<mapName>.hfield.win.bdf (projected from\n" +
-            "  the same simplified+merged mesh written to terrain.bdf above)\n" +
-            "  <mapName>.scd/maps/<mapName>/<mapName>.costs.win.bdf (from Costs tab\n" +
-            "  painting, or an all-passable default if nothing was painted)\n" +
-            "  <mapName>.scd/maps/<mapName>/lighting/<PairName>_0/1/2.win.dds\n" +
-            "  <mapName>.scd/maps/<mapName>/<mapName>_save/_scenario/_script.lua\n" +
-            "  <mapName>.scd/uncompiled/maps/<mapName>/... (same 3 files, plain text)\n" +
-            "  <mapName>.scd/Textures/<Name>.dds\n\n" +
-            "Textures must be real DDS files (DXT1/DXT5).\n\n" +
-            "With \"Export as .scd archive\" on, the zip file goes into an Archives/\n" +
-            "subfolder instead (Archives/<mapName>.scd) — kept separate from the loose\n" +
-            "folder path above so a folder export and an archive export of the same\n" +
-            "map never collide on the same name.");
-
-        var nextExportAsArchives = EditorGUILayout.ToggleLeft(
-            "Export as .scd archive (zip the per-map folder into Archives/<Map Name>.scd instead of writing a loose folder)",
-            _exportAsArchives, GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var nextExportAsArchives = EditorGUILayout.ToggleLeft(" Export as .scd archive", _exportAsArchives, GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (nextExportAsArchives != _exportAsArchives)
         {
             _win.RecordUndoCheckpoint("Toggle Export As Archives");
             _exportAsArchives = nextExportAsArchives;
         }
+        SC2TerrainShell.DrawUnifiedNote("Zips the map folder into Archives/<Map Name>.scd instead of writing a loose folder. The two never collide, even for the same map name.");
+    }
 
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Simplification (per pair):", EditorStyles.boldLabel, GUILayout.Width(w), GUILayout.MaxWidth(w));
+    private void DrawExportButtons(float w)
+    {
+        var btnStyle = new GUIStyle(GUI.skin.button) { fontSize = SC2UiScale.F(14), fontStyle = FontStyle.Bold };
+        var exportPending = SC2MapPreviewCapture.IsCapturePending;
+        var guiEnabledBeforeExport = GUI.enabled;
+        GUI.enabled = guiEnabledBeforeExport && !exportPending;
+        if (GUILayout.Button(exportPending ? "Rendering minimap..." : "Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            RunExport();
+        GUI.enabled = guiEnabledBeforeExport;
+
+        // An additive path sitting beside Export above, never replacing it — routes through SC2SmartExportPlanner/
+        // SC2SmartExportWriter instead of DoExport's direct File.WriteAllBytes sequence, sharing the exact same
+        // byte-generation code (see SC2TerrainExporter.BuildExportArtifacts) so both buttons' output is byte-identical on the
+        // same data. Everything is still marked dirty here (real per-domain dirty tracking), so this button regenerates every
+        // file every time too, same as Export above.
+        EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+        if (GUILayout.Button("Smart Export", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            RunSmartExport();
+        SC2TerrainShell.DrawUnifiedNote("Smart Export writes the same files and also fills the Report tab with a per-file breakdown.");
+
+        if (!string.IsNullOrEmpty(_lastExportResult))
+            SC2TerrainShell.DrawUnifiedNote(_lastExportResult);
+    }
+
+    private void RunSmartExport()
+    {
+        var smartData = Data;
+        var smartDir = _exportDir;
+        var smartArchives = _exportAsArchives;
+        var smartSession = _win.Session;
+        var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
+        // The export runs on a worker thread behind the busy plate (see SC2BusyOverlay).
+        SC2BusyOverlay.RunInBackground("Exporting map", ExportDetail, () =>
+        {
+            _win.SaveTerrainState(writeAssets: false);
+            System.IO.Directory.CreateDirectory(smartDir);
+            return () =>
+            {
+                var result = SC2TerrainExporter.ExportCorrectSmart(smartData, smartDir, importedTerrains, smartSession, smartArchives);
+                return () => _lastExportResult = result;
+            };
+        }, ex => _lastExportResult = "Export failed: " + ex.Message);
+    }
+
+    /// <summary>One card per pair: swatch, name and the triangles before and after simplification, then its Simplify slider.</summary>
+    private void DrawPairSimplification()
+    {
+        var counts = _win.LastSimplifiedCounts;
+        if (GUILayout.Button(counts == null ? "Count triangles" : "Update triangle counts", GUILayout.Height(SC2UiScale.Pxf(26f))))
+            _win.RequestSimplifiedCounts();
+        SC2TerrainShell.DrawUnifiedNote(counts == null
+            ? "Each card shows the pair's triangles before simplification. Count triangles runs the simplification and shows what is left."
+            : counts.Stale
+                ? "* Counted before the latest change. Update triangle counts to refresh them."
+                : "Triangles before and after simplification, as of the last count.");
+
         for (var i = 0; i < Data.Pairs.Count; i++)
         {
-            var p = Data.Pairs[i];
-            SC2TerrainShell.BeginUnifiedPanelBox();
-            var col = Data.PairColor(i);
-            EditorGUILayout.BeginHorizontal(GUILayout.Width(Mathf.Max(1f, w - 20f)), GUILayout.MaxWidth(Mathf.Max(1f, w - 20f)));
-            var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
-            EditorGUI.DrawRect(swatch, col);
-            EditorGUILayout.LabelField(PairTriStr(Data, i), GUILayout.Width(SC2UiScale.Pxf(38f)));
-            var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
-            EditorGUILayout.LabelField(p.Name, nameStyle, GUILayout.Width(Mathf.Max(32f, w - 90f)), GUILayout.MaxWidth(Mathf.Max(32f, w - 90f)));
-            EditorGUILayout.EndHorizontal();
-            var next = SC2TerrainShell.DrawCompactSlider("Simplify", p.SimplifyRatio, 0f, 1f, $"export-{i}",
+            var pair = Data.Pairs[i];
+            var source = PairTriangleCount(Data, i);
+            var right = counts != null && i < counts.CoreBuilt.Length
+                ? SC2TerrainShell.TrianglesBeforeAfter(counts.CoreSource[i], counts.CoreBuilt[i], counts.Stale)
+                : SC2TerrainShell.CompactCount(source) + " tris";
+            SC2TerrainShell.DrawPairCardHeader(Data.PairColor(i), pair.Name, right);
+            var next = SC2TerrainShell.DrawCompactSlider("Simplify", pair.SimplifyRatio, 0f, 1f, $"export-{i}",
                 onValueChangeStart: () => _win.RecordUndoCheckpoint("Simplify Ratio"));
-            if (!Mathf.Approximately(next, p.SimplifyRatio))
+            if (!Mathf.Approximately(next, pair.SimplifyRatio))
             {
-                p.SimplifyRatio = next;
+                pair.SimplifyRatio = next;
                 _win.MarkDirtyAndRepaint();
             }
             SC2TerrainShell.EndUnifiedPanelBox();
         }
+    }
 
-        // The generated background is simplified per pair too: 1.0 is its export budget (the most it can be), lower values go
-        // lighter. The same slider as on the Background, Pairs and Simplified tabs.
-        var background = _win.ProceduralBackgroundData;
-        if (background != null && background.Pairs.Count > 0)
+    private void DrawBackgroundSimplification(SC2TerrainData background)
+    {
+        SC2TerrainShell.DrawUnifiedNote($"1.0 = {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles for the whole background, shared between its pairs by size. Lower is lighter, it cannot go above. Exports as about {SC2BackgroundTerrain.EstimateExportTriangles(background):N0}.");
+        var counts = _win.LastSimplifiedCounts;
+        for (var i = 0; i < background.Pairs.Count; i++)
         {
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("Background simplification (per pair):", EditorStyles.boldLabel, GUILayout.Width(w), GUILayout.MaxWidth(w));
-            SC2TerrainShell.DrawUnifiedNote($"1.0 = {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles for the whole background, shared between its pairs by size; lower is lighter, it can't go above. Exports as about {SC2BackgroundTerrain.EstimateExportTriangles(background):N0}.");
-            for (var i = 0; i < background.Pairs.Count; i++)
-            {
-                var p = background.Pairs[i];
-                SC2TerrainShell.BeginUnifiedPanelBox();
-                EditorGUILayout.BeginHorizontal(GUILayout.Width(Mathf.Max(1f, w - 20f)), GUILayout.MaxWidth(Mathf.Max(1f, w - 20f)));
-                var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(14f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(14f)), GUILayout.Height(SC2UiScale.Pxf(18f)));
-                EditorGUI.DrawRect(swatch, background.PairColor(i));
-                EditorGUILayout.LabelField(CompactCount(SC2BackgroundTerrain.PairSourceTriangles(background, i)), GUILayout.Width(SC2UiScale.Pxf(38f)));
-                var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { clipping = TextClipping.Clip };
-                EditorGUILayout.LabelField(p.Name, nameStyle, GUILayout.Width(Mathf.Max(32f, w - 90f)), GUILayout.MaxWidth(Mathf.Max(32f, w - 90f)));
-                EditorGUILayout.EndHorizontal();
-                _win.DrawBackgroundDetailSlider(background, p, $"export-bg-{i}");
-                SC2TerrainShell.EndUnifiedPanelBox();
-            }
-        }
-
-        var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
-        if (importedTerrains != null && importedTerrains.Count > 0)
-        {
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField($"Imported objects ({importedTerrains.Count}):", EditorStyles.boldLabel, GUILayout.Width(w), GUILayout.MaxWidth(w));
-            SC2TerrainShell.BeginUnifiedPanelBox();
-            foreach (var imported in importedTerrains)
-            {
-                var nameStyle = new GUIStyle(EditorStyles.miniLabel) { clipping = TextClipping.Clip };
-                EditorGUILayout.LabelField(imported.Name, nameStyle, GUILayout.Width(w - 16f), GUILayout.MaxWidth(w - 16f));
-            }
+            var pair = background.Pairs[i];
+            var right = counts != null && i < counts.BackgroundBuilt.Length
+                ? SC2TerrainShell.TrianglesBeforeAfter(counts.BackgroundSource[i], counts.BackgroundBuilt[i], counts.Stale)
+                : SC2TerrainShell.CompactCount(SC2BackgroundTerrain.PairSourceTriangles(background, i)) + " tris";
+            SC2TerrainShell.DrawPairCardHeader(background.PairColor(i), pair.Name, right);
+            _win.DrawBackgroundDetailSlider(background, pair, $"export-bg-{i}");
             SC2TerrainShell.EndUnifiedPanelBox();
-            SC2TerrainShell.DrawUnifiedNote("Merged into the same terrain.bdf, at their current position/rotation/scale.");
         }
+    }
 
-        EditorGUILayout.Space(8);
-        var nextDebugSaveCostsImages = EditorGUILayout.ToggleLeft(
-            "Debug: save costs PNGs on export (navmesh + islandmap per block, terrain types)",
-            _debugSaveCostsImages, GUILayout.Width(w), GUILayout.MaxWidth(w));
+    /// <summary>Rarely needed: the costs debug dump.</summary>
+    private void DrawAdvanced(float w)
+    {
+        var nextDebugSaveCostsImages = EditorGUILayout.ToggleLeft(" Save costs PNGs on export", _debugSaveCostsImages, GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (nextDebugSaveCostsImages != _debugSaveCostsImages)
         {
             _win.RecordUndoCheckpoint("Toggle Debug Costs Images");
             _debugSaveCostsImages = nextDebugSaveCostsImages;
         }
-
-        EditorGUILayout.Space(8);
-        SC2TerrainShell.DrawUnifiedNote("Minimap renders fresh into minimap.win.dds below on every Export — nothing to do here. To review the minimap framing or capture the map-select preview screenshot by hand, see Scenario → Preview.");
-
-        EditorGUILayout.Space(4);
-        var btnStyle = new GUIStyle(GUI.skin.button){ fontSize=14, fontStyle=FontStyle.Bold };
-        var exportPending = SC2MapPreviewCapture.IsCapturePending;
-        var guiEnabledBeforeExport = GUI.enabled;
-        GUI.enabled = guiEnabledBeforeExport && !exportPending;
-        if (GUILayout.Button(exportPending ? "Rendering minimap..." : "Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f))))
-            RunExport();
-        GUI.enabled = guiEnabledBeforeExport;
-
-        // An additive path sitting beside Export above,
-        // never replacing it — routes through SC2SmartExportPlanner/
-        // SC2SmartExportWriter instead of DoExport's direct File.WriteAllBytes
-        // sequence, sharing the exact same byte-generation code (see
-        // SC2TerrainExporter.BuildExportArtifacts) so both buttons' output is
-        // byte-identical on the same data. Everything is still marked dirty
-        // here (real per-domain dirty tracking) so this button
-        // regenerates every file every time too, same as Export above.
-        var smartBtnStyle = new GUIStyle(GUI.skin.button){ fontSize=11 };
-        if (GUILayout.Button("Smart Export (new)", smartBtnStyle, GUILayout.Height(SC2UiScale.Pxf(22f))))
-        {
-            var smartData = Data;
-            var smartDir = _exportDir;
-            var smartArchives = _exportAsArchives;
-            var smartSession = _win.Session;
-            // The export runs on a worker thread behind the busy plate (see SC2BusyOverlay).
-            SC2BusyOverlay.RunInBackground("Exporting map", ExportDetail, () =>
-            {
-                _win.SaveTerrainState(writeAssets: false);
-                System.IO.Directory.CreateDirectory(smartDir);
-                return () =>
-                {
-                    var result = SC2TerrainExporter.ExportCorrectSmart(smartData, smartDir, importedTerrains, smartSession, smartArchives);
-                    return () => _lastExportResult = result;
-                };
-            }, ex => _lastExportResult = "Export failed: " + ex.Message);
-        }
-
-        if (!string.IsNullOrEmpty(_lastExportResult))
-        {
-            EditorGUILayout.Space(4);
-            SC2TerrainShell.DrawUnifiedNote(_lastExportResult);
-        }
+        SC2TerrainShell.DrawUnifiedNote("Debug: writes the navmesh and island map of every block and the terrain types as PNGs into a CostsDebug folder next to the .bdf files.");
     }
 
     /// <summary>The "Export" button's action, also run by the Global.Export hotkey: saves the terrain state,
@@ -385,18 +379,12 @@ public sealed class SC2ExportPanel
 
     private const string ExportDetail = "Rendering the minimap and writing the map files. This can take a while.";
 
-    // 4,194,304 -> "4.2M", 57,603 -> "58k": the background's pairs have far more triangles than the label has room for.
-    private static string CompactCount(int n) =>
-        n >= 1_000_000 ? (n / 1_000_000f).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "M"
-        : n >= 1_000 ? Mathf.RoundToInt(n / 1_000f) + "k"
-        : n + "t";
-
-    private static string PairTriStr(SC2TerrainData data, int pairIdx)
+    private static int PairTriangleCount(SC2TerrainData data, int pairIdx)
     {
         if (data.PairTriCounts != null && pairIdx < data.PairTriCounts.Length)
-            return $"{data.PairTriCounts[pairIdx]}t";
-        if (data.TrianglePairIndex == null || data.TrianglePairIndex.Length == 0) return "?t";
-        return $"{CountPairTris(data.TrianglePairIndex, pairIdx)}t";
+            return data.PairTriCounts[pairIdx];
+        if (data.TrianglePairIndex == null || data.TrianglePairIndex.Length == 0) return 0;
+        return CountPairTris(data.TrianglePairIndex, pairIdx);
     }
 
     private static int CountPairTris(short[] idx, int pairIdx)

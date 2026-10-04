@@ -125,7 +125,7 @@ public static class SC2EditorTabs
 
     public static readonly string[] ExportTabs =
     {
-        "Smart Export",
+        "Export",
         "Report",
         "Validation"
     };

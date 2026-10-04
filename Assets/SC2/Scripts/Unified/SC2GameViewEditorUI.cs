@@ -3627,7 +3627,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawExportInspector()
     {
         DrawInspectorHeader("Export",
-            "Export — write the procedural map to real .bdf/.lua files, preview what an export would do first, and check for validation issues before you export.");
+            "Write the map to .bdf and .lua files. Check the Validation tab first.");
         EnsureExportShell();
         try
         {
