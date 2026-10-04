@@ -66195,7 +66195,7 @@ MonoBehaviour:
   BackgroundTerrainData: {fileID: 0}
   BackgroundTerrainSize: 4096
   BackgroundTerrainUvScale: 1024
-  GlobalUvScaleEnabled: 0
+  GlobalUvScaleEnabled: 1
   GlobalUvScale: 4
   Uv1HeightWeight: 1
   CostsBlocks:
