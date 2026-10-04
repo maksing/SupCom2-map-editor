@@ -4757,6 +4757,12 @@ public class SC2TerrainShell : ScriptableObject
             _data.TexturePath3 = envDoc.TexturePath3;
             _data.ColorCorrectionCube = envDoc.ColorCorrectionCube;
             _data.FogOfWarCorrectionCube = envDoc.FogOfWarCorrectionCube;
+            // Which of those textures are copied into the map on export (the Environment tab's per-slot choice).
+            if (envDoc.TextureExport != null)
+            {
+                _data.EnvironmentTextureSourceTags = (string[])envDoc.TextureExport.SourceTags.Clone();
+                _data.EnvironmentTextureForceExport = (bool[])envDoc.TextureExport.ForceExport.Clone();
+            }
         }
         _data.EnsureSerializableState();
         SC2Log.Log($"[SC2TerrainShell] Save: EnsureSerializableState done ({sw.ElapsedMilliseconds}ms).");

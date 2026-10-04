@@ -37,10 +37,10 @@ using UnityEditor;
 /// UNCHANGED: widgets still mutate `_m` directly every frame, MaybeSnapshot
 /// still runs once per frame and diffs `_m` against the last known state —
 /// only WHERE that "last known state" now lives, and HOW a change gets
-/// recorded, changed. `Commit()` still writes SC2TerrainData directly (the
-/// export pipeline still reads from there, not from the document) — this
-/// cutover makes undo/redo real, it does not yet make SC2TerrainData a
-/// derived/secondary store.
+/// recorded, changed. SC2TerrainData is still the store the save path
+/// serializes: SC2TerrainShell.SyncDataForSave copies the document's
+/// Environment into it before every save — this cutover makes undo/redo real,
+/// it does not yet make SC2TerrainData a derived/secondary store.
 /// </summary>
 public sealed class SC2EnvironmentShell
 {
@@ -136,9 +136,9 @@ public sealed class SC2EnvironmentShell
     /// <summary>Working copy of the 5 texture slots' export provenance/opt-in
     /// (SC2EnvironmentTextureExport). The drawer mutates this instance in
     /// place while the Textures tab is drawn; MaybeSnapshotTextureExport turns
-    /// any difference from the document into undoable commands, and Commit()
-    /// mirrors it into SC2TerrainData (which the runtime save path rebuilds the
-    /// document from).</summary>
+    /// any difference from the document into undoable commands, and
+    /// SC2TerrainShell.SyncDataForSave mirrors the document into SC2TerrainData
+    /// on every save (which the runtime save path rebuilds the document from).</summary>
     private readonly SC2EnvironmentTextureExport _textureExport = new();
 
     public SC2EnvironmentShell(SC2TerrainShell terrainShell, SC2MapSession session)
@@ -207,10 +207,6 @@ public sealed class SC2EnvironmentShell
 
         MaybeSnapshot();
 
-        GUILayout.Space(6);
-        if (SC2EnvFieldGui.Button("Save Terrain (incl. Environment)", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
-            Commit();
-
         GUILayout.EndVertical();
     }
 
@@ -258,8 +254,8 @@ public sealed class SC2EnvironmentShell
     /// Parses a real info.bdf off disk and applies it to `_m` via the same
     /// EnvSnapshot/MaybeSnapshot mechanism ResetAllToOriginal/SetAllToDefault
     /// already use, so the import goes through undo/redo like any other
-    /// edit — it does not touch SC2TerrainData directly (Commit(), fired by
-    /// "Save Terrain", still owns that).</summary>
+    /// edit — it does not touch SC2TerrainData directly (the save path copies
+    /// the document into it).</summary>
     private void ImportFromInfoBdfFile()
     {
 #if UNITY_EDITOR
@@ -343,23 +339,6 @@ public sealed class SC2EnvironmentShell
         _lastCommitted = new EnvSnapshot(_m);
 
         _loadedForData = Data;
-    }
-
-    /// <summary>Writes the in-memory InfoModel back into SC2TerrainData's
-    /// fields and persists the terrain (same "Save Terrain" pattern Costs
-    /// uses) — actual info.bdf file writing happens later at export time,
-    /// not here.</summary>
-    private void Commit()
-    {
-        Data.EnvironmentHeader = (byte[])_m.Header.Clone();
-        Data.EnvironmentMap = _m.EnvironmentMap;
-        Data.SkyMap = _m.SkyMap;
-        Data.TexturePath3 = _m.ReservedTexturePath;
-        Data.ColorCorrectionCube = _m.ColorCorrectionCube;
-        Data.FogOfWarCorrectionCube = _m.FogOfWarCorrectionCube;
-        Data.EnvironmentTextureSourceTags = (string[])_textureExport.SourceTags.Clone();
-        Data.EnvironmentTextureForceExport = (bool[])_textureExport.ForceExport.Clone();
-        _terrainShell.SaveTerrainState(writeAssets: true);
     }
 
     /// <summary>Runs once per frame after all tabs draw. Diffs `_m` against

@@ -66,7 +66,6 @@ public sealed class SC2DecalsShell : IDisposable
     private Vector2 _atlasPan;
     private float _atlasZoom = 0.8f;
     private string _search = "";
-    private string _status = "Decals ready.";
     private bool _atlasWindowOpen;
     // Real imported terrain.bdf water is
     // separate real geometry (not just the decorative, collider-less
@@ -138,7 +137,6 @@ public sealed class SC2DecalsShell : IDisposable
         var w = Mathf.Max(1f, panelWidth);
         GUILayout.BeginVertical(GUILayout.Width(w), GUILayout.MaxWidth(w));
         if (Doc == null) { GUILayout.Label("No active map document."); GUILayout.EndVertical(); return; }
-        GUILayout.Label(_status, GUI.skin.box, GUILayout.Width(w - 6));
         DrawAtlasSection(w);
         GUILayout.Space(8);
         DrawSelectedEntrySection(w);
@@ -530,7 +528,6 @@ public sealed class SC2DecalsShell : IDisposable
                 next.Entries[_selectedEntry] = e.Clone();
                 Commit("Edit Decal Atlas Rect", next);
                 _atlasDraft = next.Entries[_selectedEntry].Clone();
-                _status = $"Applied {e.Name}: {e.Width} x {e.Height} at {e.X}, {e.Y}.";
             }
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Previous")) _selectedEntry = Mathf.Max(0, _selectedEntry - 1);
@@ -685,7 +682,6 @@ public sealed class SC2DecalsShell : IDisposable
             next.Entries[_selectedEntry] = _atlasDraft.Clone();
             Commit(_atlasDragMode == AtlasDragMode.Move ? "Move Decal Atlas Rect" : "Resize Decal Atlas Rect", next);
             _atlasDraft = next.Entries[_selectedEntry].Clone();
-            _status = $"{_atlasDraft.Name}: {_atlasDraft.Width} x {_atlasDraft.Height} at {_atlasDraft.X}, {_atlasDraft.Y}.";
         }
         _atlasDragMode = AtlasDragMode.None;
         _atlasDragEntryIndex = -1;
@@ -1005,7 +1001,6 @@ public sealed class SC2DecalsShell : IDisposable
         var screen = SC2TopViewMirror.WorldToGui(camera, world);
         _transformAnchorScreen = new Vector2(screen.x, screen.y);
         _transformStartDistance = Mathf.Max(1f, Vector2.Distance(_transformAnchorScreen, mouse));
-        _status = $"{_transformMode}: move mouse, click/Enter to confirm, Esc/right-click to cancel.";
         _transformVersion++;
         evt.Use();
     }
@@ -1029,7 +1024,7 @@ public sealed class SC2DecalsShell : IDisposable
             SyncSymmetryGroup(next, applied);
             var name = _transformMode == DecalTransformMode.Move ? "Move Decal" : _transformMode == DecalTransformMode.Rotate ? "Rotate Decal" : "Scale Decal";
             _transformMode = DecalTransformMode.None; _transformOriginal = null; _transformPreview = null; _transformVersion++;
-            Commit(name, next); ResetPlacementDraft(); _status = name + " applied."; evt.Use(); return;
+            Commit(name, next); ResetPlacementDraft(); evt.Use(); return;
         }
 
         if (_transformMode == DecalTransformMode.Move)
@@ -1057,7 +1052,6 @@ public sealed class SC2DecalsShell : IDisposable
             if (!Mathf.Approximately(_transformPreview.Rotation, rotation))
             {
                 _transformPreview.Rotation = rotation;
-                _status = $"Rotate: {delta:0.##} degrees. Click/Enter to confirm, Esc to cancel.";
                 TransformChanged();
             }
         }
@@ -1072,7 +1066,6 @@ public sealed class SC2DecalsShell : IDisposable
             {
                 _transformPreview.Width = width;
                 _transformPreview.Length = length;
-                _status = $"Scale: {factor:0.###}x. Click/Enter to confirm, Esc to cancel.";
                 TransformChanged();
             }
         }
@@ -1097,7 +1090,7 @@ public sealed class SC2DecalsShell : IDisposable
     {
         if (_transformMode == DecalTransformMode.None) return;
         _transformMode = DecalTransformMode.None; _transformOriginal = null; _transformPreview = null;
-        _transformVersion++; _renderedRevision = -1; _status = "Transform cancelled.";
+        _transformVersion++; _renderedRevision = -1;
         if (repaint) RepaintHost?.Invoke();
     }
 
@@ -1587,7 +1580,6 @@ public sealed class SC2DecalsShell : IDisposable
         // an untagged blob-decode on the very next EnsureMaterial call.
         if (normal) _normalAtlasSourceKey = AtlasSourceKey(Doc.NormalAtlasContent, Doc.NormalAtlasPath);
         else _diffuseAtlasSourceKey = AtlasSourceKey(Doc.DiffuseAtlasContent, Doc.DiffuseAtlasPath);
-        _status = texture != null ? $"Loaded {texture.width}x{texture.height} atlas." : (normal ? "Cleared normal atlas." : "Cleared diffuse atlas.");
     }
 
     private void AddEntry()
@@ -1613,7 +1605,7 @@ public sealed class SC2DecalsShell : IDisposable
 
     private void Validate()
     {
-        var report = SC2DecalsValidator.Validate(Doc); _status = report.Messages.Count == 0 ? "Decals validation passed." : $"Validation: {report.Messages.Count} issue(s).";
+        var report = SC2DecalsValidator.Validate(Doc);
     }
     // Confirmed real, via a dedicated MapDocument save/restore + Undo/Redo
     // audit: decal commands were already real ISC2DocumentCommand entries

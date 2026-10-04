@@ -98,7 +98,9 @@ public sealed class SC2InfoModelFieldDrawer
         }
 
         var size = SC2UiScale.Pxf(SunPreviewPixels);
-        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
+        // Take the panel's full row and put the square in the middle of it.
+        var row = GUILayoutUtility.GetRect(0f, size, GUILayout.ExpandWidth(true), GUILayout.Height(size));
+        var rect = new Rect(row.x + (row.width - size) * 0.5f, row.y, size, size);
         if (Event.current.type == EventType.Repaint)
             GUI.DrawTexture(rect, _sunPreviewTex, ScaleMode.ScaleToFit);
 
@@ -131,11 +133,11 @@ public sealed class SC2InfoModelFieldDrawer
         var side = _sunPreviewHeight;
         // Picture coordinates: x right, y up the map. SC2's Z grows downward, so it is flipped here.
         var offset = shadow.HasShadow ? new Vector2(shadow.OffsetPerUnit.x, -shadow.OffsetPerUnit.y) * _sunPreviewHeight : Vector2.zero;
-        // Frame the cube and its shadow; a near-horizontal sun would need an endless frame, so the shadow
-        // is allowed to run off the picture past 7 heights.
+        // The cube is always in the middle of the picture, and the frame is wide enough for the shadow to fit on its side of it;
+        // a near-horizontal sun would need an endless frame, so the shadow is allowed to run off the picture past 7 heights.
         var reach = Mathf.Min(offset.magnitude, side * 7f);
-        var halfView = Mathf.Max(side * 1.8f, (reach + side) * 0.6f);
-        var centre = offset.sqrMagnitude > 1e-8f ? offset.normalized * (reach * 0.5f) : Vector2.zero;
+        var halfView = Mathf.Max(side * 1.8f, reach + side * 0.8f);
+        var centre = Vector2.zero;
         var unitsPerPixel = halfView * 2f / SunPreviewPixels;
 
         var ground = new Color32(92, 104, 92, 255);
