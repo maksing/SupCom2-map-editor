@@ -203,6 +203,7 @@ public class SC2GeometryMode
         }
         _hardness = SC2TerrainShell.DrawCompactSlider("Hardness", _hardness, 0f, 1f,
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Hardness"));
+        SC2TerrainShell.DrawBrushHint();
 
         // Irregular stamp brushes (World
         // Machine/Gaea-style grayscale masks) for sculpting, mirroring

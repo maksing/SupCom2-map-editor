@@ -2412,6 +2412,7 @@ public class SC2TerrainShell : ScriptableObject
         var style = SafeGuiStyle(EditorStyles.miniBoldLabel);
         style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
         EditorGUILayout.LabelField(text, style);
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
     }
 
     private static GUIStyle SafeGuiStyle(GUIStyle preferred)
@@ -2470,6 +2471,41 @@ public class SC2TerrainShell : ScriptableObject
     {
         s_unifiedBoxDepth = Mathf.Max(0, s_unifiedBoxDepth - 1);
         EditorGUILayout.EndVertical();
+    }
+
+    /// <summary>A section heading that folds: the whole row is the click target (arrow, name and the space after it), and it
+    /// lights up under the pointer. Returns the new open state.</summary>
+    public static bool DrawFoldoutHeader(string label, bool expanded)
+    {
+        var height = SC2UiScale.Pxf(24f);
+        var rect = GUILayoutUtility.GetRect(0f, height, GUILayout.ExpandWidth(true), GUILayout.Height(height));
+        var e = Event.current;
+        var hovered = rect.Contains(e.mousePosition);
+        if (e.type == EventType.Repaint)
+        {
+            if (hovered) EditorGUI.DrawRect(rect, new Color(0.20f, 0.25f, 0.32f));
+            var style = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, fontSize = SC2UiScale.F(11) };
+            style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
+            GUI.Label(rect, (expanded ? "▾  " : "▸  ") + label, style);
+        }
+        if (e.type == EventType.MouseDown && e.button == 0 && hovered)
+        {
+            expanded = !expanded;
+            e.Use();
+        }
+        return expanded;
+    }
+
+    /// <summary>How to change the brush without the sliders, as the keys are bound right now (both are rebindable): shown under
+    /// the brush sliders of Geometry and Paint. The radius has the hold-and-move gesture only (there is no scroll modifier for
+    /// it); the strength is the one that scrolls.</summary>
+    public static void DrawBrushHint()
+    {
+        var style = SafeGuiStyle(EditorStyles.miniLabel);
+        style.wordWrap = true;
+        style.fontSize = SC2UiScale.F(10);
+        style.normal.textColor = new Color(0.82f, 0.86f, 0.92f, 1f);
+        GUILayout.Label($"Radius: hold {SC2Hotkeys.Label("Brush.RadiusResizeGesture")} and move the mouse.\nStrength: {SC2Hotkeys.Label("Brush.StrengthScrollModifier")}+Scroll.", style);
     }
 
     public static void DrawUnifiedNote(string text)
@@ -2784,6 +2820,8 @@ public class SC2TerrainShell : ScriptableObject
             value = Mathf.Clamp(typedValue, min, max);
 
         EditorGUILayout.EndHorizontal();
+        // A little air between the label row and the track.
+        GUILayout.Space(SC2UiScale.Pxf(2f));
 
         EditorGUI.BeginDisabledGroup(focused);
         EditorGUI.BeginChangeCheck();
@@ -2819,6 +2857,8 @@ public class SC2TerrainShell : ScriptableObject
             DraggingSliderKeys.Remove(key);
 
         LastSyncedValue[key] = value;
+        // ...and under the slider, so the next control does not sit against it.
+        GUILayout.Space(SC2UiScale.Pxf(6f));
         EditorGUILayout.EndVertical();
         return value;
     }

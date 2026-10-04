@@ -700,34 +700,11 @@ public class SC2PairsMode
         }
     }
 
-    /// <summary>A section heading that folds: the whole row is the click target (arrow, name and the space after it), and it
-    /// lights up under the pointer. Returns the new open state.</summary>
-    private static bool DrawFoldoutHeader(string label, bool expanded)
-    {
-        var height = SC2UiScale.Pxf(24f);
-        var rect = GUILayoutUtility.GetRect(0f, height, GUILayout.ExpandWidth(true), GUILayout.Height(height));
-        var e = Event.current;
-        var hovered = rect.Contains(e.mousePosition);
-        if (e.type == EventType.Repaint)
-        {
-            if (hovered) EditorGUI.DrawRect(rect, new Color(0.20f, 0.25f, 0.32f));
-            var style = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, fontSize = SC2UiScale.F(11) };
-            style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
-            GUI.Label(rect, (expanded ? "▾  " : "▸  ") + label, style);
-        }
-        if (e.type == EventType.MouseDown && e.button == 0 && hovered)
-        {
-            expanded = !expanded;
-            e.Use();
-        }
-        return expanded;
-    }
-
     /// <summary>"Outline border": a band of the pair's second material (D2, blend alpha) along the inside of its border,
     /// painted into the active layer of the pair's Blend Mask — see SC2PaintMode.OutlinePairBorder.</summary>
     private void DrawOutlineSection(int i)
     {
-        _outlineExpanded = DrawFoldoutHeader("Border outline", _outlineExpanded);
+        _outlineExpanded = SC2TerrainShell.DrawFoldoutHeader("Border outline", _outlineExpanded);
         if (!_outlineExpanded) return;
         var key = $"pair-outline-{Data.GetInstanceID()}-{i}";
         _win.GetOutlineMinimums(Data, out var minWidth, out var minSpread, out var minSmoothing);
@@ -891,7 +868,7 @@ public class SC2PairsMode
             EditorGUILayout.HelpBox(SC2MaterialPreset.All[Mathf.Clamp(_presetPickIndex, 0, presetNames.Length - 1)].Description, MessageType.None);
 
         // ── Shader flags ──────────────────────────────────────────────────
-        _shaderFlagsExpanded = DrawFoldoutHeader("Shader flags", _shaderFlagsExpanded);
+        _shaderFlagsExpanded = SC2TerrainShell.DrawFoldoutHeader("Shader flags", _shaderFlagsExpanded);
         if (_shaderFlagsExpanded)
         {
         if (pair.ShaderFlags == null || pair.ShaderFlags.Count == 0)
