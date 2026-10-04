@@ -78,28 +78,9 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// a map that paints its own terrain leaves it off and nothing changes.</summary>
     public bool   ImportOnlyMode;
 
-    /// <summary>When set, the exported terrain.bdf gets exactly ONE EDB/BSP
-    /// leaf node per layer instead of a subdivided tree
-    /// (TerrainBdf.RebuildAllBsp with SingleLeafPerLayer).
-    ///
-    /// Exists because of a confirmed, reproduced in-game artifact: on a
-    /// Blender-authored imported map, bright axis-aligned semi-transparent
-    /// bands appeared across the terrain during the building-construction
-    /// effect. Collapsing the EDB forest to one node per layer removed them;
-    /// the same map with its normal subdivided tree (1356 nodes in the
-    /// source, 2194 after our own rebuild) showed them. The banding pattern
-    /// matches BSP split planes, which are axis-aligned.
-    ///
-    /// No structural defect was found in the subdivided tree to explain it:
-    /// every triangle is covered by exactly one leaf, every leaf's
-    /// [StartVertex, EndVertex) window bounds the indices it references, no
-    /// bbox violations, and the tree's depth/node counts sit inside the range
-    /// measured across vanilla maps. So this is a workaround for observed
-    /// behaviour, not a fix for a known bug — hence a switch rather than a
-    /// changed default. Off by default: the editor's own live/painted terrain
-    /// exports a subdivided tree and renders correctly, and vanilla maps use
-    /// 3566-7621 nodes, so subdivision is normal and presumably better for
-    /// culling on large maps.</summary>
+    /// <summary>DEAD — kept only so old saved maps and undo snapshots that persisted a value still deserialize. It used to make
+    /// the exported terrain.bdf one EDB/BSP leaf per layer, a workaround for bright axis-aligned bands on a Blender import
+    /// during the building-construction effect; the export now always recomputing the imported tangent frame made it unnecessary. SC2TerrainExporter no longer reads it and the Imported tab has no toggle for it.</summary>
     public bool   SingleBspNodePerLayer;
 
     /// <summary>DEAD — kept only so old saved maps/undo snapshots that

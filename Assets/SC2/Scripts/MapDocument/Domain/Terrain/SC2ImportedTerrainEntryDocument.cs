@@ -63,6 +63,8 @@ namespace SC2.MapEditor.Document
         public float[] Position = { 0f, 0f, 0f };
         public float[] EulerAngles = { 0f, 0f, 0f };
         public float[] Scale = { 1f, 1f, 1f };
+        /// <summary>DEAD — kept so saved maps keep reading and writing the same file. The export always recomputes the tangent frame,
+        /// whatever a save holds here.</summary>
         public bool RecomputeNormals = true;
         /// <summary>Index-aligned with the reconstructed Root's per-submesh
         /// materials array (same order TerrainMeshBuilder.Build always

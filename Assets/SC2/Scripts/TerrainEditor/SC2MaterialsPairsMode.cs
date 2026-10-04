@@ -202,44 +202,8 @@ public class SC2MaterialsMode
     private void DrawCollapsedSlot(int materialIndex, string label, string letter, SC2TextureUsage usage, float size,
         ref Texture2D texture, ref string overridePath, ref bool forceExport, params Texture2D[] siblingHints)
     {
-        // The browser hands a choice back through the same key the unfolded card's picker uses, so which of the two opened it
-        // does not matter.
-        var texKey = TextureKey(materialIndex, label);
         var previous = texture;
-        var picked = SC2TextureBrowser.Consume(texture, texKey, out _) as Texture2D;
-
-        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
-        var letterStyle = new GUIStyle(EditorStyles.miniLabel);
-        if (picked != null)
-        {
-            EditorGUI.DrawRect(rect, new Color(0.16f, 0.16f, 0.16f, 1f));
-            SC2TextureBrowser.DrawPreview(rect, picked, usage);
-        }
-        else
-        {
-            // An empty slot has to read as "nothing assigned", not as a dark texture: a red outline, "none" in the middle and
-            // a red slot letter.
-            var empty = new Color(0.86f, 0.33f, 0.33f, 1f);
-            EditorGUI.DrawRect(rect, new Color(0.13f, 0.09f, 0.09f, 1f));
-            DrawOutline(rect, empty);
-            var noneStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter, fontSize = SC2UiScale.F(9) };
-            noneStyle.normal.textColor = empty;
-            GUI.Label(rect, "none", noneStyle);
-            letterStyle.normal.textColor = empty;
-        }
-
-        var e = Event.current;
-        var hovered = e != null && rect.Contains(e.mousePosition);
-        if (hovered && e.type == EventType.Repaint)
-            DrawOutline(rect, new Color(0.55f, 0.78f, 1f, 0.95f));
-        GUILayout.Label(letter, letterStyle, GUILayout.Width(SC2UiScale.Pxf(18f)));
-        if (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered)
-        {
-            GUIUtility.keyboardControl = 0;
-            SC2TextureBrowser.Open(texKey, picked, usage, siblingHints);
-            e.Use();
-        }
-
+        var picked = SC2TerrainShell.DrawTextureThumb(TextureKey(materialIndex, label), letter, usage, size, texture, siblingHints) as Texture2D;
         if (picked != previous)
         {
             var pathDraft = overridePath ?? "";
@@ -247,14 +211,6 @@ public class SC2MaterialsMode
             texture = picked;
             overridePath = pathDraft;
         }
-    }
-
-    private static void DrawOutline(Rect rect, Color color)
-    {
-        EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), color);
-        EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), color);
-        EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), color);
-        EditorGUI.DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), color);
     }
 
     // Data.GetInstanceID() in the key: it also identifies the picker to SC2TextureBrowser.Open/Consume (only one browser

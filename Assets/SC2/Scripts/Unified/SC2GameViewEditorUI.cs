@@ -337,20 +337,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Left-panel UI state for the Imported subtab — per-entry so
         // switching between multiple imported terrains keeps each one's
         // fold/scroll state independent.
-        /// <summary>Mirrors SC2ImportedTerrainExportData.RecomputeNormals
-        /// (see its doc comment for the measured reason this defaults on).
-        /// Per-entry so a map can mix a Blender export needing recomputed
-        /// normals with a genuine vanilla terrain.bdf keeping its own.</summary>
-        public bool RecomputeNormals = true;
-
-        /// <summary>Substitutes this imported terrain.bdf for the
-        /// procedural decorative background terrain (see
-        /// SC2BackgroundTerrain) — see the "Use as Background Terrain"
-        /// toggle in the Imported panel. Only one entry may have this set
-        /// at a time (checking it clears every other entry's flag).</summary>
-        public bool IsBackgroundTerrain;
-
-        public bool TexturesExpanded = true;
+        public bool TexturesExpanded;
         public bool MaterialsExpanded = true;
         public Vector2 TextureListScroll;
     }
@@ -450,6 +437,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         public bool Active;
         public Vector3 Position, EulerAngles, Scale;
         public List<ImportedMaterialSnapshot> Materials = new();
+        // The export path overrides (and their "copy into map" marks) live on the entry, not on the materials.
+        public Dictionary<string, string> PathOverrides;
+        public Dictionary<string, bool> ForceExport;
     }
 
     private sealed class ImportedTerrainsSnapshot
@@ -521,6 +511,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             Position = t != null ? t.position : Vector3.zero,
             EulerAngles = t != null ? t.eulerAngles : Vector3.zero,
             Scale = t != null ? t.localScale : Vector3.one,
+            PathOverrides = new Dictionary<string, string>(entry.TexturePathOverrides),
+            ForceExport = new Dictionary<string, bool>(entry.TexturePathForceExport),
         };
         if (entry.OriginalMaterials != null)
             foreach (var mat in entry.OriginalMaterials)
@@ -575,7 +567,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 Position = new[] { t.position.x, t.position.y, t.position.z },
                 EulerAngles = new[] { t.eulerAngles.x, t.eulerAngles.y, t.eulerAngles.z },
                 Scale = new[] { t.localScale.x, t.localScale.y, t.localScale.z },
-                RecomputeNormals = entry.RecomputeNormals,
             };
 
             if (entry.OriginalMaterials != null)
@@ -622,6 +613,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     foreach (var prop in ImportedMaterialTextureProps)
                         if (entry.TexturePathForceExport.TryGetValue(materialIndex + ":" + prop, out var force) && force)
                             ov.TexturePathForceExport[prop] = true;
+                    // The Environment texture has no material property: its path is saved as it is, whatever it points at.
+                    var environmentKey = materialIndex + ":" + SC2TerrainMaterialExporter.EnvironmentKey;
+                    if (entry.TexturePathOverrides.TryGetValue(environmentKey, out var environmentPath) && !string.IsNullOrEmpty(environmentPath))
+                        ov.TextureResourcePaths[SC2TerrainMaterialExporter.EnvironmentKey] = environmentPath;
+                    if (entry.TexturePathForceExport.TryGetValue(environmentKey, out var environmentForce) && environmentForce)
+                        ov.TexturePathForceExport[SC2TerrainMaterialExporter.EnvironmentKey] = true;
                     if (materialIndex < entry.RnmBakeMaskNames.Length)
                         ov.RnmBakeMaskName = entry.RnmBakeMaskNames[materialIndex] ?? "";
                     doc.MaterialOverrides.Add(ov);
@@ -721,6 +718,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     if (kv.Value) restoredForceExport[i + ":" + kv.Key] = true;
                 foreach (var kv in ov.TextureResourcePaths)
                 {
+                    if (kv.Key == SC2TerrainMaterialExporter.EnvironmentKey)
+                    {
+                        restoredPathOverrides[i + ":" + kv.Key] = kv.Value;
+                        continue;
+                    }
                     // Only a "file:"/"archive:" tag needs to survive as an
                     // explicit override — a plain Resources-backed path
                     // resolves fine on its own via TryUpdateSlot's
@@ -773,7 +775,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 OriginalEnableRnm = originalMaterials
                     .Select(m => m != null && m.HasProperty("_EnableRNM") ? m.GetFloat("_EnableRNM") : 0f)
                     .ToArray(),
-                RecomputeNormals = doc.RecomputeNormals,
                 TexturePathOverrides = restoredPathOverrides,
                 TexturePathForceExport = restoredForceExport,
                 RnmBakeMaskNames = doc.MaterialOverrides.Select(o => o.RnmBakeMaskName ?? "").ToArray(),
@@ -833,6 +834,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             rootTransform.position = s.Position;
             rootTransform.eulerAngles = s.EulerAngles;
             rootTransform.localScale = s.Scale;
+            if (s.PathOverrides != null) entry.TexturePathOverrides = new Dictionary<string, string>(s.PathOverrides);
+            if (s.ForceExport != null) entry.TexturePathForceExport = new Dictionary<string, bool>(s.ForceExport);
             if (transformChanged) movedRegions.Add((boundsBefore, ImportedEntryBounds(entry)));
             if (entry.OriginalMaterials != null)
                 for (var i = 0; i < entry.OriginalMaterials.Length && i < s.Materials.Count; i++)
@@ -5495,14 +5498,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 Id = entry.Id,
                 Model = entry.Model,
                 Transform = entry.Root.transform,
-                RecomputeNormals = entry.RecomputeNormals,
                 Name = entry.DisplayName,
                 AuthoredEnableRnm = entry.OriginalEnableRnm,
                 TexturePathOverrides = entry.TexturePathOverrides,
                 TexturePathForceExport = entry.TexturePathForceExport,
                 RnmBakeMaskNames = entry.RnmBakeMaskNames,
-                Materials = entry.OriginalMaterials,
-                IsBackgroundTerrain = entry.IsBackgroundTerrain
+                Materials = entry.OriginalMaterials
             });
         }
         return result;
@@ -6196,6 +6197,24 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         { "_Mask1", 6 }, { "_Mask2", 7 }, { "_Ramp", 8 }, { "_RNMMask0", 10 },
     };
 
+    /// <summary>The other two textures of the same material layer (Diffuse1 / Normal1 / Mask1 form one, the "2" slots another):
+    /// the texture browser suggests a slot's counterpart by the vanilla suffix convention from them.</summary>
+    private static Texture2D[] SiblingTextures(Material mat, string shaderProp)
+    {
+        var result = new List<Texture2D>();
+        if (!shaderProp.StartsWith("_Diffuse", System.StringComparison.Ordinal) && !shaderProp.StartsWith("_Normal", System.StringComparison.Ordinal)
+            && !shaderProp.StartsWith("_Mask", System.StringComparison.Ordinal))
+            return result.ToArray();
+        var layer = shaderProp.EndsWith("2", System.StringComparison.Ordinal) ? "2" : "1";
+        foreach (var kind in new[] { "_Diffuse", "_Normal", "_Mask" })
+        {
+            var prop = kind + layer;
+            if (prop == shaderProp || !mat.HasProperty(prop)) continue;
+            if (mat.GetTexture(prop) is Texture2D texture) result.Add(texture);
+        }
+        return result.ToArray();
+    }
+
     private void DrawMaterialTextureSlot(SC2ImportedTerrainEntry entry, int materialIndex, Material mat, string shaderProp, string label, string pickerKeyPrefix)
     {
         if (!mat.HasProperty(shaderProp)) return;
@@ -6212,7 +6231,33 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             kImportedTexturePathSlots.TryGetValue(shaderProp, out var slot) &&
             slot < entry.Model.Materials[materialIndex].TexturePaths.Length)
             fallbackPath = entry.Model.Materials[materialIndex].TexturePaths[slot];
-        var picked = SC2TerrainShell.DrawTexturePickerWithPath(label, current, pickerKeyPrefix + ":" + shaderProp, ref pathDraft, out var pickedViaBrowser, fallbackPath);
+        var picked = SC2TerrainShell.DrawTexturePickerWithPath(label, current, pickerKeyPrefix + ":" + shaderProp, ref pathDraft, out var pickedViaBrowser, fallbackPath, SiblingTextures(mat, shaderProp)) as Texture2D;
+        ApplyImportedTexturePick(entry, materialIndex, mat, shaderProp, current, picked, pickedViaBrowser, ref pathDraft);
+
+        // Per-texture "copy into map on export" opt-in — only offered when
+        // this slot actually points at a texture served by a vanilla game
+        // archive (anything else is always copied, or never needs to be).
+        var effectivePath = !string.IsNullOrEmpty(pathDraft) ? pathDraft : (picked != null ? SC2TerrainMaterialFactory.TryGetResourcePath(picked) : null);
+        if (string.IsNullOrEmpty(effectivePath)) effectivePath = fallbackPath;
+        if (SC2VanillaArchiveClassifier.IsVanillaSlotPath(effectivePath))
+        {
+            entry.TexturePathForceExport.TryGetValue(overrideKey, out var forceExport);
+            var newForceExport = GUILayout.Toggle(forceExport, "Copy into map on export");
+            if (newForceExport != forceExport)
+            {
+                RecordImportedTerrainsUndo();
+                if (newForceExport) entry.TexturePathForceExport[overrideKey] = true;
+                else entry.TexturePathForceExport.Remove(overrideKey);
+            }
+        }
+    }
+
+    /// <summary>Applies what a slot's picker (or its folded thumbnail) produced this frame: binds the picked texture, drops the
+    /// debug-preview caches that were built from the old one, and keeps the export path override in step.</summary>
+    private void ApplyImportedTexturePick(SC2ImportedTerrainEntry entry, int materialIndex, Material mat, string shaderProp,
+        Texture2D current, Texture2D picked, bool pickedViaBrowser, ref string pathDraft)
+    {
+        var overrideKey = materialIndex + ":" + shaderProp;
         if (picked != current)
         {
             RecordImportedTerrainsUndo();
@@ -6249,25 +6294,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
         if (!string.IsNullOrEmpty(pathDraft)) entry.TexturePathOverrides[overrideKey] = pathDraft;
         else entry.TexturePathOverrides.Remove(overrideKey);
-
-        // Per-texture "copy into map on export" opt-in — only offered when
-        // this slot actually points at a texture served by a vanilla game
-        // archive (anything else is always copied, or never needs to be).
-        var effectivePath = !string.IsNullOrEmpty(pathDraft) ? pathDraft : (picked != null ? SC2TerrainMaterialFactory.TryGetResourcePath(picked) : null);
-        if (string.IsNullOrEmpty(effectivePath)) effectivePath = fallbackPath;
         // A different texture starts back at the default.
         if (picked != current) entry.TexturePathForceExport.Remove(overrideKey);
-        if (SC2VanillaArchiveClassifier.IsVanillaSlotPath(effectivePath))
-        {
-            entry.TexturePathForceExport.TryGetValue(overrideKey, out var forceExport);
-            var newForceExport = GUILayout.Toggle(forceExport, "Copy into map on export");
-            if (newForceExport != forceExport)
-            {
-                RecordImportedTerrainsUndo();
-                if (newForceExport) entry.TexturePathForceExport[overrideKey] = true;
-                else entry.TexturePathForceExport.Remove(overrideKey);
-            }
-        }
     }
 
     /// <summary>
@@ -6303,10 +6331,400 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         return list;
     }
 
+    // A map can carry a dozen materials, each with a dozen texture slots and a flag list, so the cards start folded: a folded card
+    // still shows its textures as thumbnails and takes a new one on a click. Keyed by entry id and material index; absent = folded.
+    private readonly HashSet<string> _expandedImportedMaterials = new();
+    private bool _importedShaderSetupExpanded = true;
+
+    private void DrawImportedMaterials(SC2ImportedTerrainEntry entry, Material[] mats)
+    {
+        // The AUTHORED materials, not meshRenderer.sharedMaterials: the Mats/
+        // Pairs/Slope/Height preview modes swap the live renderer over to
+        // synthetic debug materials that have none of the _Diffuse1/_Normal1/
+        // _Mask1/... properties, so reading the live array made every texture
+        // slot (and the shader flags) vanish in those modes.
+        if (mats.Length > 1)
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Collapse all"))
+                for (var i = 0; i < mats.Length; i++) _expandedImportedMaterials.Remove(entry.Id + ":" + i);
+            if (GUILayout.Button("Expand all"))
+                for (var i = 0; i < mats.Length; i++) _expandedImportedMaterials.Add(entry.Id + ":" + i);
+            GUILayout.EndHorizontal();
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+        }
+        for (var i = 0; i < mats.Length; i++)
+            if (mats[i] != null) DrawImportedMaterialCard(entry, i, mats[i]);
+    }
+
+    private void DrawImportedMaterialCard(SC2ImportedTerrainEntry entry, int i, Material mat)
+    {
+        var stateKey = entry.Id + ":" + i;
+        var expanded = _expandedImportedMaterials.Contains(stateKey);
+        var key = entry.DisplayName + ":" + i;
+        SC2TerrainShell.BeginUnifiedPanelBox();
+
+        // The arrow is a real button and the name beside it folds the card too, so the whole header row is a target.
+        var rowHeight = SC2UiScale.Pxf(24f);
+        GUILayout.BeginHorizontal();
+        var toggle = GUILayout.Button(expanded ? "▾" : "▸", GUILayout.Width(rowHeight), GUILayout.Height(rowHeight));
+        var nameRect = GUILayoutUtility.GetRect(0f, rowHeight, GUILayout.ExpandWidth(true), GUILayout.Height(rowHeight));
+        var e = Event.current;
+        if (e.type == EventType.Repaint)
+        {
+            var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip, fontSize = SC2UiScale.F(11) };
+            GUI.Label(nameRect, mat.name, nameStyle);
+        }
+        if (e.type == EventType.MouseDown && e.button == 0 && nameRect.Contains(e.mousePosition))
+        {
+            toggle = true;
+            e.Use();
+        }
+        GUILayout.EndHorizontal();
+        if (toggle)
+        {
+            expanded = !expanded;
+            if (expanded) _expandedImportedMaterials.Add(stateKey);
+            else _expandedImportedMaterials.Remove(stateKey);
+        }
+
+        if (expanded)
+        {
+            DrawMaterialTextureSlot(entry, i, mat, "_Diffuse1", "Diffuse1", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_Normal1", "Normal1", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_Mask1", "Mask1", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_Diffuse2", "Diffuse2", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_Normal2", "Normal2", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_Mask2", "Mask2", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_Ramp", "Ramp", key);
+            DrawImportedEnvironmentSlot(entry, i, mat);
+            DrawMaterialTextureSlot(entry, i, mat, "_RNMMask0", "RNM Mask 0", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_RNMMask1", "RNM Mask 1", key);
+            DrawMaterialTextureSlot(entry, i, mat, "_RNMMask2", "RNM Mask 2", key);
+            DrawImportedShaderSetup(entry, i, mat);
+        }
+        else
+        {
+            DrawImportedCollapsedSlots(entry, i, mat, key);
+        }
+        SC2TerrainShell.EndUnifiedPanelBox();
+        EditorGUILayout.Space(SC2UiScale.Pxf(8f));
+    }
+
+    /// <summary>What a folded card still shows: the Diffuse, Normal and Mask of its first material as thumbnails, and those of the
+    /// second one too when it uses any. A click on a thumbnail opens the texture browser for that slot.</summary>
+    private void DrawImportedCollapsedSlots(SC2ImportedTerrainEntry entry, int i, Material mat, string key)
+    {
+        var size = SC2UiScale.Pxf(34f);
+        EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+        DrawImportedCollapsedRow(entry, i, mat, key, "1", size);
+        var secondUsed = false;
+        foreach (var kind in new[] { "_Diffuse2", "_Normal2", "_Mask2" })
+            if (mat.HasProperty(kind) && mat.GetTexture(kind) != null) secondUsed = true;
+        if (secondUsed)
+        {
+            EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+            DrawImportedCollapsedRow(entry, i, mat, key, "2", size);
+        }
+        // Ramp and Environment, then the three RNM masks: unlike the layer rows these show even while empty, since an empty
+        // one is as much a statement about the material as a filled one.
+        EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+        GUILayout.BeginHorizontal();
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_Ramp", "Ramp", size);
+        DrawImportedCollapsedEnvironment(entry, i, size);
+        GUILayout.EndHorizontal();
+        EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+        GUILayout.BeginHorizontal();
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_RNMMask0", "RNM0", size);
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_RNMMask1", "RNM1", size);
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_RNMMask2", "RNM2", size);
+        GUILayout.EndHorizontal();
+    }
+
+    private void DrawImportedCollapsedRow(SC2ImportedTerrainEntry entry, int i, Material mat, string key, string layer, float size)
+    {
+        GUILayout.BeginHorizontal();
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_Diffuse" + layer, "D" + layer, size, SC2.MapEditor.Textures.SC2TextureUsage.Diffuse);
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_Normal" + layer, "N" + layer, size, SC2.MapEditor.Textures.SC2TextureUsage.Normal);
+        DrawImportedCollapsedSlot(entry, i, mat, key, "_Mask" + layer, "M" + layer, size, SC2.MapEditor.Textures.SC2TextureUsage.Mask);
+        GUILayout.EndHorizontal();
+    }
+
+    /// <param name="usage">What the browser should offer; left out for the slots whose picker key already tells (Ramp, RNM masks).</param>
+    private void DrawImportedCollapsedSlot(SC2ImportedTerrainEntry entry, int i, Material mat, string key, string shaderProp,
+        string letter, float size, SC2.MapEditor.Textures.SC2TextureUsage? usage = null)
+    {
+        if (!mat.HasProperty(shaderProp)) return;
+        var current = mat.GetTexture(shaderProp) as Texture2D;
+        // The browser session id is the one the unfolded card's picker uses (see DrawMaterialTextureSlot).
+        var pickerKey = key + ":" + shaderProp;
+        var picked = SC2TerrainShell.DrawTextureThumb(pickerKey, letter, usage ?? SC2TerrainShell.TextureUsageForPicker(pickerKey), size, current,
+            SiblingTextures(mat, shaderProp)) as Texture2D;
+        if (picked == current) return;
+        entry.TexturePathOverrides.TryGetValue(i + ":" + shaderProp, out var pathDraft);
+        ApplyImportedTexturePick(entry, i, mat, shaderProp, current, picked, true, ref pathDraft);
+    }
+
+    // The Environment texture (terrain.bdf material slot 11) has no shader property: the live terrain does not draw it, so the
+    // slot only edits what the export writes. Its path lives in the same per-slot override dictionary as the other slots, under
+    // the "_Environment" key, and is saved with the material overrides.
+    private readonly Dictionary<string, (string Path, Texture Texture)> _importedEnvironmentPreviews = new();
+
+    private static string ImportedEnvironmentKey(int materialIndex) => materialIndex + ":" + SC2TerrainMaterialExporter.EnvironmentKey;
+
+    // The key picks the browser's starting filter ("env" = Environment textures); the entry id is hex, so it cannot contain
+    // another category's word the way a display name could. Shared by the unfolded slot and the folded thumbnail.
+    private static string ImportedEnvironmentPickerKey(SC2ImportedTerrainEntry entry, int materialIndex) =>
+        "ImportedEnv" + entry.Id + "-" + materialIndex + ":Environment";
+
+    /// <summary>The slot's current path pieces: the override the user set (empty = none), the path the imported file had, and the one
+    /// that is exported (the override, else the file's own).</summary>
+    private static void ImportedEnvironmentPaths(SC2ImportedTerrainEntry entry, int materialIndex, out string overridePath,
+        out string originalPath, out string effectivePath)
+    {
+        entry.TexturePathOverrides.TryGetValue(ImportedEnvironmentKey(materialIndex), out overridePath);
+        overridePath ??= "";
+        originalPath = null;
+        if (entry.Model != null && materialIndex < entry.Model.Materials.Count)
+        {
+            var paths = entry.Model.Materials[materialIndex].TexturePaths;
+            if (paths != null && paths.Length > 11) originalPath = paths[11];
+        }
+        effectivePath = overridePath.Length > 0 ? overridePath : originalPath ?? "";
+    }
+
+    /// <summary>The texture to show for the exported path, loaded once per path.</summary>
+    private Texture ImportedEnvironmentPreview(string pickerKey, string effectivePath)
+    {
+        if (!_importedEnvironmentPreviews.TryGetValue(pickerKey, out var cached) || cached.Path != effectivePath)
+        {
+            Texture preview = null;
+            if (effectivePath.Length > 0)
+                preview = effectivePath.StartsWith("archive:", System.StringComparison.Ordinal) || effectivePath.StartsWith("file:", System.StringComparison.Ordinal)
+                    ? SC2TerrainMaterialFactory.ResolveFromResourcePath(effectivePath)
+                    : SC2TerrainMaterialFactory.LoadTexturePublicAny(effectivePath);
+            cached = (effectivePath, preview);
+            _importedEnvironmentPreviews[pickerKey] = cached;
+        }
+        return cached.Texture;
+    }
+
+    /// <summary>There is no material property to read the texture back from at export, so a browser pick is always stored as a
+    /// path: an archive or custom file as its tagged resource path (copied or referenced by the export), anything else as the
+    /// clean game path.</summary>
+    private static string ImportedEnvironmentOverrideFromPick(Texture picked)
+    {
+        if (picked == null) return "";
+        var resourcePath = SC2TerrainMaterialFactory.TryGetResourcePath(picked);
+        return !string.IsNullOrEmpty(resourcePath) &&
+               (resourcePath.StartsWith("archive:", System.StringComparison.Ordinal) || resourcePath.StartsWith("file:", System.StringComparison.Ordinal))
+            ? resourcePath
+            : SC2TerrainMaterialFactory.ResolveGamePath(picked);
+    }
+
+    private void StoreImportedEnvironmentOverride(SC2ImportedTerrainEntry entry, int materialIndex, string newOverride)
+    {
+        var overrideKey = ImportedEnvironmentKey(materialIndex);
+        RecordImportedTerrainsUndo();
+        if (newOverride.Length > 0) entry.TexturePathOverrides[overrideKey] = newOverride;
+        else entry.TexturePathOverrides.Remove(overrideKey);
+        // A different texture starts back at the default.
+        entry.TexturePathForceExport.Remove(overrideKey);
+    }
+
+    private void DrawImportedCollapsedEnvironment(SC2ImportedTerrainEntry entry, int materialIndex, float size)
+    {
+        ImportedEnvironmentPaths(entry, materialIndex, out var overridePath, out _, out var effectivePath);
+        var pickerKey = ImportedEnvironmentPickerKey(entry, materialIndex);
+        var current = ImportedEnvironmentPreview(pickerKey, effectivePath);
+        var picked = SC2TerrainShell.DrawTextureThumb(pickerKey, "Env", SC2.MapEditor.Textures.SC2TextureUsage.Environment, size, current);
+        if (picked != current)
+        {
+            var newOverride = ImportedEnvironmentOverrideFromPick(picked);
+            if (newOverride != overridePath) StoreImportedEnvironmentOverride(entry, materialIndex, newOverride);
+        }
+    }
+
+    private void DrawImportedEnvironmentSlot(SC2ImportedTerrainEntry entry, int materialIndex, Material mat)
+    {
+        var overrideKey = ImportedEnvironmentKey(materialIndex);
+        ImportedEnvironmentPaths(entry, materialIndex, out var overridePath, out var originalPath, out var effectivePath);
+
+        var pickerKey = ImportedEnvironmentPickerKey(entry, materialIndex);
+        var preview = ImportedEnvironmentPreview(pickerKey, effectivePath);
+        var pathDraft = overridePath;
+        var picked = SC2TerrainShell.DrawTexturePickerWithPath("Environment", preview, pickerKey, ref pathDraft, out var viaBrowser, originalPath);
+        var newOverride = overridePath;
+        if (viaBrowser) newOverride = ImportedEnvironmentOverrideFromPick(picked);
+        else if (pathDraft != overridePath) newOverride = pathDraft;
+        if (newOverride != overridePath)
+        {
+            StoreImportedEnvironmentOverride(entry, materialIndex, newOverride);
+            overridePath = newOverride;
+            effectivePath = newOverride.Length > 0 ? newOverride : originalPath ?? "";
+        }
+
+        if (overridePath.StartsWith("archive:", System.StringComparison.Ordinal) && SC2VanillaArchiveClassifier.IsVanillaSlotPath(overridePath))
+        {
+            entry.TexturePathForceExport.TryGetValue(overrideKey, out var forceExport);
+            var newForceExport = GUILayout.Toggle(forceExport, "Copy into map on export");
+            if (newForceExport != forceExport)
+            {
+                RecordImportedTerrainsUndo();
+                if (newForceExport) entry.TexturePathForceExport[overrideKey] = true;
+                else entry.TexturePathForceExport.Remove(overrideKey);
+            }
+        }
+
+        var environmentMapping = GetMaterialFlag(mat, "_EnableEnvironmentMapping");
+        if (environmentMapping && effectivePath.Length == 0)
+            SC2TerrainShell.DrawUnifiedNote("ENVIRONMENT_MAPPING is on but no Environment texture is set.");
+        else if (!environmentMapping && effectivePath.Length > 0)
+            SC2TerrainShell.DrawUnifiedNote("The Environment texture has no effect while ENVIRONMENT_MAPPING is off.");
+    }
+
+    private void DrawImportedShaderSetup(SC2ImportedTerrainEntry entry, int i, Material mat)
+    {
+        if (mat.HasProperty("_EnableRNM"))
+        {
+            // Real, complete 12-flag set (56-map corpus survey) —
+            // was only 4 of these before. REFLECT/CHROMATIC_DISPERSION
+            // have no shader property at all (confirmed unused by
+            // both terrain.hlsl and global_constants.hlsl), so they
+            // aren't offered here — there'd be nothing for the toggle
+            // to actually control.
+            _importedShaderSetupExpanded = SC2TerrainShell.DrawFoldoutHeader("Shader setup", _importedShaderSetupExpanded);
+            if (!_importedShaderSetupExpanded) return;
+
+            // The Textured/RNM preview toolbar (top of the viewport)
+            // and this checkbox are two genuinely independent
+            // things — the toolbar is only a debug DISPLAY mode
+            // (ApplyPreviewModeToImportedTerrain force-overrides the
+            // live _EnableRNM shader property on every material for
+            // a side-by-side comparison view), while this checkbox
+            // is the real, persistent, EXPORTED RNM_LIGHTING value.
+            // Reading/writing the live _EnableRNM property directly
+            // here would make this checkbox change every time the
+            // toolbar changes, so it would never actually be
+            // independent, just delayed. Reads/writes
+            // entry.OriginalEnableRnm directly instead, with
+            // NO reference to the live material property at all —
+            // this checkbox's own visual state (and therefore what
+            // gets exported, via AuthoredEnableRnm/
+            // SyncShaderSetupAndStateFromScene) no longer has any
+            // connection whatsoever to the currently-selected
+            // toolbar mode. It intentionally does not preview the
+            // live 3D effect of toggling it while a forcing debug
+            // mode (Textured/RNM) is selected — that's what the
+            // toolbar itself is for.
+            if (entry.OriginalEnableRnm != null && i < entry.OriginalEnableRnm.Length)
+            {
+                var authoredRnm = entry.OriginalEnableRnm[i] > 0.5f;
+                var newAuthoredRnm = GUILayout.Toggle(authoredRnm, "RNM Lighting");
+                if (newAuthoredRnm != authoredRnm)
+                {
+                    RecordImportedTerrainsUndo();
+                    entry.OriginalEnableRnm[i] = newAuthoredRnm ? 1f : 0f;
+                }
+            }
+            else
+            {
+                // No persistent authored value available for this
+                // entry (shouldn't happen for anything imported
+                // after this fix) — fall back to the old
+                // toolbar-tied behavior rather than hiding the
+                // control entirely.
+                SetMaterialFlag(mat, "_EnableRNM", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableRNM"), "RNM Lighting"));
+            }
+            SetMaterialFlag(mat, "_EnableAmbient", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableAmbient"), "Ambient Lighting"));
+            SetMaterialFlag(mat, "_EnableDiffuseLighting", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableDiffuseLighting"), "Diffuse Lighting"));
+            SetMaterialFlag(mat, "_EnableSpecularLighting", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableSpecularLighting"), "Specular Lighting"));
+            SetMaterialFlag(mat, "_EnableBlending", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableBlending"), "Blending"));
+            SetMaterialFlag(mat, "_EnableFog", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableFog"), "Fog"));
+            SetMaterialFlag(mat, "_EnableGlow", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableGlow"), "Glow"));
+            SetMaterialFlag(mat, "_EnableEnvironmentMapping", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableEnvironmentMapping"), "Environment Mapping"));
+            SetMaterialFlag(mat, "_EnableDynamicShadows", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableDynamicShadows"), "Dynamic Shadows"));
+            SetMaterialFlag(mat, "_EnableInfiniteDistance", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableInfiniteDistance"), "Infinite Distance"));
+
+            var alphaTestOn = GetMaterialFlag(mat, "_EnableAlphaTest");
+            var newAlphaTestOn = GUILayout.Toggle(alphaTestOn, "Alpha Test");
+            SetMaterialFlag(mat, "_EnableAlphaTest", newAlphaTestOn);
+            if (newAlphaTestOn && mat.HasProperty("_AlphaTestThreshold"))
+            {
+                var threshold = mat.GetFloat("_AlphaTestThreshold");
+                var newThreshold = EditorGUILayout.Slider("Alpha Test Threshold", threshold, 0f, 255f);
+                if (!Mathf.Approximately(newThreshold, threshold))
+                {
+                    RecordImportedTerrainsUndo();
+                    mat.SetFloat("_AlphaTestThreshold", newThreshold);
+                }
+            }
+
+            if (mat.HasProperty("_TextureScroll"))
+            {
+                var scroll = mat.GetVector("_TextureScroll");
+                var newScroll = EditorGUILayout.Vector2Field("Texture Scroll", new Vector2(scroll.x, scroll.y));
+                if (newScroll.x != scroll.x || newScroll.y != scroll.y)
+                {
+                    RecordImportedTerrainsUndo();
+                    mat.SetVector("_TextureScroll", new Vector4(newScroll.x, newScroll.y, 0, 0));
+                }
+            }
+
+            if (mat.HasProperty("_SrcBlend"))
+            {
+                var stateOptions = new[] { "None", "TerrainAlphaBlendState", "TerrainAdditiveState", "TerrainOpaqueState" };
+                var currentState = SC2TerrainMaterialFactory.ReverseLookupBlendState(mat) ?? "None";
+                var stateIndex = System.Array.IndexOf(stateOptions, currentState);
+                if (stateIndex < 0) stateIndex = 0;
+                var newStateIndex = EditorGUILayout.Popup("State", stateIndex, stateOptions, SC2UiScale.PopupStyle());
+                if (newStateIndex != stateIndex)
+                {
+                    RecordImportedTerrainsUndo();
+                    SC2TerrainMaterialFactory.ApplyBlendState(mat, stateOptions[newStateIndex] == "None" ? null : stateOptions[newStateIndex]);
+                }
+            }
+        }
+    }
+
+    /// <summary>The Imported tab's main switch, drawn as a large button at the very top: it changes what the whole map ships.
+    /// Off by default (the live plane and the import both ship). On: the live plane's painted geometry contributes zero
+    /// triangles to terrain.bdf/hfield.bdf/collision2.bdf — see SC2TerrainData.ImportOnlyMode.</summary>
+    private void DrawImportOnlyToggle(SC2TerrainData data, float width)
+    {
+        var on = data.ImportOnlyMode;
+        var style = new GUIStyle(on ? _activeTabStyle : _tabStyle)
+        {
+            fixedHeight = SC2UiScale.Pxf(38f),
+            fontSize = SC2UiScale.F(12),
+            fontStyle = FontStyle.Bold,
+            margin = new RectOffset(0, 0, 0, 6),
+            clipping = TextClipping.Clip,
+        };
+        if (GUILayout.Button(on ? "Import-only map: ON" : "Import-only map: OFF", style, GUILayout.Width(width), GUILayout.MaxWidth(width)))
+        {
+            _terrainShell.RecordUndoCheckpoint("Toggle Import-Only Mode");
+            data.ImportOnlyMode = !on;
+            _terrainShell.MarkDirtyAndRepaint();
+            // Whether the live plane contributes to the merged model just changed.
+            _terrainShell.InvalidateLiveHeightGrid();
+        }
+        SC2TerrainShell.DrawUnifiedNote(on
+            ? "Only the imported terrain ships: the painted live plane adds no geometry to terrain, hfield or collision2."
+            : "The painted live plane and the imported terrain both ship. Turn on if the live plane z-fights with the import or shows through gaps in it.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+    }
+
+    private bool _deleteGeometryExpanded;
+
     private void DrawImportedTerrainsLeftPanelContent(float width)
     {
         _importedTerrains.RemoveAll(e => e.Root == null);
         _importedTerrainsRemoved.RemoveAll(e => e.Root == null);
+
+        var data = _terrainShell.Data;
+        if (_importedTerrains.Count > 0 && data != null)
+            DrawImportOnlyToggle(data, width);
 
         // Drawn even when the visible list is empty — otherwise removing the
         // only imported entry (via "Remove From Scene" below) would strand
@@ -6319,7 +6737,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (GUILayout.Button($"↪ Redo ({_importedRedoStack.Count})")) ImportedTerrainsRedo();
         EditorGUI.EndDisabledGroup();
         EditorGUILayout.EndHorizontal();
-        EditorGUILayout.Space(4);
+        EditorGUILayout.Space(SC2UiScale.Pxf(8f));
 
         if (_importedTerrains.Count == 0)
         {
@@ -6329,122 +6747,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_selectedImportedTerrain < 0 || _selectedImportedTerrain >= _importedTerrains.Count)
             _selectedImportedTerrain = 0;
 
-        // Real, exclusive "this map ships from the import alone" switch. Off
-        // by default: live plane + import both ship. On: the live
-        // plane's own painted geometry contributes zero triangles to
-        // terrain.bdf/hfield.bdf/collision2.bdf — see SC2TerrainData.
-        // ImportOnlyMode's own doc comment for what this actually fixes
-        // (z-fighting and live-plane-showing-through-import-gaps).
-        var data = _terrainShell.Data;
-        if (data != null)
-        {
-            // Plain string, not GUIContent — UnityEditorRuntimeShim's ToggleLeft
-            // (used in a real Build, where UnityEditor.EditorGUILayout isn't
-            // available) only has a string-label overload, no GUIContent/
-            // tooltip one, matching every other ToggleLeft call site in this
-            // codebase.
-            var newImportOnly = EditorGUILayout.ToggleLeft(
-                " Import-only map (exclude painted live terrain from export)",
-                data.ImportOnlyMode, GUILayout.Width(width), GUILayout.MaxWidth(width));
-            if (newImportOnly != data.ImportOnlyMode)
-            {
-                _terrainShell.RecordUndoCheckpoint("Toggle Import-Only Mode");
-                data.ImportOnlyMode = newImportOnly;
-                _terrainShell.MarkDirtyAndRepaint();
-                // Whether the live plane contributes to the merged model
-                // just changed.
-                _terrainShell.InvalidateLiveHeightGrid();
-            }
-            if (data.ImportOnlyMode)
-                SC2TerrainShell.DrawUnifiedNote("The live procedural plane contributes no geometry to the exported terrain.bdf/hfield.bdf/collision2.bdf — only this imported terrain.bdf ships. Fixes z-fighting and the live plane showing through gaps in the import.");
-            EditorGUILayout.Space(4);
-
-            var newSingleBsp = EditorGUILayout.ToggleLeft(
-                " Single BSP node per layer (export)",
-                data.SingleBspNodePerLayer, GUILayout.Width(width), GUILayout.MaxWidth(width));
-            if (newSingleBsp != data.SingleBspNodePerLayer)
-            {
-                _terrainShell.RecordUndoCheckpoint("Toggle Single BSP Node Per Layer");
-                data.SingleBspNodePerLayer = newSingleBsp;
-                _terrainShell.MarkDirtyAndRepaint();
-            }
-            SC2TerrainShell.DrawUnifiedNote(data.SingleBspNodePerLayer
-                ? "The exported terrain.bdf gets exactly one EDB/BSP leaf per layer instead of a subdivided tree. Confirmed in-game to remove the bright axis-aligned bands that appeared across imported terrain during the building-construction effect — the banding follows BSP split planes, which are axis-aligned. Costs some culling efficiency on large maps."
-                : "Normal subdivided BSP tree, as vanilla maps and the editor's own painted-terrain export use. Turn on only if an imported map shows bright axis-aligned bands during the building-construction effect.");
-            EditorGUILayout.Space(4);
-        }
-
         if (_importedTerrains.Count > 1)
         {
             var names = new string[_importedTerrains.Count];
             for (var i = 0; i < _importedTerrains.Count; i++) names[i] = _importedTerrains[i].DisplayName;
             _selectedImportedTerrain = SC2TerrainShell.DrawUnifiedSegmentGrid(_selectedImportedTerrain, names, Mathf.Min(3, names.Length));
-            EditorGUILayout.Space(4);
+            EditorGUILayout.Space(SC2UiScale.Pxf(8f));
         }
 
         var entry = _importedTerrains[_selectedImportedTerrain];
         if (entry.Root == null) return;
 
-        // Per-imported-object, since one map can legitimately mix a Blender
-        // export (needs recomputation) with a genuine vanilla terrain.bdf
-        // (must keep its own authored normals).
-        var newRecompute = EditorGUILayout.ToggleLeft(
-            " Recompute normals + tangents from geometry",
-            entry.RecomputeNormals, GUILayout.Width(width), GUILayout.MaxWidth(width));
-        if (newRecompute != entry.RecomputeNormals)
-        {
-            entry.RecomputeNormals = newRecompute;
-            _terrainShell.MarkDirtyAndRepaint();
-        }
-        SC2TerrainShell.DrawUnifiedNote(entry.RecomputeNormals
-            ? "The full tangent frame (normal + tangent + binormal) is rebuilt at export from the actual triangles and this mesh's real UV1. Keep this on for Blender-exported terrain.bdf files — they typically store one constant normal AND one constant tangent for the entire mesh, which lights every normal-mapped surface through the same wrong basis and makes the game's structure tarmac decals render as bright axis-aligned bands during construction."
-            : "The source file's own normals and tangents are exported byte-for-byte. Correct for a genuine vanilla terrain.bdf (whose authored frame includes deliberate hard edges), but wrong for a Blender export that never wrote a real tangent frame.");
-        EditorGUILayout.Space(4);
-
-        // Optional custom substitute for the procedural decorative
-        // background terrain (SC2BackgroundTerrain) — see that class' own
-        // header comment. Only one entry may have this set at a time.
-        {
-            var newIsBackground = EditorGUILayout.ToggleLeft(
-                " Use as Background Terrain",
-                entry.IsBackgroundTerrain, GUILayout.Width(width), GUILayout.MaxWidth(width));
-            if (newIsBackground != entry.IsBackgroundTerrain)
-            {
-                _terrainShell.RecordUndoCheckpoint("Toggle Background Terrain Substitute");
-                if (newIsBackground)
-                    foreach (var other in _importedTerrains)
-                        if (other != entry) other.IsBackgroundTerrain = false;
-                entry.IsBackgroundTerrain = newIsBackground;
-                _terrainShell.MarkDirtyAndRepaint();
-            }
-            if (entry.IsBackgroundTerrain)
-            {
-                SC2TerrainShell.DrawUnifiedNote("Stands in for the procedural background terrain — the generator is skipped and this object's own geometry is used instead. Keep it well clear of the playable area.");
-                DrawBackgroundSubstituteBoundaryWarning(entry);
-            }
-        }
-        EditorGUILayout.Space(4);
-
-        // Non-blocking only — same convention as every other informational
-        // note in this codebase (e.g. Path Graph's own edge-count warning):
-        // flags a real risk without preventing the user from doing it
-        // anyway, since a deliberately unusual placement is still a valid
-        // choice they might actually want.
-        void DrawBackgroundSubstituteBoundaryWarning(SC2ImportedTerrainEntry e)
-        {
-            var coreData = _terrainShell.Data;
-            if (coreData == null || !coreData.IsInitialized || e.Root == null) return;
-            var renderer = e.Root.GetComponentInChildren<Renderer>();
-            if (renderer == null) return;
-            var b = renderer.bounds;
-            var coreMaxX = coreData.GridWidth * coreData.CellSize;
-            var coreMaxZ = coreData.GridHeight * coreData.CellSize;
-            var overlaps = b.min.x < coreMaxX && b.max.x > 0f && b.min.z < coreMaxZ && b.max.z > 0f;
-            if (overlaps)
-                SC2TerrainShell.DrawUnifiedNote($"WARNING: this object's own world-space footprint (X {b.min.x:F0}..{b.max.x:F0}, Z {b.min.z:F0}..{b.max.z:F0}) overlaps the core map's own boundary (X 0..{coreMaxX:F0}, Z 0..{coreMaxZ:F0}) — it needs to clear the playable area entirely, or it will visibly intersect the real terrain in-game.");
-        }
-
-        EditorGUILayout.LabelField("Transform", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Transform");
         var t = entry.Root.transform;
         var prevPos = t.position; var prevEuler = t.eulerAngles; var prevScale = t.localScale;
         var boundsBeforeEdit = ImportedEntryBounds(entry);
@@ -6462,50 +6776,14 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             _terrainShell?.InvalidateLiveHeightGrid();
             NotifyImportedTerrainChanged(boundsBeforeEdit, ImportedEntryBounds(entry));
         }
-        EditorGUILayout.Space(6);
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
-        // Per-material Collision2-only exclusion for decorative embedded
-        // geometry (rock/crystal clusters etc.) baked into this imported
-        // terrain.bdf as their own material — it isn't real walkable
-        // ground, and its complex/spiky shape otherwise gets rasterized
-        // like any other terrain (RasterizeTriangleHeight overwrites per
-        // grid cell, it doesn't take a max, so overlapping facets collapse
-        // to an essentially arbitrary height) and can eat a
-        // disproportionate share of Collision2's limited 2500-triangle TIN
-        // budget refining that one small area, starving the rest of the
-        // map. Deliberately Collision2-ONLY (SC2TerrainExporter.
-        // BuildCollision2Model builds its own separate heightmap projection
-        // for this) — hfield.bdf and Costs must keep seeing this material's
-        // real height; excluding a material here must not make it
-        // disappear from hfield/Costs too.
+        var meshRenderer = entry.Root.GetComponent<MeshRenderer>();
+        if (meshRenderer != null)
         {
-            var data2 = _terrainShell?.Data;
-            var materialNames = entry.Model?.Materials?
-                .Select(m => m.Name)
-                .Where(n => !string.IsNullOrEmpty(n))
-                .Distinct()
-                .ToList() ?? new List<string>();
-            if (data2 != null && materialNames.Count > 0)
-            {
-                EditorGUILayout.LabelField("Exclude from Collision2", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
-                SC2TerrainShell.DrawUnifiedNote("Decorative embedded geometry (crystal/rock clusters etc.) isn't real walkable ground — exclude its material here so it doesn't eat Collision2's limited triangle budget. Still shows up normally in hfield.bdf and Costs (real height/passability unaffected).");
-                data2.Collision2ExcludedMaterialNames ??= new List<string>();
-                foreach (var matName in materialNames)
-                {
-                    var excluded = data2.Collision2ExcludedMaterialNames.Contains(matName);
-                    var nextExcluded = EditorGUILayout.ToggleLeft(" " + matName, excluded, GUILayout.Width(width), GUILayout.MaxWidth(width));
-                    if (nextExcluded != excluded)
-                    {
-                        _terrainShell.RecordUndoCheckpoint("Toggle Collision2 Material Exclusion");
-                        if (nextExcluded) data2.Collision2ExcludedMaterialNames.Add(matName);
-                        else data2.Collision2ExcludedMaterialNames.Remove(matName);
-                        // The exported Collision2 mesh depends on this list: a smart export must regenerate it.
-                        _terrainShell.Session?.MarkDirty(SC2.MapEditor.SmartExport.SC2DirtyFlags.Collision2);
-                        _terrainShell.MarkDirtyAndRepaint();
-                    }
-                }
-                EditorGUILayout.Space(6);
-            }
+            entry.MaterialsExpanded = SC2TerrainShell.DrawFoldoutHeader("Materials", entry.MaterialsExpanded);
+            if (entry.MaterialsExpanded)
+                DrawImportedMaterials(entry, entry.OriginalMaterials ?? meshRenderer.sharedMaterials);
         }
 
         // Real geometry deletion — distinct from the reversible Collision2
@@ -6517,9 +6795,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             var materials = entry.Model?.Materials;
             if (materials != null && materials.Count > 0)
             {
-                EditorGUILayout.LabelField("Delete material geometry", EditorStyles.boldLabel, GUILayout.Width(width), GUILayout.MaxWidth(width));
-                SC2TerrainShell.DrawUnifiedNote("Permanently removes this material's triangles from the imported mesh (in memory and the live scene object) — unlike the exclusion above, this is real deletion, not a rendering/collision toggle. NOT covered by this panel's own ↩ Undo (which only tracks Transform/material-texture changes, not geometry) — confirmed before it runs.");
-                for (var mi = 0; mi < materials.Count; mi++)
+                _deleteGeometryExpanded = SC2TerrainShell.DrawFoldoutHeader("Delete material geometry", _deleteGeometryExpanded);
+                if (_deleteGeometryExpanded)
+                    SC2TerrainShell.DrawUnifiedNote("Permanently removes a material's triangles from the imported mesh. Not covered by the Undo above. Asks to confirm.");
+                for (var mi = 0; _deleteGeometryExpanded && mi < materials.Count; mi++)
                 {
                     var mat = materials[mi];
                     var label = string.IsNullOrEmpty(mat.Name) ? $"(unnamed material {mi})" : mat.Name;
@@ -6543,10 +6822,25 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                         }
                     }
                 }
-                EditorGUILayout.Space(6);
+                EditorGUILayout.Space(SC2UiScale.Pxf(6f));
             }
         }
 
+        EditorGUILayout.Space(8);
+        if (GUILayout.Button("Remove From Scene", GUILayout.Height(26), GUILayout.Width(width), GUILayout.MaxWidth(width)))
+        {
+            // Deactivated, not destroyed — see _importedTerrainsRemoved's own
+            // doc comment: this is what makes "Remove" undoable at all,
+            // rather than requiring a fresh re-import to bring it back.
+            RecordImportedTerrainsUndo();
+            entry.Root.SetActive(false);
+            _importedTerrainsRemoved.Add(entry);
+            _importedTerrains.RemoveAt(_selectedImportedTerrain);
+            _selectedImportedTerrain = -1;
+            // The live height grid must stop including this terrain on the
+            // next paint.
+            _terrainShell?.InvalidateLiveHeightGrid();
+        }
         // Debug.Log/LogWarning output (SC2TerrainMaterialFactory.LoadTexture,
         // SC2TerrainBdfImporter's texture copy step) isn't visible in a
         // shipped standalone player — no console there — so this is the only
@@ -6560,8 +6854,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (entry.TextureAttempts != null)
         {
             var foundCount = entry.TextureAttempts.Count(a => a.Found);
-            entry.TexturesExpanded = EditorGUILayout.Foldout(entry.TexturesExpanded,
-                $"Textures: {foundCount}/{entry.TextureAttempts.Count} loaded", true, EditorStyles.foldout);
+            entry.TexturesExpanded = SC2TerrainShell.DrawFoldoutHeader(
+                $"Textures: {foundCount}/{entry.TextureAttempts.Count} loaded", entry.TexturesExpanded);
             if (entry.TexturesExpanded)
             {
                 SC2TerrainShell.BeginUnifiedPanelBox();
@@ -6612,153 +6906,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             EditorGUILayout.Space(6);
         }
 
-        var meshRenderer = entry.Root.GetComponent<MeshRenderer>();
-        if (meshRenderer != null)
-        {
-            entry.MaterialsExpanded = EditorGUILayout.Foldout(entry.MaterialsExpanded, "Materials", true, EditorStyles.foldout);
-            // The AUTHORED materials, not meshRenderer.sharedMaterials: the Mats/
-            // Pairs/Slope/Height preview modes swap the live renderer over to
-            // synthetic debug materials that have none of the _Diffuse1/_Normal1/
-            // _Mask1/... properties, so reading the live array made every texture
-            // slot (and the shader flags below) vanish in those modes.
-            var mats = entry.OriginalMaterials ?? meshRenderer.sharedMaterials;
-            for (var i = 0; entry.MaterialsExpanded && i < mats.Length; i++)
-            {
-                var mat = mats[i];
-                if (mat == null) continue;
-
-                SC2TerrainShell.BeginUnifiedPanelBox();
-                GUILayout.Label(mat.name, EditorStyles.miniBoldLabel);
-                var key = entry.DisplayName + ":" + i;
-                DrawMaterialTextureSlot(entry, i, mat, "_Diffuse1", "Diffuse1", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_Diffuse2", "Diffuse2", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_Normal1", "Normal1", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_Normal2", "Normal2", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_Mask1", "Mask1", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_Mask2", "Mask2", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_Ramp", "Ramp", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_RNMMask0", "RNM Mask 0", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_RNMMask1", "RNM Mask 1", key);
-                DrawMaterialTextureSlot(entry, i, mat, "_RNMMask2", "RNM Mask 2", key);
-
-                if (mat.HasProperty("_EnableRNM"))
-                {
-                    // Real, complete 12-flag set (56-map corpus survey) —
-                    // was only 4 of these before. REFLECT/CHROMATIC_DISPERSION
-                    // have no shader property at all (confirmed unused by
-                    // both terrain.hlsl and global_constants.hlsl), so they
-                    // aren't offered here — there'd be nothing for the toggle
-                    // to actually control.
-                    GUILayout.Label("Shader Setup", EditorStyles.miniLabel);
-
-                    // The Textured/RNM preview toolbar (top of the viewport)
-                    // and this checkbox are two genuinely independent
-                    // things — the toolbar is only a debug DISPLAY mode
-                    // (ApplyPreviewModeToImportedTerrain force-overrides the
-                    // live _EnableRNM shader property on every material for
-                    // a side-by-side comparison view), while this checkbox
-                    // is the real, persistent, EXPORTED RNM_LIGHTING value.
-                    // Reading/writing the live _EnableRNM property directly
-                    // here would make this checkbox change every time the
-                    // toolbar changes, so it would never actually be
-                    // independent, just delayed. Reads/writes
-                    // entry.OriginalEnableRnm directly instead, with
-                    // NO reference to the live material property at all —
-                    // this checkbox's own visual state (and therefore what
-                    // gets exported, via AuthoredEnableRnm/
-                    // SyncShaderSetupAndStateFromScene) no longer has any
-                    // connection whatsoever to the currently-selected
-                    // toolbar mode. It intentionally does not preview the
-                    // live 3D effect of toggling it while a forcing debug
-                    // mode (Textured/RNM) is selected — that's what the
-                    // toolbar itself is for.
-                    if (entry.OriginalEnableRnm != null && i < entry.OriginalEnableRnm.Length)
-                    {
-                        var authoredRnm = entry.OriginalEnableRnm[i] > 0.5f;
-                        var newAuthoredRnm = GUILayout.Toggle(authoredRnm, "RNM Lighting");
-                        if (newAuthoredRnm != authoredRnm)
-                        {
-                            RecordImportedTerrainsUndo();
-                            entry.OriginalEnableRnm[i] = newAuthoredRnm ? 1f : 0f;
-                        }
-                    }
-                    else
-                    {
-                        // No persistent authored value available for this
-                        // entry (shouldn't happen for anything imported
-                        // after this fix) — fall back to the old
-                        // toolbar-tied behavior rather than hiding the
-                        // control entirely.
-                        SetMaterialFlag(mat, "_EnableRNM", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableRNM"), "RNM Lighting"));
-                    }
-                    SetMaterialFlag(mat, "_EnableAmbient", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableAmbient"), "Ambient Lighting"));
-                    SetMaterialFlag(mat, "_EnableDiffuseLighting", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableDiffuseLighting"), "Diffuse Lighting"));
-                    SetMaterialFlag(mat, "_EnableSpecularLighting", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableSpecularLighting"), "Specular Lighting"));
-                    SetMaterialFlag(mat, "_EnableBlending", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableBlending"), "Blending"));
-                    SetMaterialFlag(mat, "_EnableFog", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableFog"), "Fog"));
-                    SetMaterialFlag(mat, "_EnableGlow", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableGlow"), "Glow"));
-                    SetMaterialFlag(mat, "_EnableEnvironmentMapping", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableEnvironmentMapping"), "Environment Mapping"));
-                    SetMaterialFlag(mat, "_EnableDynamicShadows", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableDynamicShadows"), "Dynamic Shadows"));
-                    SetMaterialFlag(mat, "_EnableInfiniteDistance", GUILayout.Toggle(GetMaterialFlag(mat, "_EnableInfiniteDistance"), "Infinite Distance"));
-
-                    var alphaTestOn = GetMaterialFlag(mat, "_EnableAlphaTest");
-                    var newAlphaTestOn = GUILayout.Toggle(alphaTestOn, "Alpha Test");
-                    SetMaterialFlag(mat, "_EnableAlphaTest", newAlphaTestOn);
-                    if (newAlphaTestOn && mat.HasProperty("_AlphaTestThreshold"))
-                    {
-                        var threshold = mat.GetFloat("_AlphaTestThreshold");
-                        var newThreshold = EditorGUILayout.Slider("Alpha Test Threshold", threshold, 0f, 255f);
-                        if (!Mathf.Approximately(newThreshold, threshold))
-                        {
-                            RecordImportedTerrainsUndo();
-                            mat.SetFloat("_AlphaTestThreshold", newThreshold);
-                        }
-                    }
-
-                    if (mat.HasProperty("_TextureScroll"))
-                    {
-                        var scroll = mat.GetVector("_TextureScroll");
-                        var newScroll = EditorGUILayout.Vector2Field("Texture Scroll", new Vector2(scroll.x, scroll.y));
-                        if (newScroll.x != scroll.x || newScroll.y != scroll.y)
-                        {
-                            RecordImportedTerrainsUndo();
-                            mat.SetVector("_TextureScroll", new Vector4(newScroll.x, newScroll.y, 0, 0));
-                        }
-                    }
-
-                    if (mat.HasProperty("_SrcBlend"))
-                    {
-                        var stateOptions = new[] { "None", "TerrainAlphaBlendState", "TerrainAdditiveState", "TerrainOpaqueState" };
-                        var currentState = SC2TerrainMaterialFactory.ReverseLookupBlendState(mat) ?? "None";
-                        var stateIndex = System.Array.IndexOf(stateOptions, currentState);
-                        if (stateIndex < 0) stateIndex = 0;
-                        var newStateIndex = EditorGUILayout.Popup("State", stateIndex, stateOptions, SC2UiScale.PopupStyle());
-                        if (newStateIndex != stateIndex)
-                        {
-                            RecordImportedTerrainsUndo();
-                            SC2TerrainMaterialFactory.ApplyBlendState(mat, stateOptions[newStateIndex] == "None" ? null : stateOptions[newStateIndex]);
-                        }
-                    }
-                }
-                SC2TerrainShell.EndUnifiedPanelBox();
-            }
-        }
-
-        EditorGUILayout.Space(8);
-        if (GUILayout.Button("Remove From Scene", GUILayout.Height(26), GUILayout.Width(width), GUILayout.MaxWidth(width)))
-        {
-            // Deactivated, not destroyed — see _importedTerrainsRemoved's own
-            // doc comment: this is what makes "Remove" undoable at all,
-            // rather than requiring a fresh re-import to bring it back.
-            RecordImportedTerrainsUndo();
-            entry.Root.SetActive(false);
-            _importedTerrainsRemoved.Add(entry);
-            _importedTerrains.RemoveAt(_selectedImportedTerrain);
-            _selectedImportedTerrain = -1;
-            // The live height grid must stop including this terrain on the
-            // next paint.
-            _terrainShell?.InvalidateLiveHeightGrid();
-        }
     }
 
     private void OpenBatchImportDiagnostics()

@@ -16,8 +16,10 @@
 //   _Mask2       -> [7]  (see above)
 //   _Ramp        -> [8]  (metal/foam only)
 //   _RNMMask*    -> [10] (base name without _0/_1/_2)
+//   _Environment -> [11] (no shader property: only ever set through a texture path override, the Imported tab's
+//                         Environment slot; without one the imported file's own path stays)
 //
-// Slots [4],[5],[9],[11],[12] are left untouched — no shader property.
+// Slots [4],[5],[9],[12] are left untouched — no shader property.
 
 using UnityEngine;
 using BdfIO.Formats.Terrain;
@@ -30,8 +32,11 @@ public static class SC2TerrainMaterialExporter
     public static readonly System.Collections.Generic.Dictionary<string, int> PathSlotByShaderProp = new()
     {
         { "_Diffuse1", 0 }, { "_Diffuse2", 1 }, { "_Normal1", 2 }, { "_Normal2", 3 },
-        { "_Mask1", 6 }, { "_Mask2", 7 }, { "_Ramp", 8 }, { "_RNMMask0", 10 },
+        { "_Mask1", 6 }, { "_Mask2", 7 }, { "_Ramp", 8 }, { "_RNMMask0", 10 }, { EnvironmentKey, 11 },
     };
+
+    /// <summary>Override-dictionary key (after "materialIndex:") of the Environment texture, which has no shader property.</summary>
+    public const string EnvironmentKey = "_Environment";
 
     public static void ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null, System.Func<string, Texture2D, bool, string> resolveRawResourcePath = null, System.Collections.Generic.Dictionary<string, bool> texturePathForceExport = null)
     {
@@ -81,6 +86,9 @@ public static class SC2TerrainMaterialExporter
             TryUpdateSlot(mat, 6, unityMat, "_Mask1", Override("_Mask1"));
             TryUpdateSlot(mat, 7, unityMat, "_Mask2", Override("_Mask2"));
             TryUpdateSlot(mat, 8, unityMat, "_Ramp", Override("_Ramp"));   // metal/foam Ramp
+
+            var environmentOverride = Override(EnvironmentKey);
+            if (!string.IsNullOrEmpty(environmentOverride)) mat.TexturePaths[11] = environmentOverride;
 
             // RNM Mask: _RNMMask0 is stored as the base name (without _0) in slot [10].
             // Recover the base name from the _RNMMask0 texture path.

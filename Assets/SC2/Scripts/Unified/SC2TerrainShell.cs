@@ -260,16 +260,6 @@ public class SC2TerrainShell : ScriptableObject
             DestroyBackgroundRuntime();
             return;
         }
-        var imported = GetImportedTerrainsForExport?.Invoke();
-        if (imported != null && imported.Exists(t => t.IsBackgroundTerrain))
-        {
-            // A real imported terrain.bdf stands in for the procedural
-            // background entirely — same skip condition SC2BackgroundTerrainPreview.Ensure
-            // used to check.
-            DestroyBackgroundRuntime();
-            return;
-        }
-
         var bg = SC2BackgroundTerrain.EnsureGenerated(_data);
         if (bg == null)
         {
@@ -1565,14 +1555,6 @@ public class SC2TerrainShell : ScriptableObject
             return;
         }
 
-        var imported = GetImportedTerrainsForExport?.Invoke();
-        var hasCustomBackground = imported != null && imported.Exists(t => t.IsBackgroundTerrain);
-        if (hasCustomBackground)
-        {
-            DrawUnifiedNote("An imported terrain.bdf is flagged \"Use as Background Terrain\" (Imported tab) — the procedural generator below is skipped and that object's own geometry is exported/previewed instead.");
-            return;
-        }
-
         DrawUnifiedNote("A low-detail decorative surface is generated around the playable core, sharing its exact grid alignment so the seam is always exact regardless of SimplifyRatio choices on either side. Purely cosmetic — never contributes to Costs/Hfield, and only lightly to Collision2 near the seam.");
 
         var minFootprint = SC2BackgroundTerrain.MinFootprint(_data);
@@ -2722,15 +2704,13 @@ public class SC2TerrainShell : ScriptableObject
         }
     }
 
-    /// <summary>The generated background's data, or null when the background is off or an imported terrain.bdf stands in for it
-    /// (then there is nothing of ours to simplify). For the Simplified and Export tabs, which list its pairs next to the core's.</summary>
+    /// <summary>The generated background's data, or null when the background is off (then there is nothing of ours to simplify).
+    /// For the Simplified and Export tabs, which list its pairs next to the core's.</summary>
     public SC2TerrainData ProceduralBackgroundData
     {
         get
         {
             if (_data == null || !_data.BackgroundTerrainEnabled || _data.BackgroundTerrainData == null) return null;
-            var imported = GetImportedTerrainsForExport?.Invoke();
-            if (imported != null && imported.Exists(t => t.IsBackgroundTerrain)) return null;
             return _data.BackgroundTerrainData;
         }
     }
@@ -2945,6 +2925,58 @@ public class SC2TerrainShell : ScriptableObject
         return style;
     }
 
+    /// <summary>A small square thumbnail with a slot letter beside it, for a folded material card: it shows the texture (or a red
+    /// "none" box while the slot is empty) and a click opens the texture browser for <paramref name="texKey"/>. The browser hands a
+    /// choice back through the same key the unfolded card's picker uses, so it does not matter which of the two opened it. Returns
+    /// the texture after a pick made this frame (the given one otherwise).</summary>
+    public static Texture DrawTextureThumb(string texKey, string letter, SC2.MapEditor.Textures.SC2TextureUsage usage, float size,
+        Texture texture, params Texture[] siblingHints)
+    {
+        var picked = SC2TextureBrowser.Consume(texture, texKey, out _);
+
+        var rect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
+        var letterStyle = new GUIStyle(EditorStyles.miniLabel);
+        if (picked != null)
+        {
+            EditorGUI.DrawRect(rect, new Color(0.16f, 0.16f, 0.16f, 1f));
+            SC2TextureBrowser.DrawPreview(rect, picked, usage);
+        }
+        else
+        {
+            // An empty slot has to read as "nothing assigned", not as a dark texture: a red outline, "none" in the middle and
+            // a red slot letter.
+            var empty = new Color(0.86f, 0.33f, 0.33f, 1f);
+            EditorGUI.DrawRect(rect, new Color(0.13f, 0.09f, 0.09f, 1f));
+            DrawOutline(rect, empty);
+            var noneStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter, fontSize = SC2UiScale.F(9) };
+            noneStyle.normal.textColor = empty;
+            GUI.Label(rect, "none", noneStyle);
+            letterStyle.normal.textColor = empty;
+        }
+
+        var e = Event.current;
+        var hovered = e != null && rect.Contains(e.mousePosition);
+        if (hovered && e.type == EventType.Repaint)
+            DrawOutline(rect, new Color(0.55f, 0.78f, 1f, 0.95f));
+        // Wide enough for a longer letter group ("Env", "RNM1") without the next thumbnail being pushed over it.
+        GUILayout.Label(letter, letterStyle, GUILayout.Width(Mathf.Max(SC2UiScale.Pxf(22f), letterStyle.CalcSize(new GUIContent(letter)).x + SC2UiScale.Pxf(4f))));
+        if (e != null && e.type == EventType.MouseDown && e.button == 0 && hovered)
+        {
+            GUIUtility.keyboardControl = 0;
+            SC2TextureBrowser.Open(texKey, picked, usage, siblingHints);
+            e.Use();
+        }
+        return picked;
+    }
+
+    public static void DrawOutline(Rect rect, Color color)
+    {
+        EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), color);
+        EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), color);
+        EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1f, rect.height), color);
+        EditorGUI.DrawRect(new Rect(rect.xMax - 1f, rect.y, 1f, rect.height), color);
+    }
+
     /// <summary>Opens a slot: draws the thumbnail and the slot's header (its name, and the lock when <paramref name="lockKey"/> is
     /// given) and the texture's name, and leaves the slot's right-hand column open for the caller to add to. Close it with
     /// <see cref="EndTextureSlot"/>. Returns the texture after a pick made in the browser. <paramref name="infoWidth"/> is the
@@ -3133,7 +3165,7 @@ public class SC2TerrainShell : ScriptableObject
         return picked;
     }
 
-    private static SC2.MapEditor.Textures.SC2TextureUsage TextureUsageForPicker(string key)
+    public static SC2.MapEditor.Textures.SC2TextureUsage TextureUsageForPicker(string key)
     {
         var value = (key ?? "").ToLowerInvariant();
         if (value.Contains("normal")) return SC2.MapEditor.Textures.SC2TextureUsage.Normal;

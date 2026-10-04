@@ -746,13 +746,9 @@ public static class SC2TerrainExporter
         // offset (SC2BackgroundTerrain.BuildForExportOrPreview) instead of
         // an arbitrary GameObject Transform — the background is always
         // generated directly against the core's own coordinate system, so
-        // a plain vertex translate is all that's needed. Skipped entirely
-        // when the user has substituted their own imported terrain.bdf for
-        // this role (IsBackgroundTerrain) — that entry already merged in
-        // via MergeImportedTerrain above. Must happen before RebuildAllBsp,
-        // same reasoning as the imported-terrain merge above.
-        var hasCustomBackground = importedTerrains != null && importedTerrains.Exists(t => t.IsBackgroundTerrain);
-        if (data.BackgroundTerrainEnabled && !hasCustomBackground)
+        // a plain vertex translate is all that's needed. Must happen before
+        // RebuildAllBsp, same reasoning as the imported-terrain merge above.
+        if (data.BackgroundTerrainEnabled)
         {
             var bgBuild = SC2BackgroundTerrain.BuildForExportOrPreview(data, out var bgOffset);
             var bg = data.BackgroundTerrainData;
@@ -926,30 +922,13 @@ public static class SC2TerrainExporter
         if (infoModelForWater.WaterEnabled != 0 && !alreadyHasWater)
             SC2WaterPlane.AppendToExportModel(model, data, infoModelForWater.WaterElevation);
 
-        // See SC2TerrainData.SingleBspNodePerLayer for the confirmed in-game
-        // artifact that toggle exists for.
-        //
-        // terrain.bdf now ALWAYS uses the
-        // reverse-engineered vanilla-candidate split (same as decals.bdf/
-        // collision2.bdf already did unconditionally — see
-        // DecalsSpatialBuilder.Rebuild/SC2Collision2Shell's own
-        // useVanillaCandidateSplit:true call sites) instead of being gated
-        // behind a user-facing toggle (SC2TerrainData.VanillaCandidateBspSplit,
-        // removed from the Terrain tab UI — see git history). That field's
-        // own default was already `true` and matched the corpus-measured
-        // best choice (see TerrainBspBuilder.FindBestVanillaCandidateSplit's
-        // own doc comment: mean node-count ratio 1.00 vs. real vanilla files,
-        // vs. plain SAH under-splitting 24x worse by its own metric), so
-        // this is a behavior no live map was actually exercising differently
-        // — it just closes off the ability to turn it off. SingleBspNodePerLayer
-        // still wins if it's on — there's nothing left to split once every
-        // layer is forced to one leaf.
-        var bspMinPolys = data.SingleBspNodePerLayer
-            ? TerrainBdf.SingleLeafPerLayer
-            : EdbTreeBuilder.DefaultMinPolysPerLeaf;
-        var useVanillaSplit = !data.SingleBspNodePerLayer;
-        var bspModeLabel = data.SingleBspNodePerLayer ? "single leaf per layer"
-            : useVanillaSplit ? "vanilla-candidate" : "subdivided (SAH)";
+        // terrain.bdf always uses the reverse-engineered vanilla-candidate split (same as decals.bdf/collision2.bdf), see
+        // TerrainBspBuilder.FindBestVanillaCandidateSplit for why. The old per-map single-leaf switch
+        // (SC2TerrainData.SingleBspNodePerLayer) is no longer read: its UI is gone, so a value saved with it on could never
+        // be turned off again.
+        var bspMinPolys = EdbTreeBuilder.DefaultMinPolysPerLeaf;
+        const bool useVanillaSplit = true;
+        const string bspModeLabel = "vanilla-candidate";
         SC2Log.Log($"[SC2Exporter] RebuildAllBsp started. Tris={model.Triangles.Count:N0}, Verts={model.Vertices.Count:N0}, mode={bspModeLabel}");
         var swBsp = System.Diagnostics.Stopwatch.StartNew();
         ReportProgress($"BSP ({model.Triangles.Count:N0} tris)...", 0.85f);
@@ -1945,15 +1924,13 @@ public static class SC2TerrainExporter
         var t = imported.Transform;
         var vertexBase = model.Vertices.Count;
 
-        // Default (see SC2ImportedTerrainExportData.RecomputeNormals for the
-        // measurements behind it): rebuild the whole tangent frame, not just
-        // the normal — the same Blender exporter that writes a constant
-        // straight-up normal also writes a single constant tangent for the
-        // entire mesh, which breaks every normal-mapped surface and decal.
-        var haveRecomputed = imported.RecomputeNormals;
-        var (recomputedN, recomputedT, recomputedB) = haveRecomputed
-            ? ComputeImportedVertexTbn(source)
-            : (null, null, null);
+        // Always rebuild the whole tangent frame from the triangles and the real UV1, not just the normal. Blender-side
+        // terrain.bdf exporters write both halves of the frame as constants: on a real export every one of 165432 vertices
+        // stored the normal (0,1,0) (63.7 degrees off the true face normal on average; vanilla maps measure 0.78..38.5) and one
+        // single tangent direction, 69.8 degrees off the UV1-derived one. A constant tangent lights every normal-mapped surface
+        // through the same wrong basis, which is what makes the game's structure tarmac decals render as bright axis-aligned
+        // bands during construction. The price is that a genuine vanilla file's intentional hard edges are smoothed.
+        var (recomputedN, recomputedT, recomputedB) = ComputeImportedVertexTbn(source);
 
         for (var vi = 0; vi < source.Vertices.Count; vi++)
         {
@@ -1968,7 +1945,7 @@ public static class SC2TerrainExporter
             Vector3 tan = new(v.TangentX, v.TangentY, v.TangentZ);
             Vector3 bin = new(v.BinormalX, v.BinormalY, v.BinormalZ);
             var keepRaw = v.HasPackedTbn;
-            if (haveRecomputed && recomputedN[vi].sqrMagnitude > 1e-12f)
+            if (recomputedN[vi].sqrMagnitude > 1e-12f)
             {
                 // The whole frame is rebuilt from geometry + real UV1, so the
                 // source's own tangent (constant across the entire mesh on a

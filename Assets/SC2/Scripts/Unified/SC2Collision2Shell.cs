@@ -127,6 +127,8 @@ public sealed class SC2Collision2Shell : System.IDisposable
         DrawPolygonBudgetSlider();
         SC2TerrainShell.DrawUnifiedNote("Ground TIN triangle budget (default 2500, the vanilla-observed convention — the file format itself has no fixed ceiling here). Raising it lets the error-adaptive refinement spend more triangles on steep/detailed terrain before it runs out of budget.");
 
+        DrawExcludedMaterials(w);
+
         EditorGUILayout.Space(4);
         DrawUndoRedoRow(w);
 
@@ -191,6 +193,42 @@ public sealed class SC2Collision2Shell : System.IDisposable
         }
 
         EditorGUILayout.EndVertical();
+    }
+
+    /// <summary>One checkbox per material of the imported terrain objects: a ticked material is left out of the generated
+    /// collision mesh only. Decorative embedded geometry (rock or crystal clusters) is not walkable ground, and its spiky shape
+    /// would otherwise eat a disproportionate share of the triangle budget; hfield.bdf and Costs keep seeing its real height.</summary>
+    private void DrawExcludedMaterials(float w)
+    {
+        var imported = _terrainShell.GetImportedTerrainsForExport?.Invoke();
+        if (imported == null) return;
+        var names = new List<string>();
+        foreach (var entry in imported)
+        {
+            var materials = entry?.Model?.Materials;
+            if (materials == null) continue;
+            foreach (var material in materials)
+                if (!string.IsNullOrEmpty(material.Name) && !names.Contains(material.Name))
+                    names.Add(material.Name);
+        }
+        if (names.Count == 0) return;
+
+        EditorGUILayout.Space(SC2UiScale.Pxf(8f));
+        SC2TerrainShell.DrawUnifiedSectionLabel("Exclude materials");
+        SC2TerrainShell.DrawUnifiedNote("Tick decorative geometry (rock or crystal clusters) to keep it out of the collision mesh and its triangle budget. Hfield and Costs still see its real height. Generate again to update the preview.");
+        Data.Collision2ExcludedMaterialNames ??= new List<string>();
+        foreach (var name in names)
+        {
+            var excluded = Data.Collision2ExcludedMaterialNames.Contains(name);
+            var next = EditorGUILayout.ToggleLeft(" " + name, excluded, GUILayout.Width(w), GUILayout.MaxWidth(w));
+            if (next == excluded) continue;
+            _terrainShell.RecordUndoCheckpoint("Toggle Collision2 Material Exclusion");
+            if (next) Data.Collision2ExcludedMaterialNames.Add(name);
+            else Data.Collision2ExcludedMaterialNames.Remove(name);
+            // The exported Collision2 mesh depends on this list: a smart export must regenerate it.
+            _terrainShell.Session?.MarkDirty(SC2.MapEditor.SmartExport.SC2DirtyFlags.Collision2);
+            _terrainShell.MarkDirtyAndRepaint();
+        }
     }
 
     /// <summary>Mirrors SC2EnvironmentShell.Load()'s own "sync the document
