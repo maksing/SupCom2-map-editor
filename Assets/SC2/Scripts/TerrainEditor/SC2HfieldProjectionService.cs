@@ -92,7 +92,64 @@ public static class SC2HfieldProjectionService
     {
         var heights = new float[mapX * mapY];
         var written = new bool[mapX * mapY];
+        RasterizeModel(model, heights, written, mapX, mapY, excludedMaterialNames);
+        return Finish(heights, written, existingTerrainTypes, mapX, mapY, bakeWaterElevation);
+    }
 
+    /// <summary>The topmost surface of several models at once (a cell takes the highest of them), with the same water exclusion
+    /// as <see cref="Project"/>, as a heightmap of what can block the sun for the lighting bake. Only cracks a few cells wide
+    /// are filled (<see cref="FillSmallGaps"/>); a cell no model covers stays at height 0, i.e. no occluder, where
+    /// <see cref="Project"/> would spread the nearest surface across the whole hole - for a set of casters that does not
+    /// cover the receiver (a frame around an empty middle) that painted a tall false wall over it.</summary>
+    public static HfieldModel ProjectMany(System.Collections.Generic.IEnumerable<TerrainModel> models, int mapX, int mapY)
+    {
+        var heights = new float[mapX * mapY];
+        var written = new bool[mapX * mapY];
+        foreach (var model in models) RasterizeModel(model, heights, written, mapX, mapY, null);
+        FillSmallGaps(heights, written, mapX, mapY, 2);
+        return new HfieldModel
+        {
+            Version = 2,
+            MapX = (uint)mapX,
+            MapY = (uint)mapY,
+            Heightmap = heights.Select(h => (ushort)Mathf.Clamp(Mathf.RoundToInt(h * 128f), 0, 65535)).ToArray(),
+            TerrainTypes = System.Array.Empty<ushort>(),
+            TerrainTypesElementSize = 1
+        };
+    }
+
+    /// <summary>Fills a cell that no triangle covered with the average of its covered neighbours, <paramref name="passes"/>
+    /// times, each pass reading only what was covered before it started - so a hole grows by one cell per pass and a crack of
+    /// up to twice <paramref name="passes"/> cells closes, but a larger hole keeps its middle.</summary>
+    private static void FillSmallGaps(float[] h, bool[] written, int w, int sz, int passes)
+    {
+        for (var pass = 0; pass < passes; pass++)
+        {
+            var before = (bool[])written.Clone();
+            var anyFilled = false;
+            for (var y = 0; y < sz; y++)
+            for (var x = 0; x < w; x++)
+            {
+                var i = y * w + x;
+                if (before[i]) continue;
+                float sum = 0;
+                var n = 0;
+                if (x > 0 && before[i - 1]) { sum += h[i - 1]; n++; }
+                if (x < w - 1 && before[i + 1]) { sum += h[i + 1]; n++; }
+                if (y > 0 && before[i - w]) { sum += h[i - w]; n++; }
+                if (y < sz - 1 && before[i + w]) { sum += h[i + w]; n++; }
+                if (n == 0) continue;
+                h[i] = sum / n;
+                written[i] = true;
+                anyFilled = true;
+            }
+            if (!anyFilled) break;
+        }
+    }
+
+    private static void RasterizeModel(TerrainModel model, float[] heights, bool[] written, int mapX, int mapY,
+        System.Collections.Generic.ICollection<string> excludedMaterialNames)
+    {
         for (var li = 0; li < model.Layers.Count; li++)
         {
             var layer = model.Layers[li];
@@ -117,7 +174,11 @@ public static class SC2HfieldProjectionService
                 RasterizeTriangleHeight(v0, v1, v2, heights, written, mapX, mapY);
             }
         }
+    }
 
+    private static HfieldModel Finish(float[] heights, bool[] written, ushort[] existingTerrainTypes, int mapX, int mapY,
+        float? bakeWaterElevation)
+    {
         if (bakeWaterElevation.HasValue)
         {
             var we = bakeWaterElevation.Value;

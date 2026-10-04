@@ -939,6 +939,7 @@ namespace SC2.MapEditor.Document
             o.Set("rnmBakeOverrideSunIntensity", SC2JsonValue.Of(t.RnmBakeOverrideSunIntensity));
             o.Set("rnmBakeOverrideShadowColor", WriteColor(t.RnmBakeOverrideShadowColor));
             o.Set("rnmBakeShadowSoftRadius", SC2JsonValue.Of(t.RnmBakeShadowSoftRadius));
+            o.Set("rnmShadowExclusions", WriteStringList(t.RnmShadowExclusions));
             // Recursive — t.Background is itself a full
             // SC2TerrainDocument (see that field's own doc comment) —
             // WriteTerrain naturally handles it with no new logic beyond
@@ -998,6 +999,7 @@ namespace SC2.MapEditor.Document
                 RnmBakeOverrideSunIntensity = (float)o.Get("rnmBakeOverrideSunIntensity").AsDouble(1.0),
                 RnmBakeOverrideShadowColor = ReadColor(o.Get("rnmBakeOverrideShadowColor"), new Color(0.64f, 0.77f, 0.92f, 1f)),
                 RnmBakeShadowSoftRadius = o.Get("rnmBakeShadowSoftRadius").AsInt(6),
+                RnmShadowExclusions = ReadStringList(o.Get("rnmShadowExclusions")),
             };
             foreach (var v in o.Get("layers").Items()) t.Layers.Add(ReadTerrainLayer(v));
             foreach (var v in o.Get("materials").Items()) t.Materials.Add(ReadMaterial(v));

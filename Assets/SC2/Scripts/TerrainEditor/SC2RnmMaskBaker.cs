@@ -72,6 +72,10 @@ public static class SC2RnmMaskBaker
         /// <summary>Subtracted from a texel's world position before the
         /// heightmap lookup (see SC2RnmBakeService.BuildShadowHfield).</summary>
         public Vector3 HfieldOffset;
+        /// <summary>Optional: the heightmap that shades the layer with this index, for a bake where what shadows a layer
+        /// depends on which object it belongs to (SC2ShadowCasting). Null, or a null result, = <see cref="Hfield"/>. It has to
+        /// share <see cref="HfieldOffset"/>'s frame.</summary>
+        public Func<int, HfieldModel> HfieldForLayer;
         public bool WaterEnabled;
         public float WaterElevation;
         public float MaxWaterDepth = DefaultMaxWaterDepthForBlur;
@@ -129,6 +133,7 @@ public static class SC2RnmMaskBaker
             var triStart = layer.CumulativeIndices / 3;
             var triEnd = li + 1 < model.Layers.Count ? model.Layers[li + 1].CumulativeIndices / 3 : model.Triangles.Count;
             var sampler = blendSamplerForLayer?.Invoke(li);
+            var layerHfield = settings.HfieldForLayer?.Invoke(li) ?? settings.Hfield;
             for (var t = triStart; t < triEnd; t++)
             {
                 var tri = model.Triangles[t];
@@ -139,7 +144,7 @@ public static class SC2RnmMaskBaker
                 var v1 = model.Vertices[i1];
                 var v2 = model.Vertices[i2];
                 RasterizeTriangleGeometry(v0, v1, v2, tangents[i0], tangents[i1], tangents[i2],
-                    mw, mh, settings.ToSun, settings.Hfield, settings.HfieldOffset, t0Raw, t1Raw, t2Raw, occlusionRaw, written,
+                    mw, mh, settings.ToSun, layerHfield, settings.HfieldOffset, t0Raw, t1Raw, t2Raw, occlusionRaw, written,
                     settings.WaterEnabled, settings.WaterElevation, depthUnderwater, blend, sampler);
             }
         }

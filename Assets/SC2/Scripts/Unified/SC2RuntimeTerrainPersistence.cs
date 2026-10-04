@@ -996,6 +996,7 @@ public static class SC2RuntimeTerrainPersistence
         public float RnmBakeOverrideSunIntensity = 1f;
         public Color RnmBakeOverrideShadowColor = new Color(0.64f, 0.77f, 0.92f, 1f);
         public int RnmBakeShadowSoftRadius = 6;
+        public string[] RnmShadowExclusions;
         // Lighting Bake > Point Cloud. PointCloudStored tells a save that has these from an older one where
         // JsonUtility left the settings at zero.
         public bool PointCloudStored;
@@ -1201,6 +1202,7 @@ public static class SC2RuntimeTerrainPersistence
         dto.RnmBakeOverrideSunIntensity = data.RnmBakeOverrideSunIntensity;
         dto.RnmBakeOverrideShadowColor = data.RnmBakeOverrideShadowColor;
         dto.RnmBakeShadowSoftRadius = data.RnmBakeShadowSoftRadius;
+        dto.RnmShadowExclusions = data.RnmShadowExclusions != null ? data.RnmShadowExclusions.ToArray() : Array.Empty<string>();
         dto.PointCloudStored = true;
         dto.PointCloudSkyR = data.PointCloudSkyColor.r; dto.PointCloudSkyG = data.PointCloudSkyColor.g; dto.PointCloudSkyB = data.PointCloudSkyColor.b;
         dto.PointCloudSkyIntensity = data.PointCloudSkyIntensity;
@@ -1438,6 +1440,7 @@ public static class SC2RuntimeTerrainPersistence
         data.RnmBakeOverrideSunIntensity = dto.RnmBakeOverrideSunIntensity;
         data.RnmBakeOverrideShadowColor = dto.RnmBakeOverrideShadowColor;
         data.RnmBakeShadowSoftRadius = dto.RnmBakeShadowSoftRadius;
+        data.RnmShadowExclusions = dto.RnmShadowExclusions != null ? new List<string>(dto.RnmShadowExclusions) : new List<string>();
         if (dto.PointCloudStored)
         {
             data.PointCloudSkyColor = new Color(dto.PointCloudSkyR, dto.PointCloudSkyG, dto.PointCloudSkyB, 1f);

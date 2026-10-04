@@ -47,6 +47,8 @@ namespace SC2.MapEditor.Document
                 data.RnmBakeShadowSoftRadius,
                 data.Uv1HeightWeight);
             AttachBlendLayers(doc, data.BlendLayerStacks, blobStore);
+            doc.RnmShadowExclusions = data.RnmShadowExclusions != null
+                ? new System.Collections.Generic.List<string>(data.RnmShadowExclusions) : new System.Collections.Generic.List<string>();
             if (data.BackgroundTerrainEnabled && data.BackgroundTerrainData != null)
                 doc.Background = BuildFromLegacy(data.BackgroundTerrainData, blobStore);
             return doc;

@@ -199,6 +199,7 @@ namespace SC2.MapEditor.Document
             data.RnmBakeOverrideSunIntensity = terrain.RnmBakeOverrideSunIntensity;
             data.RnmBakeOverrideShadowColor = terrain.RnmBakeOverrideShadowColor;
             data.RnmBakeShadowSoftRadius = terrain.RnmBakeShadowSoftRadius;
+            data.RnmShadowExclusions = terrain.RnmShadowExclusions;
             data.TrianglePairIndex = terrain.TrianglePairIndex;
 
             data.Materials = new List<SC2Material>(terrain.Materials.Count);

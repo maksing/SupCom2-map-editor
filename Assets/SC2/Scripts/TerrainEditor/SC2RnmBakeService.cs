@@ -56,6 +56,7 @@ public static class SC2RnmBakeService
         if (data == null) { onFinished?.Invoke("No active terrain to bake."); return null; }
 
         var info = SC2TerrainExporter.BuildInfoModel(data, session);
+        var shadowRules = CopyShadowRules(data);
         var importedPlan = commitImportedMasks != null && session?.Document != null && session.BlobStore != null
             ? new ImportedBake
             {
@@ -76,10 +77,11 @@ public static class SC2RnmBakeService
             // own doc comment. This bake's OUTPUT still only ever writes into
             // data.Pairs (core); only what can OCCLUDE the sun is unified.
             SC2BusyOverlay.Report("Building the shadow heightmap");
-            var hfield = BuildShadowHfield(data, importedTerrains, out var hfieldOffset, out _, out _, model);
+            var shadow = BuildShadowCasters(data, importedTerrains, shadowRules, model, pairIndexPerLayer, importedLayers);
+            var receivers = ReceiverIdsPerLayer(pairIndexPerLayer, importedLayers, importedTerrains);
 
             if (importedPlan != null) importedPlan.Layers = importedLayers;
-            var outcome = BakeInternal(model, pairIndexPerLayer, data.Pairs, hfield, hfieldOffset, data, info, importedPlan);
+            var outcome = BakeInternal(model, pairIndexPerLayer, data.Pairs, shadow, receivers, shadow.Offset, data, info, importedPlan);
             return () => onFinished?.Invoke(ApplyBake(outcome, pairIndexPerLayer, data.Pairs, data, "RNM mask(s)", importedPlan));
         };
     }
@@ -110,6 +112,7 @@ public static class SC2RnmBakeService
         if (!coreData.BackgroundTerrainEnabled || bg == null) { onFinished?.Invoke("Background terrain is not enabled."); return null; }
 
         var info = SC2TerrainExporter.BuildInfoModel(coreData, session);
+        var shadowRules = CopyShadowRules(coreData);
         return () =>
         {
             SC2BusyOverlay.Report("Building the background geometry");
@@ -124,90 +127,184 @@ public static class SC2RnmBakeService
             // zero); BuildShadowHfield handles shifting the core's own absolute-
             // world geometry into that shared frame internally.
             SC2BusyOverlay.Report("Building the shadow heightmap");
-            var hfield = BuildShadowHfield(coreData, importedTerrains, out _, out _, out _);
+            var shadow = BuildShadowCasters(coreData, importedTerrains, shadowRules);
+            var receivers = new List<string>();
+            for (var li = 0; li < pairIndexPerLayer.Count; li++) receivers.Add(SC2ShadowCasting.BackgroundId);
             // bakeImportedWorldRnm: false — this bake's own model never merges imported terrain (see
             // BuildBackgroundBakeGeometry), so without this it would see zero imported layers every
             // time and wipe out whatever the core's own Bake() already baked.
-            var outcome = BakeInternal(model, pairIndexPerLayer, bg.Pairs, hfield, Vector3.zero, coreData, info, null,
+            var outcome = BakeInternal(model, pairIndexPerLayer, bg.Pairs, shadow, receivers, Vector3.zero, coreData, info, null,
                 bakeImportedWorldRnm: false);
             return () => onFinished?.Invoke(ApplyBake(outcome, pairIndexPerLayer, bg.Pairs, coreData, "background RNM mask(s)", null));
         };
     }
 
-    /// <summary>Builds the heightmap used ONLY for the shadow horizon-
-    /// march's occlusion test (SC2RnmBakeService.IsShadowed) — separate
-    /// from whatever geometry a given bake writes its own lighting OUTPUT
-    /// against. When the decorative background is enabled, this spans BOTH
-    /// the core's own footprint AND the background's full extent (main
-    /// mesh), all expressed in the background's own local
-    /// coordinate space (worldPos - sharedOffset, i.e. ComputeBounds' own
-    /// minX/minZ as origin — background's own footprint is always a
-    /// superset of the core's, since it's centered on and surrounds the
-    /// core by construction) — so a tall core feature correctly shadows
-    /// the background and vice versa. <paramref name="sharedOffset"/> is
-    /// what a caller whose OWN geometry is still in absolute world space
-    /// (i.e. Bake's own core model) must SUBTRACT from a world position
-    /// before looking it up against this hfield; it's Vector3.zero when
-    /// background is disabled (hfield stays core-only, exactly as before
-    /// this fix) or for a caller (BakeBackground) whose own geometry is
-    /// already in that same local frame. <paramref name="prebuiltCoreModel"/> is the core geometry a caller has already built with
-    /// BuildBakeGeometry (it is only read here), so it is not built a second time.</summary>
+    /// <summary>A copy of the shadow rules (SC2ShadowCasting) to carry into a bake that runs on a worker thread.</summary>
+    private static List<string> CopyShadowRules(SC2TerrainData data) =>
+        data.RnmShadowExclusions != null ? new List<string>(data.RnmShadowExclusions) : new List<string>();
+
+    /// <summary>The object id each layer of the core bake model belongs to: the core for a pair layer, the imported object's
+    /// id for a merged imported layer.</summary>
+    private static List<string> ReceiverIdsPerLayer(List<int> pairIndexPerLayer, List<ImportedLayerRef> importedLayers,
+        List<SC2ImportedTerrainExportData> importedTerrains)
+    {
+        var ids = new List<string>(pairIndexPerLayer.Count);
+        for (var li = 0; li < pairIndexPerLayer.Count; li++)
+        {
+            var imported = li < importedLayers.Count ? importedLayers[li] : null;
+            ids.Add(imported == null ? SC2ShadowCasting.CoreId : ImportedObjectId(importedTerrains, imported.ObjectIndex));
+        }
+        return ids;
+    }
+
+    private static string ImportedObjectId(List<SC2ImportedTerrainExportData> importedTerrains, int objectIndex)
+    {
+        var id = importedTerrains != null && objectIndex >= 0 && objectIndex < importedTerrains.Count ? importedTerrains[objectIndex].Id : null;
+        return string.IsNullOrEmpty(id) ? "imported:" + objectIndex : id;
+    }
+
+    /// <summary>The geometry that can shade a bake, kept per object (core, background, each imported terrain.bdf) so that
+    /// what shades a texel can depend on the object the texel belongs to (SC2ShadowCasting). All of it is expressed in one frame
+    /// whose origin is <see cref="Offset"/>, and a heightmap is only projected for each distinct set of casters that is asked
+    /// for. Without rules there is one set, so the cost is that of a single heightmap.</summary>
+    internal sealed class ShadowCasterField
+    {
+        /// <summary>What a caller whose own geometry is still in the core's world space subtracts from a position before looking
+        /// it up in a heightmap of this field; zero when the frame is the world's own.</summary>
+        public Vector3 Offset;
+        public int MapX, MapY;
+
+        private readonly List<(string Id, TerrainModel Model)> _casters = new List<(string, TerrainModel)>();
+        private readonly List<string> _rules;
+        private readonly Dictionary<string, HfieldModel> _heightmaps = new Dictionary<string, HfieldModel>();
+
+        public ShadowCasterField(List<string> rules) { _rules = rules ?? new List<string>(); }
+
+        public void AddCaster(string id, TerrainModel model) => _casters.Add((id, model));
+
+        /// <summary>The heightmap of everything that shadows <paramref name="receiverId"/>.</summary>
+        public HfieldModel For(string receiverId)
+        {
+            return Project(SC2ShadowCasting.CastersOnto(AllIds(), _rules, receiverId ?? ""));
+        }
+
+        /// <summary>The heightmap of every caster, with no rules applied.</summary>
+        public HfieldModel All() => Project(AllIds());
+
+        private List<string> AllIds()
+        {
+            var ids = new List<string>();
+            foreach (var caster in _casters) ids.Add(caster.Id);
+            return ids;
+        }
+
+        private HfieldModel Project(List<string> allowed)
+        {
+            var key = SC2ShadowCasting.SetKey(allowed);
+            if (_heightmaps.TryGetValue(key, out var cached)) return cached;
+
+            var models = new List<TerrainModel>();
+            foreach (var caster in _casters)
+                if (allowed.Contains(caster.Id)) models.Add(caster.Model);
+            // No material exclusion - only Collision2's own separate projection respects
+            // SC2TerrainData.Collision2ExcludedMaterialNames.
+            return _heightmaps[key] = SC2HfieldProjectionService.ProjectMany(models, MapX, MapY);
+        }
+    }
+
+    /// <summary>The heightmap for the shadow horizon-march's occlusion test with every object shading every other - what the
+    /// point cloud bake sees, and what the lighting bake sees when no shadow rules are set. See
+    /// <see cref="BuildShadowCasters"/> for what it covers. <paramref name="sharedOffset"/> is what a caller whose geometry is in
+    /// the core's world space must SUBTRACT from a position before looking it up.</summary>
     internal static HfieldModel BuildShadowHfield(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains,
         out Vector3 sharedOffset, out int mapX, out int mapY, TerrainModel prebuiltCoreModel = null)
     {
-        if (!coreData.BackgroundTerrainEnabled || coreData.BackgroundTerrainData == null)
+        ShadowCasterField field;
+        if (prebuiltCoreModel != null)
         {
-            var gridSize = coreData.CostsGridSize;
-            var coreOnly = prebuiltCoreModel ?? BuildBakeGeometry(coreData, importedTerrains, out _, out _);
-            if (!HasGeometryBeyondPlayableArea(coreOnly, gridSize))
-            {
-                sharedOffset = Vector3.zero;
-                mapX = gridSize + 1;
-                mapY = gridSize + 1;
-                // No material exclusion - only Collision2's own separate
-                // projection respects SC2TerrainData.Collision2ExcludedMaterialNames.
-                return SC2HfieldProjectionService.Project(coreOnly, null, mapX, mapY);
-            }
+            // Owners are only needed to tell the objects apart, which this all-casters form does not do.
+            var owners = new List<int>(); var layers = new List<ImportedLayerRef>();
+            for (var li = 0; li < prebuiltCoreModel.Layers.Count; li++) { owners.Add(0); layers.Add(null); }
+            field = BuildShadowCasters(coreData, importedTerrains, null, prebuiltCoreModel, owners, layers);
+        }
+        else
+        {
+            field = BuildShadowCasters(coreData, importedTerrains, null);
+        }
+        sharedOffset = field.Offset;
+        mapX = field.MapX;
+        mapY = field.MapY;
+        return field.All();
+    }
 
+    /// <summary>Collects what can occlude the sun for a bake, per object. The sun's rays travel at most
+    /// <see cref="SC2RnmMaskBaker.ShadowMaxDistance"/>, so the frame covers the core's playable area plus that much around it
+    /// when imported geometry stands outside it, and the whole decorative background when it is enabled - all expressed in the
+    /// background's own local coordinate space (worldPos - sharedOffset, ComputeBounds' minX/minZ as origin), so a tall core
+    /// feature shadows the background and vice versa. <paramref name="prebuiltCoreModel"/> is the core (+ imported) geometry a
+    /// caller has already built with BuildBakeGeometry (it is only read here, with the owner of each layer given by the two
+    /// per-layer lists that call returned), so it is not built a second time.</summary>
+    private static ShadowCasterField BuildShadowCasters(SC2TerrainData coreData, List<SC2ImportedTerrainExportData> importedTerrains,
+        List<string> shadowRules, TerrainModel prebuiltCoreModel = null, List<int> pairIndexPerLayer = null,
+        List<ImportedLayerRef> importedLayers = null)
+    {
+        var field = new ShadowCasterField(shadowRules);
+        var coreModel = prebuiltCoreModel;
+        if (coreModel == null)
+            coreModel = BuildBakeGeometry(coreData, importedTerrains, out pairIndexPerLayer, out importedLayers);
+        var owners = ReceiverIdsPerLayer(pairIndexPerLayer, importedLayers, importedTerrains);
+
+        var gridSize = coreData.CostsGridSize;
+        var coreShift = Vector3.zero;
+        TerrainModel background = null;
+        if (coreData.BackgroundTerrainEnabled && coreData.BackgroundTerrainData != null)
+        {
+            SC2BackgroundTerrain.ComputeBounds(coreData, coreData.BackgroundTerrainSize, out var minX, out var minZ, out var maxX, out var maxZ, out _);
+            field.Offset = new Vector3(minX, 0f, minZ);
+            coreShift = -field.Offset;
+            field.MapX = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, maxX - minX)) + 1, 2, MaxShadowHfieldSize);
+            field.MapY = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, maxZ - minZ)) + 1, 2, MaxShadowHfieldSize);
+
+            // The background's own kept mesh - BuildForExportOrPreview's vertices are already local (no shift needed).
+            background = new TerrainModel { Version = 6 };
+            var bgBuild = SC2BackgroundTerrain.BuildForExportOrPreview(coreData, out _);
+            foreach (var builtLayer in bgBuild.Layers)
+            {
+                var s = builtLayer.Mesh;
+                if (s.Triangles == null || s.Triangles.Length == 0) continue;
+                AppendRaw(background, s.Vertices, s.Triangles, Vector3.zero);
+            }
+        }
+        else if (HasGeometryBeyondPlayableArea(coreModel, gridSize))
+        {
             // Imported geometry stands outside the playable area (a frame of tall blocks around the map edge, say). A
             // heightmap clipped to the playable area would not see it: the horizon march would only touch the one grid
             // column the blocks straddle, which shades the edge strip in ragged, stepped bands instead of with the blocks'
             // real shadows. The grid grows by as far as a shadow ray can travel; the geometry is shifted into it.
             var margin = Mathf.Min((int)SC2RnmMaskBaker.ShadowMaxDistance, (MaxShadowHfieldSize - 1 - gridSize) / 2);
-            sharedOffset = new Vector3(-margin, 0f, -margin);
-            mapX = gridSize + 1 + 2 * margin;
-            mapY = mapX;
-            var padded = new TerrainModel { Version = 6 };
-            AppendShifted(padded, coreOnly, -sharedOffset);
-            return SC2HfieldProjectionService.Project(padded, null, mapX, mapY);
+            field.Offset = new Vector3(-margin, 0f, -margin);
+            coreShift = -field.Offset;
+            field.MapX = gridSize + 1 + 2 * margin;
+            field.MapY = field.MapX;
         }
-
-        var bg = coreData.BackgroundTerrainData;
-        SC2BackgroundTerrain.ComputeBounds(coreData, coreData.BackgroundTerrainSize, out var minX, out var minZ, out var maxX, out var maxZ, out _);
-        sharedOffset = new Vector3(minX, 0f, minZ);
-        var spanX = Mathf.Max(1f, maxX - minX);
-        var spanZ = Mathf.Max(1f, maxZ - minZ);
-        mapX = Mathf.Clamp(Mathf.CeilToInt(spanX) + 1, 2, 8193);
-        mapY = Mathf.Clamp(Mathf.CeilToInt(spanZ) + 1, 2, 8193);
-
-        var unified = new TerrainModel { Version = 6 };
-
-        // Core (+ any imported terrain.bdf objects) — built in absolute
-        // world space, shifted into the shared (background-local) frame.
-        var coreModel = prebuiltCoreModel ?? BuildBakeGeometry(coreData, importedTerrains, out _, out _);
-        AppendShifted(unified, coreModel, -sharedOffset);
-
-        // Background's own kept mesh — BuildForExportOrPreview's vertices
-        // are already local (no shift needed).
-        var bgBuild = SC2BackgroundTerrain.BuildForExportOrPreview(coreData, out _);
-        foreach (var builtLayer in bgBuild.Layers)
+        else
         {
-            var s = builtLayer.Mesh;
-            if (s.Triangles == null || s.Triangles.Length == 0) continue;
-            AppendRaw(unified, s.Vertices, s.Triangles, Vector3.zero);
+            field.MapX = gridSize + 1;
+            field.MapY = gridSize + 1;
         }
 
-        return SC2HfieldProjectionService.Project(unified, null, mapX, mapY);
+        // One caster per object, in the order the core, the imported objects, the background.
+        var ownerOrder = new List<string>();
+        foreach (var owner in owners) if (!ownerOrder.Contains(owner)) ownerOrder.Add(owner);
+        foreach (var owner in ownerOrder)
+        {
+            var model = new TerrainModel { Version = 6 };
+            var ownerId = owner;
+            AppendShifted(model, coreModel, coreShift, li => li < owners.Count && owners[li] == ownerId);
+            field.AddCaster(ownerId, model);
+        }
+        if (background != null) field.AddCaster(SC2ShadowCasting.BackgroundId, background);
+        return field;
     }
 
     private const int MaxShadowHfieldSize = 8193;
@@ -231,19 +328,17 @@ public static class SC2RnmBakeService
         return false;
     }
 
-    /// <summary>Appends every layer of <paramref name="source"/> into
-    /// <paramref name="target"/> as its own new layer, translating every
-    /// vertex position by <paramref name="shift"/> — triangle indices are
-    /// already LOCAL to their own layer (this codebase's established
-    /// convention, confirmed in BuildBakeGeometry's own comments), so they
-    /// copy across unchanged. Only positions matter here (this model is
-    /// only ever used to build a heightmap for shadow occlusion, never
-    /// serialized or lit directly) — UV/normal fields are left at their
+    /// <summary>Appends every layer of <paramref name="source"/> (or only the ones <paramref name="includeLayer"/> accepts) into
+    /// <paramref name="target"/> as its own new layer, translating every vertex position by <paramref name="shift"/> -
+    /// triangle indices are already LOCAL to their own layer (this codebase's established convention, confirmed in
+    /// BuildBakeGeometry's own comments), so they copy across unchanged. Only positions matter here (this model is only ever
+    /// used to build a heightmap for shadow occlusion, never serialized or lit directly) - UV/normal fields are left at their
     /// TerrainVertex default.</summary>
-    private static void AppendShifted(TerrainModel target, TerrainModel source, Vector3 shift)
+    private static void AppendShifted(TerrainModel target, TerrainModel source, Vector3 shift, Func<int, bool> includeLayer = null)
     {
         for (var li = 0; li < source.Layers.Count; li++)
         {
+            if (includeLayer != null && !includeLayer(li)) continue;
             var srcLayer = source.Layers[li];
             var vertBase = srcLayer.CumulativeVertices;
             var vertEnd = li + 1 < source.Layers.Count ? source.Layers[li + 1].CumulativeVertices : source.Vertices.Count;
@@ -283,20 +378,22 @@ public static class SC2RnmBakeService
     }
 
     /// <summary>Shared bake body for both Bake and BakeBackground — takes an
-    /// already-built geometry model/hfield and writes real baked lighting
+    /// already-built geometry model and its shadow casters and writes real baked lighting
     /// into <paramref name="pairs"/>. <paramref name="bakeSettingsSource"/>
     /// supplies the RnmBakeSync*/RnmBakeOverride* Lighting Bake Inputs
     /// (always the CORE's SC2TerrainData — there is only one such config,
-    /// shared by both bakes). <paramref name="hfieldOffset"/> is subtracted
+    /// shared by both bakes). <paramref name="receiverIdPerLayer"/> names the object each layer of
+    /// <paramref name="model"/> belongs to, which picks the heightmap of <paramref name="shadow"/> that shades it.
+    /// <paramref name="hfieldOffset"/> is subtracted
     /// from each texel's world position before it's looked up against
-    /// <paramref name="hfield"/> — nonzero exactly when `model`'s own
-    /// coordinate frame doesn't already match the (possibly unified,
-    /// background-local) hfield's — see BuildShadowHfield.
+    /// that heightmap — nonzero exactly when `model`'s own
+    /// coordinate frame doesn't already match the (possibly padded or unified,
+    /// background-local) frame of the casters — see BuildShadowCasters.
     ///
     /// Only computes: it returns the baked masks and touches neither <paramref name="pairs"/> nor the terrain data, so it can run on
     /// a worker thread. <see cref="ApplyBake"/> stores the outcome and must run on the main thread.</summary>
     private static BakeOutcome BakeInternal(TerrainModel model, List<int> pairIndexPerLayer, List<SC2MaterialPair> pairs,
-        HfieldModel hfield, Vector3 hfieldOffset, SC2TerrainData bakeSettingsSource, InfoModel info,
+        ShadowCasterField shadow, List<string> receiverIdPerLayer, Vector3 hfieldOffset, SC2TerrainData bakeSettingsSource, InfoModel info,
         ImportedBake imported = null, bool bakeImportedWorldRnm = true)
     {
         SC2BusyOverlay.Report("Preparing the lighting bake");
@@ -365,7 +462,8 @@ public static class SC2RnmBakeService
 
         var settings = new SC2RnmMaskBaker.Settings
         {
-            ToSun = toSun, Hfield = hfield, HfieldOffset = hfieldOffset,
+            ToSun = toSun, HfieldOffset = hfieldOffset,
+            HfieldForLayer = li => shadow.For(li < receiverIdPerLayer.Count ? receiverIdPerLayer[li] : null),
             WaterEnabled = waterEnabled, WaterElevation = waterElevation, MaxWaterDepth = maxWaterDepth,
             ShadowSoftRadius = shadowSoftRadius, ShadowSoftRadiusUnderwater = shadowSoftRadiusUnderwater,
             SunColor = sunColor, ShadowColor = shadowColor, SunIntensity = sunIntensity,

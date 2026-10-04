@@ -91,6 +91,9 @@ namespace SC2.MapEditor.Document
         public float RnmBakeOverrideSunIntensity = 1f;
         public Color RnmBakeOverrideShadowColor = new Color(0.64f, 0.77f, 0.92f, 1f);
         public int RnmBakeShadowSoftRadius = 6;
+        /// <summary>Mirrors SC2TerrainData.RnmShadowExclusions: the caster/receiver pairs the lighting bake leaves out, as
+        /// SC2ShadowCasting keys. Empty = every object shadows every object.</summary>
+        public List<string> RnmShadowExclusions = new();
 
         public SC2TerrainSimplificationSettings Simplification = new();
         public SC2TerrainNormalsSettings Normals = new();

@@ -54,6 +54,10 @@ public sealed class SC2ImportedTerrainExportData
 
     public string Name;
 
+    /// <summary>The imported entry's stable id (the same one the Lighting Bake panel lists it under); names the object in the
+    /// bake's shadow rules, see SC2ShadowCasting. Null/empty = the object has no rules of its own.</summary>
+    public string Id;
+
     /// <summary>Per-layer (per-material) name of the imported RNM mask this
     /// layer's lighting is baked onto (Terrain > Lighting Bake > Imported
     /// Objects); index = layer/material index of <see cref="Model"/>, "" or a

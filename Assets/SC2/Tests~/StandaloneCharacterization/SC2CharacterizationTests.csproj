@@ -116,6 +116,8 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2StampStroke.cs" Link="Source\SC2StampStroke.cs" />
     <!-- Which terrain surface (core / background) a brush reaches. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SeamReach.cs" Link="Source\SC2SeamReach.cs" />
+    <!-- Which object shadows which in the lighting bake. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2ShadowCasting.cs" Link="Source\SC2ShadowCasting.cs" />
     <!-- Life cycle of the busy plate shown before a long main-thread job. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2BusyGate.cs" Link="Source\SC2BusyGate.cs" />
     <!-- Sun direction -> where a cube's shadow falls (Environment > Sun preview). -->

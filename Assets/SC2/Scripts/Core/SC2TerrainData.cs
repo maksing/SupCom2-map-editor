@@ -536,6 +536,10 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// map's baked look doesn't change until the user actually touches
     /// this slider.</summary>
     public int RnmBakeShadowSoftRadius = 6;
+    /// <summary>The caster/receiver pairs the lighting bake leaves out (see SC2ShadowCasting); empty = every object (core,
+    /// background, each imported terrain.bdf) shadows every object. Shared by the core and the background bake, like the
+    /// other Lighting Bake inputs.</summary>
+    public List<string> RnmShadowExclusions = new();
 
     /// <summary>Bumped once per completed Bake()/BakeBackground() call (see
     /// SC2RnmBakeService.BakeInternal). NonSerialized — this only needs to
@@ -1231,6 +1235,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
 
         if (Materials == null) Materials = new List<SC2Material>();
         if (Pairs == null) Pairs = new List<SC2MaterialPair>();
+        if (RnmShadowExclusions == null) RnmShadowExclusions = new List<string>();
         if (BlendLayerStacks == null) BlendLayerStacks = new List<SC2BlendMaskLayerStack>();
         BlendLayerStacks.RemoveAll(stack => stack == null);
         foreach (var stack in BlendLayerStacks) stack.Normalize();

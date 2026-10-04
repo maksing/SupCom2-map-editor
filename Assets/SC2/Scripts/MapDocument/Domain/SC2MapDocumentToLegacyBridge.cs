@@ -70,6 +70,7 @@ namespace SC2.MapEditor.Document
             public float RnmBakeOverrideSunIntensity = 1f;
             public Color RnmBakeOverrideShadowColor = new Color(0.64f, 0.77f, 0.92f, 1f);
             public int RnmBakeShadowSoftRadius = 6;
+            public List<string> RnmShadowExclusions = new();
             public List<SC2Material> Materials = new();
             public List<TextureSlotInfo> MaterialDiffuse = new();
             public List<TextureSlotInfo> MaterialNormal = new();
@@ -113,6 +114,7 @@ namespace SC2.MapEditor.Document
                 RnmBakeOverrideSunIntensity = doc.RnmBakeOverrideSunIntensity,
                 RnmBakeOverrideShadowColor = doc.RnmBakeOverrideShadowColor,
                 RnmBakeShadowSoftRadius = doc.RnmBakeShadowSoftRadius,
+                RnmShadowExclusions = doc.RnmShadowExclusions != null ? new List<string>(doc.RnmShadowExclusions) : new List<string>(),
                 Heights = ReadFloats(blobStore, doc.Grid.HeightsFloat32),
             };
 

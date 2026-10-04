@@ -1673,6 +1673,8 @@ public class SC2TerrainShell : ScriptableObject
         _data.RnmBakeShadowSoftRadius = Mathf.RoundToInt(DrawCompactSlider("Shadow Sharpness", _data.RnmBakeShadowSoftRadius, 0f, 24f, "rnmbake:shadowSharpness"));
         DrawUnifiedNote("Lower = sharper shadow edges, higher = softer. Applies to both this bake and the Background tab's own bake.");
 
+        DrawShadowCastingSection();
+
         EditorGUILayout.Space(6);
         if (GUILayout.Button("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
@@ -1696,6 +1698,57 @@ public class SC2TerrainShell : ScriptableObject
 
         DrawPointCloudBakeSection();
         DrawImportedRnmBakeSection();
+    }
+
+    // ── Lighting Bake > Shadow Casting ──────────────────────────────────────
+    // Which object (core terrain, background, each imported terrain.bdf) shadows which in the lighting bake; stored on the
+    // terrain data as the pairs that are switched off (SC2ShadowCasting).
+
+    private void DrawShadowCastingSection()
+    {
+        EditorGUILayout.Space(10);
+        var w = GetUnifiedContentWidth();
+        DrawUnifiedSectionLabel("Shadow Casting");
+
+        var objects = new System.Collections.Generic.List<(string Id, string Name)> { (SC2ShadowCasting.CoreId, "Core terrain") };
+        if (_data.BackgroundTerrainEnabled && _data.BackgroundTerrainData != null)
+            objects.Add((SC2ShadowCasting.BackgroundId, "Background"));
+        var imported = GetImportedRnmTargets?.Invoke();
+        if (imported != null)
+            foreach (var obj in imported)
+                objects.Add((obj.ObjectId, string.IsNullOrEmpty(obj.Name) ? "Imported object" : obj.Name));
+
+        _data.RnmShadowExclusions ??= new System.Collections.Generic.List<string>();
+        var rules = _data.RnmShadowExclusions;
+        var ids = new System.Collections.Generic.List<string>();
+        foreach (var o in objects) ids.Add(o.Id);
+        var changed = false;
+
+        DrawUnifiedNote("Choose which objects cast a shadow onto which. Everything shadows everything by default. Applies to Bake Lighting and Bake Background Lighting, so re-bake after changing it.");
+        foreach (var caster in objects)
+        {
+            GUILayout.Label($"{caster.Name} casts shadows on", EditorStyles.boldLabel);
+            foreach (var receiver in objects)
+            {
+                var label = receiver.Id == caster.Id ? "Itself" : receiver.Name;
+                var casts = SC2ShadowCasting.Casts(rules, caster.Id, receiver.Id);
+                var next = GUILayout.Toggle(casts, label, GUILayout.Width(w), GUILayout.MaxWidth(w));
+                if (next != casts) changed |= SC2ShadowCasting.SetCasts(rules, caster.Id, receiver.Id, next);
+            }
+            GUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+            if (GUILayout.Button("All")) changed |= SC2ShadowCasting.SetCastsOnAll(rules, caster.Id, ids, true);
+            if (GUILayout.Button("None")) changed |= SC2ShadowCasting.SetCastsOnAll(rules, caster.Id, ids, false);
+            GUILayout.EndHorizontal();
+            EditorGUILayout.Space(4);
+        }
+        if (objects.Count == 1)
+            DrawUnifiedNote("Only the core terrain is in the scene. Imported terrain.bdf objects and the background show up here as objects of their own.");
+
+        if (changed)
+        {
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
     }
 
     // ── Lighting Bake > Point Cloud ─────────────────────────────────────────

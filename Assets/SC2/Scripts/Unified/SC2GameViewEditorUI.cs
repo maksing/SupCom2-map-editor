@@ -5471,6 +5471,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             if (entry.Root == null || entry.Model == null) continue;
             result.Add(new SC2ImportedTerrainExportData
             {
+                Id = entry.Id,
                 Model = entry.Model,
                 Transform = entry.Root.transform,
                 RecomputeNormals = entry.RecomputeNormals,
