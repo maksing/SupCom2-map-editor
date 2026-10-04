@@ -5627,10 +5627,14 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             var raw = new byte[n * 4];
             for (var i = 0; i < n; i++)
             {
-                raw[i * 4] = rgb[slice][i * 3];
-                raw[i * 4 + 1] = rgb[slice][i * 3 + 1];
-                raw[i * 4 + 2] = rgb[slice][i * 3 + 2];
-                raw[i * 4 + 3] = slice == 0 ? shadow[i] : slice == 1 ? (blend != null ? blend[i] : (byte)0) : (byte)255;
+                // The baked arrays are in DDS row order (row 0 on top, as exported), while raw texture data puts row 0
+                // at the bottom (V = 0), so each row is written mirrored to make the preview sample like the game.
+                var src = i;
+                var dst = ((h - 1 - i / w) * w + i % w) * 4;
+                raw[dst] = rgb[slice][src * 3];
+                raw[dst + 1] = rgb[slice][src * 3 + 1];
+                raw[dst + 2] = rgb[slice][src * 3 + 2];
+                raw[dst + 3] = slice == 0 ? shadow[src] : slice == 1 ? (blend != null ? blend[src] : (byte)0) : (byte)255;
             }
             // Linear, no mips, clamped — same handling as the imported
             // _RNMMask* textures themselves (raw lighting data, not colour).
