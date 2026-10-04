@@ -157,13 +157,29 @@ public static class SC2RnmBakeService
     {
         if (!coreData.BackgroundTerrainEnabled || coreData.BackgroundTerrainData == null)
         {
-            sharedOffset = Vector3.zero;
-            mapX = coreData.CostsGridSize + 1;
-            mapY = coreData.CostsGridSize + 1;
+            var gridSize = coreData.CostsGridSize;
             var coreOnly = prebuiltCoreModel ?? BuildBakeGeometry(coreData, importedTerrains, out _, out _);
-            // No material exclusion - only Collision2's own separate
-            // projection respects SC2TerrainData.Collision2ExcludedMaterialNames.
-            return SC2HfieldProjectionService.Project(coreOnly, null, mapX, mapY);
+            if (!HasGeometryBeyondPlayableArea(coreOnly, gridSize))
+            {
+                sharedOffset = Vector3.zero;
+                mapX = gridSize + 1;
+                mapY = gridSize + 1;
+                // No material exclusion - only Collision2's own separate
+                // projection respects SC2TerrainData.Collision2ExcludedMaterialNames.
+                return SC2HfieldProjectionService.Project(coreOnly, null, mapX, mapY);
+            }
+
+            // Imported geometry stands outside the playable area (a frame of tall blocks around the map edge, say). A
+            // heightmap clipped to the playable area would not see it: the horizon march would only touch the one grid
+            // column the blocks straddle, which shades the edge strip in ragged, stepped bands instead of with the blocks'
+            // real shadows. The grid grows by as far as a shadow ray can travel; the geometry is shifted into it.
+            var margin = Mathf.Min((int)SC2RnmMaskBaker.ShadowMaxDistance, (MaxShadowHfieldSize - 1 - gridSize) / 2);
+            sharedOffset = new Vector3(-margin, 0f, -margin);
+            mapX = gridSize + 1 + 2 * margin;
+            mapY = mapX;
+            var padded = new TerrainModel { Version = 6 };
+            AppendShifted(padded, coreOnly, -sharedOffset);
+            return SC2HfieldProjectionService.Project(padded, null, mapX, mapY);
         }
 
         var bg = coreData.BackgroundTerrainData;
@@ -192,6 +208,27 @@ public static class SC2RnmBakeService
         }
 
         return SC2HfieldProjectionService.Project(unified, null, mapX, mapY);
+    }
+
+    private const int MaxShadowHfieldSize = 8193;
+
+    /// <summary>Whether any solid (non-water) vertex of <paramref name="model"/> lies outside the square playable area
+    /// [0, <paramref name="gridSize"/>] on X or Z.</summary>
+    private static bool HasGeometryBeyondPlayableArea(TerrainModel model, int gridSize)
+    {
+        const float tolerance = 0.5f;
+        var limit = gridSize + tolerance;
+        for (var li = 0; li < model.Layers.Count; li++)
+        {
+            if (li < model.Materials.Count && SC2HfieldProjectionService.IsWaterMaterial(model.Materials[li])) continue;
+            var vertEnd = li + 1 < model.Layers.Count ? model.Layers[li + 1].CumulativeVertices : model.Vertices.Count;
+            for (var vi = model.Layers[li].CumulativeVertices; vi < vertEnd; vi++)
+            {
+                var v = model.Vertices[vi];
+                if (v.PosX < -tolerance || v.PosX > limit || v.PosZ < -tolerance || v.PosZ > limit) return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>Appends every layer of <paramref name="source"/> into

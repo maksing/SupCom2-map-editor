@@ -26,7 +26,7 @@ public static class SC2RnmMaskBaker
     // Horizon-march shadow tuning - not corpus-derived, reasonable defaults
     // pending real in-game calibration (same "implement with reasonable
     // defaults, calibrate later" approach the Costs generation code uses).
-    private const float ShadowMaxDistance = 512f;
+    public const float ShadowMaxDistance = 512f;
     private const float ShadowStepSize = 4f;
     // Measured, not guessed: across all 186 vanilla masks (5.8M real surface
     // texels, UV-gap texels excluded) slice 0's alpha is strongly bimodal —
