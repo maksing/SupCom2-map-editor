@@ -60,24 +60,43 @@ public static class SC2ObjectsImport
     /// </summary>
     public static Result ImportFromTerrainBdfPath(SC2TerrainData data, string terrainBdfPath)
     {
-        var result = new Result();
-        data.EnsureObjectsLists();
-
         if (string.IsNullOrEmpty(terrainBdfPath) || !File.Exists(terrainBdfPath))
-        {
-            result.Summary = "Terrain BDF path not found.";
-            return result;
-        }
+            return Failed(data, "Terrain BDF path not found.");
 
         var fileName = Path.GetFileName(terrainBdfPath);
         const string suffix = ".terrain.win.bdf";
         if (!fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-        {
-            result.Summary = "Expected a '*.terrain.win.bdf' path.";
-            return result;
-        }
-        var stem = fileName.Substring(0, fileName.Length - suffix.Length);
-        var startDir = Path.GetDirectoryName(terrainBdfPath);
+            return Failed(data, "Expected a '*.terrain.win.bdf' path.");
+        return ImportFromStem(data, fileName.Substring(0, fileName.Length - suffix.Length), Path.GetDirectoryName(terrainBdfPath));
+    }
+
+    /// <summary>
+    /// mapObjsBdfPath: path to an already-extracted "*.mapobjs.win.bdf" — the "Import map objects" action. The map's
+    /// _save.lua/_scenario.lua are found by stem next to it exactly as for <see cref="ImportFromTerrainBdfPath"/>; no terrain.bdf
+    /// is needed.
+    /// </summary>
+    public static Result ImportFromMapObjsBdfPath(SC2TerrainData data, string mapObjsBdfPath)
+    {
+        if (string.IsNullOrEmpty(mapObjsBdfPath) || !File.Exists(mapObjsBdfPath))
+            return Failed(data, "Map objects BDF path not found.");
+
+        var fileName = Path.GetFileName(mapObjsBdfPath);
+        const string suffix = ".mapobjs.win.bdf";
+        if (!fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            return Failed(data, "Expected a '*.mapobjs.win.bdf' file.");
+        return ImportFromStem(data, fileName.Substring(0, fileName.Length - suffix.Length), Path.GetDirectoryName(mapObjsBdfPath));
+    }
+
+    private static Result Failed(SC2TerrainData data, string summary)
+    {
+        data.EnsureObjectsLists();
+        return new Result { Summary = summary };
+    }
+
+    private static Result ImportFromStem(SC2TerrainData data, string stem, string startDir)
+    {
+        var result = new Result();
+        data.EnsureObjectsLists();
 
         // Import is a full replacement. Keeping any domain from the previous
         // map makes missing files look like duplicate objects on the next map.

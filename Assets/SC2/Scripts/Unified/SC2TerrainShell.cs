@@ -2653,7 +2653,7 @@ public class SC2TerrainShell : ScriptableObject
         return selected;
     }
 
-    private static float GetUnifiedContentWidth()
+    public static float GetUnifiedContentWidth()
     {
         // Every embedded shell is handed the content width itself (the host owns the scrollbar and has already taken it off),
         // so there is nothing more to reserve; only the standalone window, which sizes itself by the view width, does.

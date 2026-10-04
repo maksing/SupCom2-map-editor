@@ -2343,15 +2343,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         DrawMenuPanel(_fileMenuRect.x, TitleBarHeight, 210,
 #if UNITY_EDITOR
-            11,
+            12,
 #else
-            12, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
+            13, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
 #endif
             () =>
         {
             if (GUILayout.Button("New Terrain", _dropdownItemStyle)) { RequestNewTerrain(); _showFileMenu = false; }
             if (GUILayout.Button("Import Map...", _dropdownItemStyle)) { OpenMapDocumentImportPanel(); _showFileMenu = false; }
             if (GUILayout.Button("Import terrain.bdf", _dropdownItemStyle)) { OpenTerrainBdfImport(); _showFileMenu = false; }
+            if (GUILayout.Button("Import map objects", _dropdownItemStyle)) { OpenMapObjectsImport(); _showFileMenu = false; }
             if (GUILayout.Button("Import decals.bdf", _dropdownItemStyle)) { OpenDecalsBdfImport(); _showFileMenu = false; }
             if (GUILayout.Button("Export .scd", _dropdownItemStyle)) { OpenScdExportWindow(); _showFileMenu = false; }
             if (GUILayout.Button("Save Terrain (Ctrl+S)", _dropdownItemStyle)) { SaveActiveTerrain(); _showFileMenu = false; }
@@ -3651,7 +3652,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawObjectsInspector()
     {
         DrawInspectorHeader("Objects",
-            "Objects — armies, units, props, markers, path graphs, zones and chains for the current procedural terrain.");
+            "Armies, units, props, markers, path graphs, zones and chains of the map.");
         EnsureObjectsShell();
         try
         {
@@ -5421,7 +5422,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // Chains/Areas empty (they only exist in that same map's
             // _save.lua/_scenario.lua, never in terrain.bdf itself), which
             // would otherwise require separately going to the Objects tab
-            // and clicking "Import Objects from terrain.bdf..." with the
+            // and clicking "Import map objects" with the
             // SAME file a second time. Chain that same import here
             // automatically, against the same path, whenever a live terrain
             // (SC2TerrainData) already exists to receive it - if none does
@@ -5445,6 +5446,27 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             SetStatus("Terrain BDF import failed: " + ex.Message);
             Debug.LogError($"[SC2] Terrain BDF import failed: {ex}");
+        }
+    }
+
+    /// <summary>File > Import map objects: the props, markers, path graphs, armies, units, chains and areas of a map, read from
+    /// its mapobjs.bdf and the _save.lua / _scenario.lua next to it, into the current terrain.</summary>
+    private void OpenMapObjectsImport()
+    {
+        if (_terrainShell == null || _terrainShell.Data == null || !_terrainShell.Data.IsInitialized)
+        {
+            SetStatus("Create or load a terrain first: map objects are imported into it.");
+            return;
+        }
+        try
+        {
+            EnsureObjectsShell();
+            SetStatus(_objectsShell.ImportMapObjectsFromFile());
+        }
+        catch (System.Exception ex)
+        {
+            SetStatus("Map objects import failed: " + ex.Message);
+            Debug.LogError($"[SC2] Map objects import failed: {ex}");
         }
     }
 

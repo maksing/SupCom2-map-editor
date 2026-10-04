@@ -312,18 +312,6 @@ public sealed class SC2ObjectsShell
         if (dueForSafetyNet) _markerScenePreviewSafetyNetTicks = 0;
     }
 
-    /// <summary>Debug fallback (off by default), for the GPU
-    /// billboard-marker migration's own debug path. Off: SC2ObjectMarkerRenderer
-    /// (GPU-instanced billboards) draws every Prop/Unit/Marker pick-dot,
-    /// a handful of Graphics.DrawMeshInstanced calls total regardless of
-    /// object count. On: reverts to the original per-object IMGUI
-    /// GUI.DrawTexture path (useful for visually A/B-comparing the two, or
-    /// if the GPU path ever needs debugging) — the two are mutually
-    /// exclusive, not drawn simultaneously (see the toggle-transition
-    /// handling next to this field's UI checkbox).</summary>
-    private bool _legacyImguiMarkers;
-    private bool _lastLegacyImguiMarkers;
-
     /// <summary>Drag-to-move only: a
     /// completed viewport drag of Props/Markers/Units now records real
     /// ISC2DocumentCommand instances through Session.History instead of a
@@ -406,7 +394,7 @@ public sealed class SC2ObjectsShell
         return maxWidth;
     }
 
-    /// <summary>Mirrors DrawGroupTreeNode's own "depth * 14f + 280f" row-
+    /// <summary>Mirrors DrawGroupTreeNode's own "depth * TreeIndent + 280f" row-
     /// width formula and its collapse-respecting recursion exactly — keep
     /// both in sync if either changes. Scaled through SC2UiScale, same as
     /// DrawGroupTreeNode's own `reserved` calc — S/H/I/- buttons used to get
@@ -418,7 +406,7 @@ public sealed class SC2ObjectsShell
     {
         if (index < 0 || index >= Data.ObjUnits.Count) return 0f;
         var node = Data.ObjUnits[index];
-        var maxWidth = SC2UiScale.Pxf(depth * 14f + 280f);
+        var maxWidth = SC2UiScale.Pxf(depth * TreeIndent + 280f);
         if (_unitCollapsed.Contains(node.Id)) return maxWidth;
         foreach (var i in GetChildGroupIndices(node.ArmyName, index))
             maxWidth = Mathf.Max(maxWidth, ComputeGroupNodeMinWidth(i, depth + 1));
@@ -500,23 +488,9 @@ public sealed class SC2ObjectsShell
         // catalog lookup — would otherwise only run once the Objects tab is drawn.
         // See OnGameViewGUI's own comment for the preserved gating logic.
 
-        DrawUndoRedoRow(w);
         DrawImportAndValidation(w);
         if (!string.IsNullOrEmpty(_missingPreviewWarning) && (subTab == TabProps || subTab == TabUnits))
             SC2EnvFieldGui.WrapLabel(_missingPreviewWarning, w);
-        // Off by default — see _legacyImguiMarkers' own doc comment.
-        // Visible across every Objects sub-tab (not just Props) since
-        // Units/Markers share the exact same pick-dot mechanism.
-        _legacyImguiMarkers = SC2EnvFieldGui.Toggle("Legacy IMGUI pick-dots (debug)", _legacyImguiMarkers);
-        if (_legacyImguiMarkers != _lastLegacyImguiMarkers)
-        {
-            // Toggle transition — clear whichever renderer just went
-            // inactive so its last-drawn dots don't linger on top of the
-            // other system's fresh output for one stale frame.
-            if (_legacyImguiMarkers) SC2ObjectMarkerRenderer.ClearAll();
-            _lastLegacyImguiMarkers = _legacyImguiMarkers;
-        }
-
         switch (subTab)
         {
             case TabArmies: DrawArmies(w); break;
@@ -528,37 +502,18 @@ public sealed class SC2ObjectsShell
             default: DrawChains(w); break;
         }
 
-        GUILayout.Space(6);
-        if (SC2EnvFieldGui.Button("Save Terrain (includes Objects)", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w)))
-            _terrainShell.SaveTerrainState(true);
         if (!string.IsNullOrEmpty(_lastActionSummary))
+        {
+            GUILayout.Space(6);
             SC2EnvFieldGui.WrapLabel(_lastActionSummary, w);
+        }
 
         GUILayout.EndVertical();
         _assetBrowser.DrawModal();
     }
 
     // ── Undo/Redo ────────────────────────────────────────────────────────
-
-    private void DrawUndoRedoRow(float w)
-    {
-        GUILayout.BeginHorizontal();
-        // Restore whatever GUI.enabled was BEFORE this row (not hardcode
-        // true) — a caller can legitimately disable the
-        // whole panel around this call (SC2GameViewEditorUI does this while
-        // a top-panel dropdown is open, to stop clicks reaching panel
-        // content underneath it — e.g. "Path: Naval" in the Visibility menu
-        // triggering "Import Objects from terrain.bdf..." underneath),
-        // and unconditionally re-enabling here silently undid that for
-        // everything drawn after this row.
-        var guiEnabledBeforeUndoRow = GUI.enabled;
-        GUI.enabled = guiEnabledBeforeUndoRow && _undo.CanUndo;
-        if (SC2EnvFieldGui.Button($"↩ Undo ({_undo.UndoCount})", GUILayout.Height(SC2UiScale.Pxf(20f)), GUILayout.Width(w * 0.48f))) DoUndo();
-        GUI.enabled = guiEnabledBeforeUndoRow && _undo.CanRedo;
-        if (SC2EnvFieldGui.Button($"↪ Redo ({_undo.RedoCount})", GUILayout.Height(SC2UiScale.Pxf(20f)), GUILayout.Width(w * 0.48f))) DoRedo();
-        GUI.enabled = guiEnabledBeforeUndoRow;
-        GUILayout.EndHorizontal();
-    }
+    // No buttons: the global shortcuts reach DoUndo/DoRedo through the shell's history entries.
 
     /// <summary>Deep-clones the live SC2TerrainData Obj* lists into
     /// Session.Document.Objects via the same JSON round-trip this shell's
@@ -1617,9 +1572,7 @@ public sealed class SC2ObjectsShell
     private void DrawImportAndValidation(float w)
     {
         var problems = Validate();
-        GUILayout.BeginHorizontal();
-        SC2EnvFieldGui.SectionLabel(problems.Count == 0 ? "Validation: no issues found" : $"Validation: {problems.Count} issue(s)");
-        GUILayout.EndHorizontal();
+        SC2TerrainShell.DrawUnifiedSectionLabel(problems.Count == 0 ? "Validation: no issues found" : $"Validation: {problems.Count} issue(s)");
         if (problems.Count > 0)
         {
             _validationExpanded = GUILayout.Toggle(_validationExpanded, _validationExpanded ? "Hide details" : "Show details", "Button", GUILayout.Width(SC2UiScale.Pxf(120f)));
@@ -1627,11 +1580,12 @@ public sealed class SC2ObjectsShell
                 foreach (var p in problems) SC2EnvFieldGui.WrapLabel("• " + p, w);
         }
 
-        GUILayout.Space(6);
-        if (SC2EnvFieldGui.Button("Import Objects from terrain.bdf...", GUILayout.Height(SC2UiScale.Pxf(24f)), GUILayout.Width(w)))
-            ImportObjectsFromFile();
+        // The import itself is File > Import map objects; its outcome stays visible here.
         if (!string.IsNullOrEmpty(_lastImportSummary))
+        {
+            GUILayout.Space(6);
             SC2EnvFieldGui.WrapLabel(_lastImportSummary, w);
+        }
         GUILayout.Space(6);
     }
 
@@ -1661,21 +1615,25 @@ public sealed class SC2ObjectsShell
         return extra;
     }
 
-    private void ImportObjectsFromFile()
+    /// <summary>File > Import map objects: asks for a mapobjs.bdf and replaces this map's objects with the ones it and its
+    /// _save.lua / _scenario.lua hold. Returns the summary for the caller's status line.</summary>
+    public string ImportMapObjectsFromFile()
     {
         string path;
 #if UNITY_EDITOR
-        path = UnityEditor.EditorUtility.OpenFilePanel("Select terrain.bdf (Objects import)", "", "bdf");
+        path = UnityEditor.EditorUtility.OpenFilePanel("Select mapobjs.bdf (Import map objects)", "", "bdf");
 #else
-        path = SC2RuntimeFileDialog.OpenFile("Select terrain.bdf (Objects import)", "Terrain BDF (*.bdf)", "bdf");
+        path = SC2RuntimeFileDialog.OpenFile("Select mapobjs.bdf (Import map objects)", "Map objects BDF (*.bdf)", "bdf");
 #endif
         if (string.IsNullOrEmpty(path))
         {
             _lastImportSummary = "Import cancelled.";
-            return;
+            return _lastImportSummary;
         }
-        ImportObjectsFromPath(path);
+        PushUndo();
+        FinishObjectsImport(SC2ObjectsImport.ImportFromMapObjsBdfPath(Data, path));
         RepaintHost?.Invoke();
+        return _lastImportSummary;
     }
 
     /// <summary>Public so SC2GameViewEditorUI.OpenTerrainBdfImport can chain
@@ -1684,14 +1642,17 @@ public sealed class SC2ObjectsShell
     /// every other _save.lua-only domain: Units/Chains/Areas) empty, since
     /// that action never used to call this Objects-side import at all; the
     /// user had to separately remember to come to the Objects tab and click
-    /// "Import Objects from terrain.bdf..." with the SAME file a second
+    /// "Import map objects" with the SAME file a second
     /// time. Returns the import summary so the caller can fold it into its
     /// own status line instead of only this shell's _lastImportSummary.</summary>
     public string ImportObjectsFromPath(string path)
     {
         PushUndo();
-        var result = SC2ObjectsImport.ImportFromTerrainBdfPath(Data, path);
+        return FinishObjectsImport(SC2ObjectsImport.ImportFromTerrainBdfPath(Data, path));
+    }
 
+    private string FinishObjectsImport(SC2ObjectsImport.Result result)
+    {
         // Imported Props/Markers/Units keep whatever Y was baked into
         // mapobjs.bdf/_save.lua at the source map's own export time -
         // AnchorToTerrain defaults to true (SC2ObjProp's own field
@@ -2169,16 +2130,8 @@ public sealed class SC2ObjectsShell
     /// this file, e.g. SC2ObjArmy.Name / SC2ObjUnitNode.ArmyName).</summary>
     private readonly HashSet<string> _unitArmyCollapsed = new();
 
-    private static readonly Color ArmyRowColor = new Color(0.93f, 0.62f, 0.25f);
-    private static readonly Color GroupRowColor = new Color(0.55f, 0.78f, 0.98f);
-    private static readonly Color DeleteButtonColor = new Color(0.55f, 0.16f, 0.16f);
-    private static readonly Color AddGroupButtonColor = new Color(0.20f, 0.42f, 0.70f);
-    // A muted, low-contrast tone for the recurring "+ Group" row — the
-    // brighter AddGroupButtonColor stays reserved for the Groups/Units tab
-    // switcher's active-tab highlight, where full contrast is the point;
-    // a whole stack of "+ Group" rows in that same bright blue reads as a
-    // wall of noise rather than a quiet, repeatable affordance.
-    private static readonly Color AddGroupRowColor = new Color(0.15f, 0.19f, 0.26f);
+    // How far each nesting level of the groups tree is indented. Wide enough that a branch has some length between the guide line and the button it reaches.
+    private const float TreeIndent = 18f;
     private static readonly Color TreeGuideLineColor = new Color(0.5f, 0.55f, 0.65f, 0.4f);
 
     private void DrawUnits(float w)
@@ -2196,14 +2149,8 @@ public sealed class SC2ObjectsShell
         // folder's badge); "Units" is a flat, searchable list of every
         // placed unit. Kept as two genuinely separate views rather than one
         // combined tree.
-        GUILayout.BeginHorizontal();
-        var prevBg = GUI.backgroundColor;
-        GUI.backgroundColor = _unitsGroupsTabActive ? AddGroupButtonColor : prevBg;
-        if (GUILayout.Button("Groups", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.5f))) _unitsGroupsTabActive = true;
-        GUI.backgroundColor = !_unitsGroupsTabActive ? AddGroupButtonColor : prevBg;
-        if (GUILayout.Button("Units", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w * 0.5f))) _unitsGroupsTabActive = false;
-        GUI.backgroundColor = prevBg;
-        GUILayout.EndHorizontal();
+        _unitsGroupsTabActive = SC2TerrainShell.DrawUnifiedSegmentGrid(_unitsGroupsTabActive ? 0 : 1, new[] { "Groups", "Units" }, 2) == 0;
+        GUILayout.Space(SC2UiScale.Pxf(6f));
 
         if (_hiddenUnitIds.Count > 0)
         {
@@ -2353,35 +2300,39 @@ public sealed class SC2ObjectsShell
         var collapsed = _unitArmyCollapsed.Contains(armyName);
         var counts = CountArmyRootChildren(armyName);
 
+        // One card per army, like the cards of the other panels; its width is what the rows inside may use.
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        var innerWidth = SC2TerrainShell.GetUnifiedContentWidth();
         GUILayout.BeginHorizontal();
         if (SC2EnvFieldGui.Button(collapsed ? "▸" : "▾", GUILayout.Width(SC2UiScale.Pxf(20f))))
         {
             if (collapsed) _unitArmyCollapsed.Remove(armyName); else _unitArmyCollapsed.Add(armyName);
         }
-        var prevContent = GUI.contentColor;
-        GUI.contentColor = ArmyRowColor;
-        GUILayout.Label($"{armyName}  {counts.Groups}-{counts.Units}", GUILayout.ExpandWidth(true));
-        GUI.contentColor = prevContent;
+        var armyArrowRect = GUILayoutUtility.GetLastRect();
+        SC2EnvFieldGui.SectionLabel(armyName);
+        GUILayout.FlexibleSpace();
+        GUILayout.Label($"{counts.Groups} groups, {counts.Units} units");
         GUILayout.EndHorizontal();
-        var armyRowRect = GUILayoutUtility.GetLastRect();
 
-        if (collapsed) return;
-
-        var lineX = 7f;
-        var lineTop = armyRowRect.y + armyRowRect.height * 0.5f;
-        var lineBottom = lineTop;
-        foreach (var r in GetChildGroupIndices(armyName, -1))
+        if (!collapsed)
         {
-            var childRect = DrawGroupTreeNode(r, 1, w);
-            lineBottom = childRect.y + childRect.height * 0.5f;
-            DrawTreeElbow(lineX, lineBottom, 14f);
+            // The guide hangs from the centre of the arrow button, starts under it and ends at the last branch; each branch
+            // stops at the left edge of the child's button instead of running into it.
+            var lineX = armyArrowRect.center.x;
+            var lineTop = armyArrowRect.yMax;
+            var lineBottom = lineTop;
+            foreach (var r in GetChildGroupIndices(armyName, -1))
+            {
+                var childButton = DrawGroupTreeNode(r, 1, innerWidth);
+                lineBottom = childButton.center.y;
+                DrawTreeElbow(lineX, lineBottom, childButton.x);
+            }
+            var addButton = DrawAddGroupRow(armyName, -1, counts.Groups == 0, 1, innerWidth);
+            lineBottom = addButton.center.y;
+            DrawTreeElbow(lineX, lineBottom, addButton.x);
+            DrawTreeGuideLine(lineX, lineTop, lineBottom);
         }
-        DrawAddGroupRow(armyName, -1, counts.Groups == 0, 1, w);
-        var addRect = GUILayoutUtility.GetLastRect();
-        lineBottom = addRect.y + addRect.height * 0.5f;
-        DrawTreeElbow(lineX, lineBottom, 14f);
-        DrawTreeGuideLine(lineX, lineTop, lineBottom);
-        GUILayout.Space(4);
+        SC2TerrainShell.EndUnifiedPanelBox();
     }
 
     private static readonly Color HideActiveButtonColor = new Color(0.55f, 0.42f, 0.12f);
@@ -2402,60 +2353,50 @@ public sealed class SC2ObjectsShell
         var collapsed = _unitCollapsed.Contains(node.Id);
 
         GUILayout.BeginHorizontal();
-        GUILayout.Space(SC2UiScale.Pxf(depth * 14f));
+        GUILayout.Space(SC2UiScale.Pxf(depth * TreeIndent));
         if (SC2EnvFieldGui.Button(collapsed ? "▸" : "▾", GUILayout.Width(SC2UiScale.Pxf(20f))))
         {
             if (collapsed) _unitCollapsed.Remove(node.Id); else _unitCollapsed.Add(node.Id);
         }
+        var arrowRect = GUILayoutUtility.GetLastRect();
 
         var counts = CountUnitChildren(index);
         var isSel = _selGroupId == node.Id;
-        var prevContent = GUI.contentColor;
-        GUI.contentColor = GroupRowColor;
         var icon = node.IsWreckage ? "☠ " : "";
         // Fixed width + truncation instead of ExpandWidth: ExpandWidth only
         // shrinks gracefully down to this button's own minimum content
         // width (driven by the FULL untruncated name) — for a long group
         // name at any real depth, that minimum alone can exceed the whole
-        // panel's width no matter how wide ComputeGroupsPanelMinWidth made
-        // it, silently pushing the trailing S/H/I/- buttons off the visible
-        // edge, leaving only the first trailing button ("S") visible. Reserving fixed
-        // space for the indent/arrow/4 trailing buttons up front and giving
-        // the label only whatever's left (truncated to fit) guarantees this
-        // row can never exceed the panel's actual width, regardless of name
-        // length or nesting depth.
-        // Scaled through SC2UiScale — this used to stay fixed
-        // while the arrow/S/H/I/- buttons it's reserving room FOR (all
-        // GUILayout.Width(SC2UiScale.Pxf(...)) now) grew with Scale, so the
-        // real row exceeded `w` and pushed the trailing buttons off the
-        // panel's right edge.
-        var reserved = SC2UiScale.Pxf(depth * 14f + 20f + 4 * 24f + 10f);
+        // panel's width, silently pushing the trailing S/H/I/- buttons off the
+        // visible edge. Reserving fixed space for the indent/arrow/4 trailing
+        // buttons up front and giving the label only whatever's left
+        // (truncated to fit) guarantees this row can never exceed the panel's
+        // actual width, regardless of name length or nesting depth. All of it
+        // is scaled through SC2UiScale, like the buttons it reserves room for.
+        var reserved = SC2UiScale.Pxf(depth * TreeIndent + 20f + 4 * 24f + 10f);
         var labelWidth = Mathf.Max(SC2UiScale.Pxf(50f), w - reserved);
-        var labelText = (isSel ? "● " : "") + icon + node.Name + $"  {counts.Groups}-{counts.Units}";
-        if (GUILayout.Button(TruncateForLabel(labelText, labelWidth), GUILayout.Width(labelWidth)))
+        var labelText = icon + node.Name + $"  {counts.Groups}-{counts.Units}";
+        // The selected group is the pressed button, as selected items are elsewhere.
+        if (GUILayout.Toggle(isSel, TruncateForLabel(labelText, labelWidth), "Button", GUILayout.Width(labelWidth)) && !isSel)
             _selGroupId = node.Id;
-        GUI.contentColor = prevContent;
 
         var groupUnitIds = new List<int>();
         GatherUnitsUnderGroup(index, groupUnitIds);
         var isFullyHidden = groupUnitIds.Count > 0 && groupUnitIds.All(_hiddenUnitIds.Contains);
 
-        var prevBg = GUI.backgroundColor;
-        GUI.backgroundColor = SmallActionButtonColor;
         if (SC2EnvFieldGui.Button("S", GUILayout.Width(SC2UiScale.Pxf(24f))))
         {
             _selUnits.Clear();
             foreach (var id in groupUnitIds) _selUnits.Add(id);
             _lastActionSummary = $"Selected {groupUnitIds.Count} unit(s) under '{node.Name}'.";
         }
-        GUI.backgroundColor = isFullyHidden ? HideActiveButtonColor : SmallActionButtonColor;
-        if (SC2EnvFieldGui.Button("H", GUILayout.Width(SC2UiScale.Pxf(24f))))
+        // Hidden shows as the pressed button.
+        if (GUILayout.Toggle(isFullyHidden, "H", "Button", GUILayout.Width(SC2UiScale.Pxf(24f))) != isFullyHidden)
         {
             if (isFullyHidden) foreach (var id in groupUnitIds) _hiddenUnitIds.Remove(id);
             else foreach (var id in groupUnitIds) _hiddenUnitIds.Add(id);
             _lastActionSummary = (isFullyHidden ? "Shown " : "Hid ") + $"{groupUnitIds.Count} unit(s) under '{node.Name}'.";
         }
-        GUI.backgroundColor = SmallActionButtonColor;
         if (SC2EnvFieldGui.Button("I", GUILayout.Width(SC2UiScale.Pxf(24f))))
         {
             var keepSet = new HashSet<int>(groupUnitIds);
@@ -2464,20 +2405,16 @@ public sealed class SC2ObjectsShell
                 if (!u.IsGroup && !keepSet.Contains(u.Id)) _hiddenUnitIds.Add(u.Id);
             _lastActionSummary = $"Isolated {groupUnitIds.Count} unit(s) under '{node.Name}'.";
         }
-        GUI.backgroundColor = DeleteButtonColor;
         if (SC2EnvFieldGui.Button("-", GUILayout.Width(SC2UiScale.Pxf(24f))))
         {
-            GUI.backgroundColor = prevBg;
             PushUndo();
             RemoveUnitSubtree(index);
             if (isSel) _selGroupId = 0;
             MarkObjectsDirty();
             GUILayout.EndHorizontal();
-            return GUILayoutUtility.GetLastRect();
+            return default;
         }
-        GUI.backgroundColor = prevBg;
         GUILayout.EndHorizontal();
-        var ownRowRect = GUILayoutUtility.GetLastRect();
 
         if (!collapsed)
         {
@@ -2487,22 +2424,21 @@ public sealed class SC2ObjectsShell
             // each one — a plain set of parallel vertical lines made a deep
             // chain of single-child groups look like an undifferentiated
             // stack with no cue for which "+ Group" belonged to which level.
-            var lineX = SC2UiScale.Pxf(depth * 14f + 7f);
-            var lineTop = ownRowRect.y + ownRowRect.height * 0.5f;
+            var lineX = arrowRect.center.x;
+            var lineTop = arrowRect.yMax;
             var lineBottom = lineTop;
             foreach (var i in GetChildGroupIndices(node.ArmyName, index))
             {
-                var childRect = DrawGroupTreeNode(i, depth + 1, w);
-                lineBottom = childRect.y + childRect.height * 0.5f;
-                DrawTreeElbow(lineX, lineBottom, SC2UiScale.Pxf((depth + 1) * 14f));
+                var childButton = DrawGroupTreeNode(i, depth + 1, w);
+                lineBottom = childButton.center.y;
+                DrawTreeElbow(lineX, lineBottom, childButton.x);
             }
-            DrawAddGroupRow(node.ArmyName, index, false, depth + 1, w);
-            var addRect = GUILayoutUtility.GetLastRect();
-            lineBottom = addRect.y + addRect.height * 0.5f;
-            DrawTreeElbow(lineX, lineBottom, SC2UiScale.Pxf((depth + 1) * 14f));
+            var addButton = DrawAddGroupRow(node.ArmyName, index, false, depth + 1, w);
+            lineBottom = addButton.center.y;
+            DrawTreeElbow(lineX, lineBottom, addButton.x);
             DrawTreeGuideLine(lineX, lineTop, lineBottom);
         }
-        return ownRowRect;
+        return arrowRect;
     }
 
     private static void DrawTreeGuideLine(float x, float yTop, float yBottom)
@@ -2531,13 +2467,13 @@ public sealed class SC2ObjectsShell
     /// subgroup there. The very first root-level group created for an army
     /// defaults to "INITIAL" (FAForeverMapEditor's own rule); every other
     /// creation keeps the normal numbered fallback name.</summary>
-    private void DrawAddGroupRow(string armyName, int parentIndex, bool isFirstRootGroup, int depth, float w)
+    private Rect DrawAddGroupRow(string armyName, int parentIndex, bool isFirstRootGroup, int depth, float w)
     {
         GUILayout.BeginHorizontal();
-        GUILayout.Space(SC2UiScale.Pxf(depth * 14f));
-        var prevBg = GUI.backgroundColor;
-        GUI.backgroundColor = AddGroupRowColor;
-        if (GUILayout.Button("+ Group", GUILayout.Height(SC2UiScale.Pxf(16f)), GUILayout.ExpandWidth(true)))
+        GUILayout.Space(SC2UiScale.Pxf(depth * TreeIndent));
+        var clicked = GUILayout.Button("+ Group", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.ExpandWidth(true));
+        var buttonRect = GUILayoutUtility.GetLastRect();
+        if (clicked)
         {
             PushUndo();
             var name = isFirstRootGroup ? MakeUniqueUnitName("INITIAL") : MakeUniqueUnitName("GROUP_1");
@@ -2546,8 +2482,8 @@ public sealed class SC2ObjectsShell
             if (parentIndex >= 0) _unitCollapsed.Remove(Data.ObjUnits[parentIndex].Id); // expand the parent so the new subgroup is immediately visible
             MarkObjectsDirty();
         }
-        GUI.backgroundColor = prevBg;
         GUILayout.EndHorizontal();
+        return buttonRect;
     }
 
     /// <summary>An army is not itself a group that can hold units — real
@@ -3068,8 +3004,8 @@ public sealed class SC2ObjectsShell
         _propsBrushErasing = SC2EnvFieldGui.Toggle("Eraser mode", _propsBrushErasing);
 
         var canPaint = !string.IsNullOrEmpty(_propsBrushBlueprint) || _propsBrushErasing;
-        // See DrawUndoRedoRow's own comment for why this restores the prior
-        // value instead of hardcoding true.
+        // Restore whatever GUI.enabled was before this button (not a hardcoded true): the host disables the whole
+        // panel while a menu or window is open, and re-enabling here would undo that for everything drawn after.
         var guiEnabledBeforePaintButton = GUI.enabled;
         GUI.enabled = guiEnabledBeforePaintButton && canPaint;
         if (SC2EnvFieldGui.Button(_propsBrushActive ? "Stop painting" : "Paint in viewport...", GUILayout.Height(SC2UiScale.Pxf(24f))))
@@ -6191,7 +6127,7 @@ public sealed class SC2ObjectsShell
         // unconditionally here regardless of which overlay flags are on.
         // Props specifically uses showPropsIcon (Props-sub-tab-only), not
         // showProps — see that variable's own comment.
-        if (!_legacyImguiMarkers) SyncMarkerRendererIfNeeded(showPropsIcon, showUnits, showMarkers);
+        SyncMarkerRendererIfNeeded(showPropsIcon, showUnits, showMarkers);
 
         if ((_placementKind != PlacementKind.None || _propsBrushActive) && allowInput && Event.current != null &&
             Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
@@ -6516,9 +6452,7 @@ public sealed class SC2ObjectsShell
         // highlights it. Resolve whatever `pick` ended up landing on (the
         // true nearest candidate under the cursor across every kind
         // checked above) and feed it to the GPU renderer's single hover
-        // slot; in legacy IMGUI mode every dot is already drawn directly
-        // below via DrawViewportDot, so this instead draws one extra
-        // brighter glyph on top, same as before this GPU migration.
+        // slot.
         {
             Vector3? hoverWorld = canPick ? pick.Kind switch
             {
@@ -6536,15 +6470,7 @@ public sealed class SC2ObjectsShell
                 _ => (Color?)null
             } : null;
 
-            if (_legacyImguiMarkers)
-            {
-                if (hoverWorld.HasValue && hoverColor.HasValue && TryWorldToGui(camera, viewportRect, hoverWorld.Value, out var hoverGui))
-                    DrawViewportGlyph(hoverGui, hoverColor.Value, pick.Kind);
-            }
-            else
-            {
-                SC2ObjectMarkerRenderer.SetHover(hoverWorld, hoverColor ?? Color.white, pick.Kind == ViewportObjectKind.Marker);
-            }
+            SC2ObjectMarkerRenderer.SetHover(hoverWorld, hoverColor ?? Color.white, pick.Kind == ViewportObjectKind.Marker);
         }
 
         var e = Event.current;
@@ -7042,9 +6968,7 @@ public sealed class SC2ObjectsShell
         // world-radius ring changes shape and apparent position as the camera
         // rotates, which makes stationary objects look camera-relative.
         //
-        // IMGUI drawing only happens in _legacyImguiMarkers debug mode now —
-        // by default (GPU mode) every dot is drawn by SC2ObjectMarkerRenderer
-        // instead (its own Sync call, gated in OnGameViewGUI/DrawEmbeddedGUI,
+        // Every dot is drawn by SC2ObjectMarkerRenderer, not here (its own Sync call, gated in OnGameViewGUI/DrawEmbeddedGUI,
         // builds the exact same Normal/Selected position buckets this method
         // used to draw one GUI.DrawTexture pair per object for — 2871
         // simultaneously-visible dots was the real bottleneck this
@@ -7053,11 +6977,8 @@ public sealed class SC2ObjectsShell
         // transform + rect containment, already reasoned about in
         // VisibleForViewport's own doc comment) and needed so hovering/
         // clicking still finds the right object; OnGameViewGUI feeds
-        // whatever `pick` resolves to into the GPU renderer's hover slot (or
-        // draws one extra IMGUI glyph in legacy mode) after every kind's
+        // whatever `pick` resolves to into the GPU renderer's hover slot after every kind's
         // loop finishes.
-        if (_legacyImguiMarkers)
-            DrawViewportGlyph(gui, color, kind);
         if (!canPick) return;
         var distance = Vector2.Distance(gui, mousePosition);
         if (distance < pick.Distance) pick = new ViewportPick { Kind = kind, Id = id, Distance = distance };
