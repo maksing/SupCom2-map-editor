@@ -1,7 +1,7 @@
 using BdfIO.Formats.Info;
 using Xunit;
 
-/// <summary>What a new map's Environment (info.bdf) starts with: the Marine_Barrier header, water on at elevation 0, and its sky.</summary>
+/// <summary>What a new map's Environment (info.bdf) header starts with: the Marine_Barrier header, with water on at elevation 0.</summary>
 public class EnvironmentDefaultsTests
 {
     private static InfoModel DefaultModel()
@@ -32,12 +32,6 @@ public class EnvironmentDefaultsTests
         // The values of the source file, not the generic defaults the previous header carried.
         Assert.Equal(1.3f, model.SunIntensity, 3);
         Assert.InRange(model.SunDirectionY, 0.49f, 0.50f);
-    }
-
-    [Fact]
-    public void DefaultSkyMap_IsTheMarineBarrierSky()
-    {
-        Assert.Equal("/textures/environment/I02_sky.dds", SC2EnvironmentDefaults.SkyMap);
     }
 
     [Fact]

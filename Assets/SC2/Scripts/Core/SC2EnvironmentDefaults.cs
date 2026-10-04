@@ -1,15 +1,12 @@
 /// <summary>
-/// The Environment (info.bdf) a new map starts with: the header and the sky texture of the real vanilla map Marine_Barrier
-/// (parsed via BdfIO.Formats.Info.InfoBdf.Parse), not invented. Two header fields are set on top of that file's values:
-/// WaterEnabled is 1 (it already is in the source) and WaterElevation is 0 (the source has 96). Every other byte is the source
-/// file's own value, unmodified. Of its 5 texture-path strings only the sky is set (<see cref="SkyMap"/>); the rest were empty,
-/// so SC2TerrainData's "" field initializers already match.
+/// The Environment (info.bdf) header a new map starts with: the header of the real vanilla map Marine_Barrier (parsed via
+/// BdfIO.Formats.Info.InfoBdf.Parse), not invented. Two fields are set on top of that file's values: WaterEnabled is 1 (it
+/// already is in the source) and WaterElevation is 0 (the source has 96). Every other byte is the source file's own value,
+/// unmodified. The 5 texture paths are not part of the defaults: a new map starts with all of them empty, as SC2TerrainData's
+/// "" field initializers say.
 /// </summary>
 public static class SC2EnvironmentDefaults
 {
-    /// <summary>The SkyMap texture path a new map starts with.</summary>
-    public const string SkyMap = "/textures/environment/I02_sky.dds";
-
     public static byte[] CloneDefaultHeader() => (byte[])DefaultHeader.Clone();
 
     private static readonly byte[] DefaultHeader =

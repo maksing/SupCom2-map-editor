@@ -304,9 +304,8 @@ public sealed class SC2EnvironmentShell
 
         // Always the same reference profile, independent of Data - unlike
         // _original above, this does NOT come from Data.EnvironmentHeader.
-        // Of the reference map's 5 texture-path strings only the sky is set; the others are "", matching InfoModel's own field
-        // initializers.
-        _defaults = new InfoModel { SkyMap = SC2EnvironmentDefaults.SkyMap };
+        // The defaults carry no texture paths: "" for all five, matching InfoModel's own field initializers.
+        _defaults = new InfoModel();
         Array.Copy(SC2EnvironmentDefaults.CloneDefaultHeader(), _defaults.Header, 508);
 
         // Sync the document to the freshly-loaded terrain's state. Undo
