@@ -574,7 +574,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// state nothing in this editor was ever exercised against.</summary>
     public byte[] EnvironmentHeader = SC2EnvironmentDefaults.CloneDefaultHeader();
     public string EnvironmentMap = "";
-    public string SkyMap = "";
+    public string SkyMap = SC2EnvironmentDefaults.SkyMap;
     public string TexturePath3 = "";
     public string ColorCorrectionCube = "";
     public string FogOfWarCorrectionCube = "";
