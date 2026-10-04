@@ -91,8 +91,9 @@ public static class SC2Collision2MeshBuilder
         {
             public int A, B, C; // indices into _px/_pz/_ph, fixed CCW order (see class doc comment)
             public bool Alive = true;
-            public List<int> Candidates = new(); // grid linear index (gz*mapX+gx) of not-yet-inserted points inside this tri
-            public int BestCandidate = -1;
+            // Not-yet-inserted grid points inside this tri, packed as gx | gz << 16, in the order they were assigned.
+            public List<int> Candidates = new();
+            public int BestCandidate = -1; // packed like the candidates
             public float BestError = -1f;
         }
 
@@ -142,47 +143,122 @@ public static class SC2Collision2MeshBuilder
             _edgeOwner.Remove((t.C, t.A));
         }
 
-        /// <summary>Barycentric weights of grid point (gx,gz) relative to
-        /// triangle t's 3 corners, in the XZ (map) plane only — height never
-        /// enters this test, it's purely "which triangle's footprint
-        /// contains this point."</summary>
-        private bool Bary(Tri t, int gx, int gz, out float wa, out float wb, out float wc)
+        private const int PackShift = 16;
+        private const int PackMask = (1 << PackShift) - 1;
+
+        /// <summary>What testing a point against one triangle needs, worked out once from its three corners. The arithmetic is the same
+        /// expression the point test always used (barycentric weights in the XZ plane), only with the corner terms computed up front.</summary>
+        private struct TriGeom
+        {
+            public float Cx, Cz, K1, K2, K3, K4, Denom, Ha, Hb, Hc;
+            public bool Degenerate;
+            public int MinX, MaxX, MinZ, MaxZ; // integer bounding box of the corners
+        }
+
+        private TriGeom MakeGeom(Tri t)
         {
             float ax = _px[t.A], az = _pz[t.A];
             float bx = _px[t.B], bz = _pz[t.B];
             float cx = _px[t.C], cz = _pz[t.C];
-            var denom = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-            if (MathF.Abs(denom) < 1e-9f) { wa = wb = wc = 0f; return false; }
-            wa = ((bz - cz) * (gx - cx) + (cx - bx) * (gz - cz)) / denom;
-            wb = ((cz - az) * (gx - cx) + (ax - cx) * (gz - cz)) / denom;
-            wc = 1f - wa - wb;
-            return true;
-        }
-
-        private bool TryAssign(Tri t, int gx, int gz)
-        {
-            if (!Bary(t, gx, gz, out var wa, out var wb, out var wc)) return false;
-            if (wa < -Eps || wb < -Eps || wc < -Eps) return false;
-            t.Candidates.Add(gz * _mapX + gx);
-            return true;
-        }
-
-        private void RecomputeBest(Tri t)
-        {
-            t.BestCandidate = -1;
-            t.BestError = -1f;
-            for (var i = t.Candidates.Count - 1; i >= 0; i--)
+            var g = new TriGeom
             {
-                var lin = t.Candidates[i];
-                var gx = lin % _mapX; var gz = lin / _mapX;
-                if (!Bary(t, gx, gz, out var wa, out var wb, out var wc) || wa < -Eps || wb < -Eps || wc < -Eps)
+                Cx = cx, Cz = cz,
+                K1 = bz - cz, K2 = cx - bx, K3 = cz - az, K4 = ax - cx,
+                Denom = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz),
+                Ha = _ph[t.A], Hb = _ph[t.B], Hc = _ph[t.C],
+                MinX = Math.Min(_px[t.A], Math.Min(_px[t.B], _px[t.C])),
+                MaxX = Math.Max(_px[t.A], Math.Max(_px[t.B], _px[t.C])),
+                MinZ = Math.Min(_pz[t.A], Math.Min(_pz[t.B], _pz[t.C])),
+                MaxZ = Math.Max(_pz[t.A], Math.Max(_pz[t.B], _pz[t.C])),
+            };
+            g.Degenerate = MathF.Abs(g.Denom) < 1e-9f;
+            return g;
+        }
+
+        // Below this many points a distribution is not worth handing to other threads.
+        private const int ParallelMinPoints = 12000;
+        private const int ParallelChunkPoints = 4096;
+
+        /// <summary>Gives every point of <paramref name="points"/> (packed gx | gz << 16) to the first of the triangles whose footprint
+        /// holds it — barycentric weights in the XZ plane only, height never enters that test — and measures its height error against
+        /// that triangle's own 3-corner plane, keeping the worst per triangle (the last of equally bad ones, which is the one a
+        /// backwards scan with a strict comparison always picked). The integer bounding box is a pure shortcut: a grid point outside it
+        /// is further than the Eps tolerance from the triangle, so the barycentric test would reject it too.
+        /// The result does not depend on how the work is split: a point only looks at the triangles, and the per-triangle lists and
+        /// best candidates are put together in the order of the points. So large sets are cut into runs, done on several threads and
+        /// joined in order.</summary>
+        private void Distribute(int[] points, int count, int skipPacked, Tri[] tris, TriGeom[] geom)
+        {
+            var n = tris.Length;
+            var chunkCount = count >= ParallelMinPoints ? Math.Min(Environment.ProcessorCount, count / ParallelChunkPoints) : 1;
+            if (chunkCount <= 1)
+            {
+                var lists = new List<int>[n];
+                var bestErr = new float[n];
+                var bestPos = new int[n];
+                for (var k = 0; k < n; k++) { lists[k] = tris[k].Candidates; bestErr[k] = tris[k].BestError; bestPos[k] = tris[k].BestCandidate; }
+                DistributeRange(points, 0, count, skipPacked, geom, lists, bestErr, bestPos);
+                for (var k = 0; k < n; k++) { tris[k].BestError = bestErr[k]; tris[k].BestCandidate = bestPos[k]; }
+                return;
+            }
+
+            var chunkLists = new List<int>[chunkCount][];
+            var chunkErr = new float[chunkCount][];
+            var chunkPos = new int[chunkCount][];
+            var span = (count + chunkCount - 1) / chunkCount;
+            System.Threading.Tasks.Parallel.For(0, chunkCount, c =>
+            {
+                var lists = new List<int>[n];
+                var bestErr = new float[n];
+                var bestPos = new int[n];
+                for (var k = 0; k < n; k++) { lists[k] = new List<int>(); bestErr[k] = -1f; bestPos[k] = -1; }
+                var from = c * span;
+                DistributeRange(points, from, Math.Min(count, from + span), skipPacked, geom, lists, bestErr, bestPos);
+                chunkLists[c] = lists; chunkErr[c] = bestErr; chunkPos[c] = bestPos;
+            });
+
+            for (var k = 0; k < n; k++)
+            {
+                var total = tris[k].Candidates.Count;
+                for (var c = 0; c < chunkCount; c++) total += chunkLists[c][k].Count;
+                tris[k].Candidates.Capacity = Math.Max(tris[k].Candidates.Capacity, total);
+                for (var c = 0; c < chunkCount; c++)
                 {
-                    t.Candidates.RemoveAt(i); // stale/mis-owned, shouldn't normally happen
-                    continue;
+                    tris[k].Candidates.AddRange(chunkLists[c][k]);
+                    if (chunkPos[c][k] >= 0 && chunkErr[c][k] >= tris[k].BestError)
+                    {
+                        tris[k].BestError = chunkErr[c][k];
+                        tris[k].BestCandidate = chunkPos[c][k];
+                    }
                 }
-                var plane = wa * _ph[t.A] + wb * _ph[t.B] + wc * _ph[t.C];
-                var err = MathF.Abs(H(gx, gz) - plane);
-                if (err > t.BestError) { t.BestError = err; t.BestCandidate = lin; }
+            }
+        }
+
+        private void DistributeRange(int[] points, int from, int to, int skipPacked, TriGeom[] geom, List<int>[] lists, float[] bestErr, int[] bestPos)
+        {
+            var n = geom.Length;
+            for (var i = from; i < to; i++)
+            {
+                var packed = points[i];
+                if (packed == skipPacked) continue;
+                var gx = packed & PackMask;
+                var gz = packed >> PackShift;
+                for (var k = 0; k < n; k++)
+                {
+                    ref readonly var g = ref geom[k];
+                    if (gx < g.MinX || gx > g.MaxX || gz < g.MinZ || gz > g.MaxZ || g.Degenerate) continue;
+                    var dx = gx - g.Cx;
+                    var dz = gz - g.Cz;
+                    var wa = (g.K1 * dx + g.K2 * dz) / g.Denom;
+                    var wb = (g.K3 * dx + g.K4 * dz) / g.Denom;
+                    var wc = 1f - wa - wb;
+                    if (wa < -Eps || wb < -Eps || wc < -Eps) continue;
+                    lists[k].Add(packed);
+                    var plane = wa * g.Ha + wb * g.Hb + wc * g.Hc;
+                    var err = MathF.Abs(H(gx, gz) - plane);
+                    if (err >= bestErr[k]) { bestErr[k] = err; bestPos[k] = packed; }
+                    break;
+                }
             }
         }
 
@@ -234,18 +310,19 @@ public static class SC2Collision2MeshBuilder
             SetEdge(t1); SetEdge(t2);
             _tris.Add(t1); _tris.Add(t2);
 
+            // Every grid point but the four corners (already inserted), row by row.
+            var all = new int[(_gridSize + 1) * (_gridSize + 1) - 4];
+            var allCount = 0;
             for (var gz = 0; gz <= _gridSize; gz++)
             for (var gx = 0; gx <= _gridSize; gx++)
             {
                 if ((gx == 0 && gz == 0) || (gx == _gridSize && gz == 0) ||
                     (gx == _gridSize && gz == _gridSize) || (gx == 0 && gz == _gridSize))
-                    continue; // the 4 corners are already inserted
-
-                if (!TryAssign(t1, gx, gz))
-                    TryAssign(t2, gx, gz);
+                    continue;
+                all[allCount++] = gx | (gz << PackShift);
             }
-            RecomputeBest(t1);
-            RecomputeBest(t2);
+            var first = new[] { t1, t2 };
+            Distribute(all, allCount, -1, first, new[] { MakeGeom(t1), MakeGeom(t2) });
 
             var aliveCount = 2;
 
@@ -261,7 +338,7 @@ public static class SC2Collision2MeshBuilder
                 if (worst == null) break; // every remaining candidate is already exactly represented
 
                 var lin = worst.BestCandidate;
-                var pgx = lin % _mapX; var pgz = lin / _mapX;
+                var pgx = lin & PackMask; var pgz = lin >> PackShift;
 
                 // Compute the cavity WITHOUT mutating anything yet, so the
                 // triangle budget can be checked before committing (the
@@ -357,28 +434,27 @@ public static class SC2Collision2MeshBuilder
 
         private void CommitCavity(List<Tri> bad, List<(int u, int v)> boundary, int p)
         {
-            var candidates = new List<int>();
-            foreach (var t in bad) candidates.AddRange(t.Candidates);
+            var total = 0;
+            foreach (var t in bad) total += t.Candidates.Count;
+            var candidates = new int[total];
+            var at = 0;
+            foreach (var t in bad) { t.Candidates.CopyTo(candidates, at); at += t.Candidates.Count; }
             foreach (var t in bad) { t.Alive = false; ClearEdges(t); }
 
-            var newTris = new List<Tri>(boundary.Count);
-            foreach (var (u, v) in boundary)
+            var newTris = new Tri[boundary.Count];
+            var geom = new TriGeom[boundary.Count];
+            for (var i = 0; i < newTris.Length; i++)
             {
+                var (u, v) = boundary[i];
                 var nt = new Tri { A = u, B = v, C = p };
                 SetEdge(nt);
                 _tris.Add(nt);
-                newTris.Add(nt);
+                newTris[i] = nt;
+                geom[i] = MakeGeom(nt);
             }
 
-            var pgx = _px[p]; var pgz = _pz[p];
-            foreach (var lin in candidates)
-            {
-                var gx = lin % _mapX; var gz = lin / _mapX;
-                if (gx == pgx && gz == pgz) continue; // the point just inserted
-                foreach (var nt in newTris)
-                    if (TryAssign(nt, gx, gz)) break;
-            }
-            foreach (var nt in newTris) RecomputeBest(nt);
+            // The point just inserted is not a candidate any more.
+            Distribute(candidates, total, _px[p] | (_pz[p] << PackShift), newTris, geom);
         }
     }
 }
