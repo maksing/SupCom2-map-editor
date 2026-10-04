@@ -29,9 +29,6 @@ public class SC2TerrainShell : ScriptableObject
     // next bake or the panel is closed/reopened. Moved here (from SC2PaintMode)
     // when Bake Lighting got its own "Lighting Bake" tab.
     private string _bakeStatus = "";
-    // Same idea as _bakeStatus above, for SC2RnmBakeService.BakeBackground
-    // (Background tab's own "Bake Background Lighting" button).
-    private string _bgBakeStatus = "";
 
     private SC2TerrainData    _data;
     private SC2TerrainRuntime _runtime;
@@ -1580,7 +1577,7 @@ public class SC2TerrainShell : ScriptableObject
             return;
         }
 
-        DrawUnifiedSectionLabel("Background Terrain");
+        DrawUnifiedSectionLabel("Background terrain");
 
         var newEnabled = EditorGUILayout.ToggleLeft(" Enabled", _data.BackgroundTerrainEnabled);
         if (newEnabled != _data.BackgroundTerrainEnabled)
@@ -1594,25 +1591,25 @@ public class SC2TerrainShell : ScriptableObject
 
         if (!_data.BackgroundTerrainEnabled)
         {
-            DrawUnifiedNote("Off by default — a disabled background contributes nothing to export, byte-for-byte identical to before this feature existed. Turn it on to generate a low-detail decorative surface around the playable core.");
+            DrawUnifiedNote("Off: the background adds nothing to the export. Turn it on to generate a low-detail decorative surface around the playable area.");
             return;
         }
 
-        DrawUnifiedNote("A low-detail decorative surface is generated around the playable core, sharing its exact grid alignment so the seam is always exact regardless of SimplifyRatio choices on either side. Purely cosmetic — never contributes to Costs/Hfield, and only lightly to Collision2 near the seam.");
+        DrawUnifiedNote("A low-detail decorative surface around the playable area. It shares the core's grid, so the seam is exact. Cosmetic: it never affects Costs or Hfield, and Collision2 only slightly near the seam.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
+        DrawUnifiedSectionLabel("Footprint");
         var minFootprint = SC2BackgroundTerrain.MinFootprint(_data);
         var maxFootprint = SC2BackgroundTerrain.MaxFootprint(_data);
         var shownSize = SC2BackgroundTerrain.ClampFootprint(_data, _data.BackgroundTerrainSize);
-        var newSize = Mathf.RoundToInt(DrawCompactSlider("Footprint Size", shownSize, minFootprint, maxFootprint,
+        var newSize = Mathf.RoundToInt(DrawCompactSlider("Footprint size", shownSize, minFootprint, maxFootprint,
             onValueChangeStart: () => RecordUndoCheckpoint("Change Background Terrain Size")));
         if (newSize != _data.BackgroundTerrainSize)
         {
             _data.BackgroundTerrainSize = newSize;
             RefreshBackgroundRuntime();
         }
-        DrawUnifiedNote($"World-space outer size (X and Z), centered on the core, from just around it up to {SC2BackgroundTerrain.MaxFootprintCoreMultiple}x its larger side. The background uses the core's own grid density, so it meets the core without any stitching strip; a bigger footprint means more triangles in the editor.");
-
-        EditorGUILayout.Space(6);
+        DrawUnifiedNote($"Outer size (X and Z) centred on the core, up to {SC2BackgroundTerrain.MaxFootprintCoreMultiple}x its larger side. A bigger footprint means more triangles in the editor.");
 
         // Ensure-only (never overwrites hand edits) — see EnsureGenerated's
         // own doc comment. Only the very first enable actually builds
@@ -1620,8 +1617,7 @@ public class SC2TerrainShell : ScriptableObject
         // user last painted/sculpted.
         SC2BackgroundTerrain.EnsureGenerated(_data);
 
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Regenerate (discards edits)", GUILayout.Height(SC2UiScale.Pxf(22f))))
+        if (GUILayout.Button("Regenerate (discards edits)", GUILayout.Height(SC2UiScale.Pxf(26f))))
         {
             if (_data.BackgroundTerrainData == null || EditorUtility.DisplayDialog(
                     "Regenerate Background Terrain",
@@ -1634,38 +1630,22 @@ public class SC2TerrainShell : ScriptableObject
                 MarkDirtyAndRepaint();
             }
         }
-        GUILayout.EndHorizontal();
-        DrawUnifiedNote("Regenerate applies a changed Footprint Size and resets the auto-generated falloff/hole — use it once after resizing, not as a routine action, since it discards hand edits.");
+        DrawUnifiedNote("Applies a changed footprint size and resets the generated falloff and hole. It discards hand edits, so use it once after resizing, not routinely.");
 
         var bg = _data.BackgroundTerrainData;
         if (bg != null && bg.Pairs.Count > 0)
         {
-            EditorGUILayout.LabelField($"Source triangles: {bg.GridWidth * bg.GridHeight * 2:N0} (editor), exported as about {SC2BackgroundTerrain.EstimateExportTriangles(bg):N0}");
+            EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+            DrawUnifiedSectionLabel("Detail");
+            DrawUnifiedNote($"Editor: {bg.GridWidth * bg.GridHeight * 2:N0} triangles. Exported as about {SC2BackgroundTerrain.EstimateExportTriangles(bg):N0}.");
             for (var i = 0; i < bg.Pairs.Count; i++)
                 DrawBackgroundDetailSlider(bg, bg.Pairs[i], $"bgtab-{i}", bg.Pairs.Count > 1 ? bg.Pairs[i].Name : null);
-            DrawUnifiedNote($"The editor keeps the full-density grid; on export (and for the lighting bake) the background is simplified to at most {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles. Simplify 1.0 is that maximum, lower values make it lighter; it can't go above. The rim against the core is always kept at full density, so the seam never opens - that also sets a floor under how light the background can get.");
-            DrawUnifiedNote("Texture tiling (UV1) is the shared setting on the Pairs tab (Texture tiling - all pairs), which applies to the background too, so the tiling density matches at the seam.");
+            DrawUnifiedNote($"On export and for the lighting bake the background is simplified to at most {SC2BackgroundTerrain.ExportTriangleBudget:N0} triangles. 1.0 is that maximum, lower is lighter. The rim against the core always stays at full density, which also limits how light the background can get.");
+            DrawUnifiedNote("Texture tiling (UV1) is the shared setting on the Pairs tab and applies to the background too, so the density matches at the seam.");
         }
 
-        EditorGUILayout.Space(6);
-        if (GUILayout.Button("Bake Background Lighting", GUILayout.Height(SC2UiScale.Pxf(22f))))
-        {
-            // The calculation runs on a worker thread behind the busy plate (see SC2BusyOverlay).
-            SC2BusyOverlay.RunInBackground("Baking background lighting",
-                "Calculating the lighting and shadows of the background terrain. This can take a while.", () =>
-                {
-                    if (_data == null) return null;
-                    if (bg != null) RecordUndoCheckpointFor(bg, "Bake Background Lighting");
-                    return SC2RnmBakeService.BeginBakeBackground(_data, GetImportedTerrainsForExport?.Invoke(), Session,
-                        status => _bgBakeStatus = status);
-                }, ex => _bgBakeStatus = "Bake failed: " + ex.Message);
-        }
-        if (!string.IsNullOrEmpty(_bgBakeStatus))
-            EditorGUILayout.LabelField(_bgBakeStatus, EditorStyles.miniLabel);
-        DrawUnifiedNote("Same real per-texel RNM lighting bake as the core's own \"Bake Lighting\" (Lighting Bake tab) — reads the SAME Sun/Shadow settings (no separate copy for background). Shadow occlusion now considers BOTH zones together, so a tall core feature can shadow the background and vice versa.");
-
-        EditorGUILayout.Space(8);
-        DrawUnifiedNote("Geometry/Paint sculpt and paint whichever surface the brush is actually over — click on the background instead of switching a target here. Materials/Pairs show both the core's and the background's own lists on their tabs.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        DrawUnifiedNote("Lighting is baked together with the terrain: use Bake Lighting on the Lighting Bake tab. Sculpting and painting act on whichever surface the brush is over.");
     }
 
     /// <summary>Real per-texel RNM lighting bake (3 basis-
@@ -1685,50 +1665,92 @@ public class SC2TerrainShell : ScriptableObject
             return;
         }
 
-        DrawUnifiedSectionLabel("Lighting Bake Inputs");
-        DrawUnifiedNote("Each parameter below either tracks Environment's current value live (Sync on), or uses a locally fixed value you set here (Sync off). Bake Lighting reads whichever is active for each parameter at the moment you click it.");
-
-        DrawBakeSyncFloat3("Sun Direction", "sunDirection", ref _data.RnmBakeSyncSunDirection, ref _data.RnmBakeOverrideSunDirection);
-        DrawBakeSyncColor("Sun Color", "sunColor", ref _data.RnmBakeSyncSunColor, ref _data.RnmBakeOverrideSunColor);
-        DrawBakeSyncFloat("Sun Intensity", "sunIntensity", ref _data.RnmBakeSyncSunIntensity, ref _data.RnmBakeOverrideSunIntensity, 0f, 10f);
-        DrawBakeSyncColor("Shadow Color", "shadowColor", ref _data.RnmBakeSyncShadowColor, ref _data.RnmBakeOverrideShadowColor);
-
-        EditorGUILayout.Space(4);
-        // No "Sync from Environment" concept here (there's no matching
-        // info.bdf field to track) — a plain slider, same as this panel's
-        // sibling tabs' own non-Environment-backed values (e.g. Simplify
-        // Ratio). One shared value for both Bake Lighting (core) and
-        // Background's own "Bake Background Lighting" button — see
-        // SC2TerrainData.RnmBakeShadowSoftRadius's own doc comment for why
-        // there's only one, matching every other Lighting Bake Input above.
-        _data.RnmBakeShadowSoftRadius = Mathf.RoundToInt(DrawCompactSlider("Shadow Sharpness", _data.RnmBakeShadowSoftRadius, 0f, 24f, "rnmbake:shadowSharpness"));
-        DrawUnifiedNote("Lower = sharper shadow edges, higher = softer. Applies to both this bake and the Background tab's own bake.");
-
-        DrawShadowCastingSection();
-
-        EditorGUILayout.Space(6);
-        if (GUILayout.Button("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(24f))))
-        {
-            SC2BusyOverlay.RunInBackground("Baking lighting",
-                "Calculating the lighting and shadows of every texel of the terrain. This can take a while.", () =>
-                {
-                    if (_data == null) return null;
-                    RecordUndoCheckpoint("Bake Lighting");
-                    return SC2RnmBakeService.BeginBake(_data, GetImportedTerrainsForExport?.Invoke(), Session, CommitImportedRnmMasks,
-                        status =>
-                        {
-                            _bakeStatus = status;
-                            EditorUtility.SetDirty(_data);
-                            MarkDirtyAndRepaint();
-                        });
-                }, ex => _bakeStatus = "Bake failed: " + ex.Message);
-        }
+        // The one action of the tab comes first, so it is always in reach however long the sections below grow.
+        if (GUILayout.Button("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(34f))))
+            BakeAllLighting();
         if (!string.IsNullOrEmpty(_bakeStatus))
-            EditorGUILayout.LabelField(_bakeStatus, EditorStyles.miniLabel);
-        DrawUnifiedNote("Manual trigger only — the shadow horizon-march is real per-texel work across up to 2048x2048 texels per mask, so it never runs silently on export. Also bakes the imported layers assigned to a mask below.");
+            DrawUnifiedNote(_bakeStatus);
+        DrawUnifiedNote(_data.BackgroundTerrainEnabled && _data.BackgroundTerrainData != null
+            ? "Manual only: the shadow pass is real per-texel work, so it never runs on export. Bakes the terrain, the background and the imported layers assigned to a mask."
+            : "Manual only: the shadow pass is real per-texel work, so it never runs on export. Also bakes the imported layers assigned to a mask.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
-        DrawImportedRnmBakeSection();
+        _bakeInputsExpanded = DrawFoldoutHeader("Lighting inputs", _bakeInputsExpanded);
+        if (_bakeInputsExpanded)
+        {
+            DrawUnifiedNote("An input follows Environment while Sync is on. Turn Sync off to fix its value for the bake.");
+            DrawBakeSyncFloat3("Sun Direction", "sunDirection", ref _data.RnmBakeSyncSunDirection, ref _data.RnmBakeOverrideSunDirection);
+            DrawBakeSyncColor("Sun Color", "sunColor", ref _data.RnmBakeSyncSunColor, ref _data.RnmBakeOverrideSunColor);
+            DrawBakeSyncFloat("Sun Intensity", "sunIntensity", ref _data.RnmBakeSyncSunIntensity, ref _data.RnmBakeOverrideSunIntensity, 0f, 10f);
+            DrawBakeSyncColor("Shadow Color", "shadowColor", ref _data.RnmBakeSyncShadowColor, ref _data.RnmBakeOverrideShadowColor);
+
+            EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+            // No "Sync from Environment" concept here (there's no matching
+            // info.bdf field to track) — a plain slider, same as this panel's
+            // sibling tabs' own non-Environment-backed values (e.g. Simplify
+            // Ratio). One shared value for both Bake Lighting (core) and
+            // Background's own "Bake Background Lighting" button — see
+            // SC2TerrainData.RnmBakeShadowSoftRadius's own doc comment for why
+            // there's only one, matching every other Lighting Bake Input above.
+            _data.RnmBakeShadowSoftRadius = Mathf.RoundToInt(DrawCompactSlider("Shadow sharpness", _data.RnmBakeShadowSoftRadius, 0f, 24f, "rnmbake:shadowSharpness"));
+            DrawUnifiedNote("Lower = sharper shadow edges, higher = softer. The Background bake uses the same value.");
+        }
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+
+        // Rarely changed and long once several objects are in the scene, so it starts folded.
+        _bakeShadowCastingExpanded = DrawFoldoutHeader("Shadow casting", _bakeShadowCastingExpanded);
+        if (_bakeShadowCastingExpanded)
+            DrawShadowCastingSection();
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+
+        if (Session?.Document != null)
+        {
+            _bakeImportedExpanded = DrawFoldoutHeader("Imported objects", _bakeImportedExpanded);
+            if (_bakeImportedExpanded)
+                DrawImportedRnmBakeSection();
+        }
     }
+
+    /// <summary>One bake for the whole map: the core terrain with its imported layers and, when the background is on, the
+    /// background's own masks. The two share the sun and shadow settings and the shadow rules, so they run one after the other
+    /// behind one busy plate and report one status.</summary>
+    private void BakeAllLighting()
+    {
+        SC2BusyOverlay.RunInBackground("Baking lighting",
+            "Calculating the lighting and shadows of every texel of the terrain and of the background. This can take a while.", () =>
+            {
+                if (_data == null) return null;
+                RecordUndoCheckpoint("Bake Lighting");
+                var background = _data.BackgroundTerrainEnabled ? _data.BackgroundTerrainData : null;
+                if (background != null) RecordUndoCheckpointFor(background, "Bake Background Lighting");
+
+                string coreStatus = null, backgroundStatus = null;
+                void Publish()
+                {
+                    _bakeStatus = string.IsNullOrEmpty(coreStatus) ? backgroundStatus ?? ""
+                        : string.IsNullOrEmpty(backgroundStatus) ? coreStatus
+                        : coreStatus + "\n" + backgroundStatus;
+                    EditorUtility.SetDirty(_data);
+                    MarkDirtyAndRepaint();
+                }
+                var imported = GetImportedTerrainsForExport?.Invoke();
+                var core = SC2RnmBakeService.BeginBake(_data, imported, Session, CommitImportedRnmMasks, status => { coreStatus = status; Publish(); });
+                var backgroundBake = background != null
+                    ? SC2RnmBakeService.BeginBakeBackground(_data, imported, Session, status => { backgroundStatus = status; Publish(); })
+                    : null;
+                if (core == null && backgroundBake == null) return null;
+                return () =>
+                {
+                    var coreApply = core?.Invoke();
+                    var backgroundApply = backgroundBake?.Invoke();
+                    return () => { coreApply?.Invoke(); backgroundApply?.Invoke(); };
+                };
+            }, ex => _bakeStatus = "Bake failed: " + ex.Message);
+    }
+
+    private bool _bakeInputsExpanded = true;
+    private bool _bakeShadowCastingExpanded;
+    private bool _bakeImportedExpanded = true;
 
     // ── Lighting Bake > Shadow Casting ──────────────────────────────────────
     // Which object (core terrain, background, each imported terrain.bdf) shadows which in the lighting bake; stored on the
@@ -1736,9 +1758,7 @@ public class SC2TerrainShell : ScriptableObject
 
     private void DrawShadowCastingSection()
     {
-        EditorGUILayout.Space(10);
         var w = GetUnifiedContentWidth();
-        DrawUnifiedSectionLabel("Shadow Casting");
 
         var objects = new System.Collections.Generic.List<(string Id, string Name)> { (SC2ShadowCasting.CoreId, "Core terrain") };
         if (_data.BackgroundTerrainEnabled && _data.BackgroundTerrainData != null)
@@ -1754,22 +1774,26 @@ public class SC2TerrainShell : ScriptableObject
         foreach (var o in objects) ids.Add(o.Id);
         var changed = false;
 
-        DrawUnifiedNote("Choose which objects cast a shadow onto which. Everything shadows everything by default. Applies to Bake Lighting and Bake Background Lighting, so re-bake after changing it.");
+        DrawUnifiedNote("Which object casts a shadow onto which. By default everything shadows everything. Applies to both bakes, so bake again after a change.");
         foreach (var caster in objects)
         {
-            GUILayout.Label($"{caster.Name} casts shadows on", EditorStyles.boldLabel);
+            BeginUnifiedPanelBox();
+            var innerWidth = GetUnifiedContentWidth();
+            GUILayout.Label($"{caster.Name} casts shadows on", EditorStyles.miniBoldLabel);
+            EditorGUILayout.Space(SC2UiScale.Pxf(3f));
             foreach (var receiver in objects)
             {
-                var label = receiver.Id == caster.Id ? "Itself" : receiver.Name;
+                var label = receiver.Id == caster.Id ? " Itself" : " " + receiver.Name;
                 var casts = SC2ShadowCasting.Casts(rules, caster.Id, receiver.Id);
-                var next = GUILayout.Toggle(casts, label, GUILayout.Width(w), GUILayout.MaxWidth(w));
+                var next = GUILayout.Toggle(casts, label, GUILayout.Width(innerWidth), GUILayout.MaxWidth(innerWidth));
                 if (next != casts) changed |= SC2ShadowCasting.SetCasts(rules, caster.Id, receiver.Id, next);
             }
-            GUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+            EditorGUILayout.Space(SC2UiScale.Pxf(3f));
+            GUILayout.BeginHorizontal(GUILayout.Width(innerWidth), GUILayout.MaxWidth(innerWidth));
             if (GUILayout.Button("All")) changed |= SC2ShadowCasting.SetCastsOnAll(rules, caster.Id, ids, true);
             if (GUILayout.Button("None")) changed |= SC2ShadowCasting.SetCastsOnAll(rules, caster.Id, ids, false);
             GUILayout.EndHorizontal();
-            EditorGUILayout.Space(4);
+            EndUnifiedPanelBox();
         }
         if (objects.Count == 1)
             DrawUnifiedNote("Only the core terrain is in the scene. Imported terrain.bdf objects and the background show up here as objects of their own.");
@@ -1885,31 +1909,31 @@ public class SC2TerrainShell : ScriptableObject
         // pass and the repaint that follows it.
         while (_pendingImportedRnmActions.Count > 0) _pendingImportedRnmActions.Dequeue()();
 
-        EditorGUILayout.Space(10);
-        DrawUnifiedSectionLabel("Imported Objects");
-        DrawUnifiedNote("Bake lighting onto imported terrain.bdf objects that bring their own UV2. Create masks here (separate from the terrain's mask01/background), assign each LAYER of an object to a mask — several layers or objects may share one mask if their UV2 doesn't overlap — then press Bake Lighting. The layer's material needs RNM Lighting on.");
+        DrawUnifiedNote("Bake lighting onto imported terrain.bdf objects that carry their own UV2. Create a mask, assign each layer to it (layers can share a mask if their UV2 islands do not overlap), then press Bake Lighting. The layer's material needs RNM Lighting on.");
 
         var masks = document.Terrain.ImportedRnm.MaskSets;
         var objects = GetImportedRnmTargets?.Invoke() ?? new System.Collections.Generic.List<SC2ImportedRnmObjectInfo>();
 
         // ---- masks
-        SC2EnvFieldGui.SectionLabel("Masks");
+        DrawUnifiedSectionLabel("Masks");
         if (masks.Count == 0)
-            DrawUnifiedNote("No masks yet — press \"+ New mask\".");
+            DrawUnifiedNote("No masks yet. Press \"+ New mask\".");
         var resLabels = new[] { "512", "1024", "2048", "4096" };
         foreach (var set in masks)
         {
             var users = 0;
             foreach (var o in objects) foreach (var l in o.Layers) if (l.MaskName == set.Name) users++;
+            BeginUnifiedPanelBox();
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"{set.Name}  —  {(SC2.MapEditor.Document.SC2ImportedRnmMasks.HasBake(set) ? "baked" : "not baked")}, {users} layer(s)");
-            GUILayout.FlexibleSpace();
+            GUILayout.Label(set.Name, EditorStyles.miniBoldLabel, GUILayout.ExpandWidth(true));
             if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(60f))))
             {
                 var name = set.Name;
                 _pendingImportedRnmActions.Enqueue(() => DeleteImportedRnmMask(name));
             }
             GUILayout.EndHorizontal();
+            GUILayout.Label($"{(SC2.MapEditor.Document.SC2ImportedRnmMasks.HasBake(set) ? "Baked" : "Not baked")}, {users} layer(s)", EditorStyles.miniLabel);
+            EditorGUILayout.Space(SC2UiScale.Pxf(3f));
 
             var resIndex = System.Array.IndexOf(SC2.MapEditor.Document.SC2ImportedRnmMasks.Resolutions, set.Width);
             var newRes = GUILayout.SelectionGrid(resIndex < 0 ? 1 : resIndex, resLabels, 4);
@@ -1920,17 +1944,18 @@ public class SC2TerrainShell : ScriptableObject
                 _pendingImportedRnmActions.Enqueue(() => ResizeImportedRnmMask(name, size));
             }
             if (users > 1)
-                DrawUnifiedNote($"{users} layers share \"{set.Name}\" — their UV2 islands must not overlap.");
+                DrawUnifiedNote($"{users} layers share this mask: their UV2 islands must not overlap.");
+            EndUnifiedPanelBox();
         }
-        if (GUILayout.Button("+ New mask"))
+        if (GUILayout.Button("+ New mask", GUILayout.Height(SC2UiScale.Pxf(24f))))
             _pendingImportedRnmActions.Enqueue(AddImportedRnmMask);
 
         // ---- layers
-        EditorGUILayout.Space(6);
-        SC2EnvFieldGui.SectionLabel("Layers");
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+        DrawUnifiedSectionLabel("Layers");
         if (objects.Count == 0)
         {
-            DrawUnifiedNote("No imported terrain.bdf in the scene — use File > Import terrain.bdf.");
+            DrawUnifiedNote("No imported terrain.bdf in the scene. Use File > Import terrain.bdf.");
             return;
         }
         var options = new string[masks.Count + 1];
@@ -1938,11 +1963,13 @@ public class SC2TerrainShell : ScriptableObject
         for (var i = 0; i < masks.Count; i++) options[i + 1] = masks[i].Name;
         foreach (var obj in objects)
         {
-            GUILayout.Label(obj.Name, EditorStyles.boldLabel);
+            BeginUnifiedPanelBox();
+            GUILayout.Label(obj.Name, EditorStyles.miniBoldLabel);
             for (var li = 0; li < obj.Layers.Count; li++)
             {
                 var layer = obj.Layers[li];
-                GUILayout.Label($"{layer.MaterialName}  ({layer.Triangles} tris)");
+                EditorGUILayout.Space(SC2UiScale.Pxf(4f));
+                GUILayout.Label($"{layer.MaterialName}  ({layer.Triangles} tris)", EditorStyles.miniLabel);
                 var current = 0;
                 for (var i = 0; i < masks.Count; i++) if (masks[i].Name == layer.MaskName) current = i + 1;
                 var chosen = GUILayout.SelectionGrid(current, options, Mathf.Min(options.Length, 3));
@@ -1957,6 +1984,7 @@ public class SC2TerrainShell : ScriptableObject
                     });
                 }
             }
+            EndUnifiedPanelBox();
         }
     }
 

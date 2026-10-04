@@ -6726,19 +6726,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_importedTerrains.Count > 0 && data != null)
             DrawImportOnlyToggle(data, width);
 
-        // Drawn even when the visible list is empty — otherwise removing the
-        // only imported entry (via "Remove From Scene" below) would strand
-        // the user with no way to reach Undo to bring it back.
-        EditorGUILayout.BeginHorizontal(GUILayout.Width(width), GUILayout.MaxWidth(width));
-        EditorGUI.BeginDisabledGroup(_importedUndoStack.Count == 0);
-        if (GUILayout.Button($"↩ Undo ({_importedUndoStack.Count})")) ImportedTerrainsUndo();
-        EditorGUI.EndDisabledGroup();
-        EditorGUI.BeginDisabledGroup(_importedRedoStack.Count == 0);
-        if (GUILayout.Button($"↪ Redo ({_importedRedoStack.Count})")) ImportedTerrainsRedo();
-        EditorGUI.EndDisabledGroup();
-        EditorGUILayout.EndHorizontal();
-        EditorGUILayout.Space(SC2UiScale.Pxf(8f));
-
         if (_importedTerrains.Count == 0)
         {
             SC2TerrainShell.DrawUnifiedNote("No terrain.bdf imported yet — use File → Import terrain.bdf.");
@@ -6797,7 +6784,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             {
                 _deleteGeometryExpanded = SC2TerrainShell.DrawFoldoutHeader("Delete material geometry", _deleteGeometryExpanded);
                 if (_deleteGeometryExpanded)
-                    SC2TerrainShell.DrawUnifiedNote("Permanently removes a material's triangles from the imported mesh. Not covered by the Undo above. Asks to confirm.");
+                    SC2TerrainShell.DrawUnifiedNote("Permanently removes a material's triangles from the imported mesh. Cannot be undone. Asks to confirm.");
                 for (var mi = 0; _deleteGeometryExpanded && mi < materials.Count; mi++)
                 {
                     var mat = materials[mi];
@@ -6810,7 +6797,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     {
                         var triCount = CountImportedLayerTriangles(entry.Model, mi);
                         if (EditorUtility.DisplayDialog("Delete material geometry",
-                            $"Permanently remove '{label}' ({triCount} triangles) from this imported object?\n\nThis cannot be undone via this panel's ↩ Undo."
+                            $"Permanently remove '{label}' ({triCount} triangles) from this imported object?\n\nThis cannot be undone."
                             + (materials.Count == 1 ? "\n\nThis is the last material — the whole imported object will be removed." : ""),
                             "Delete", "Cancel"))
                         {
