@@ -18,7 +18,8 @@ public class SC2TerrainShell : ScriptableObject
     public enum PreviewMode { Textured, TexturedRNM, MatColors, PairColors, Slope, HeightGradient }
 
     private EditorMode  _mode  = EditorMode.Geometry;
-    private PreviewMode _prev  = PreviewMode.Textured;
+    // RNM is the view a map is meant to be seen in, so it is what a map opens with (see SetData as well).
+    private PreviewMode _prev  = PreviewMode.TexturedRNM;
     private float _heightGradientMin = 0f;
     private float _heightGradientMax = 200f;
     // 0=Standard, 1=Steel, 2=Zebra, 3=Tan, 4=Dark, 5=Normal — see
@@ -702,7 +703,10 @@ public class SC2TerrainShell : ScriptableObject
         // a later, unrelated rebuild (e.g. touching a material in the picker)
         // would ever correct. The 150ms delay here is the same margin already
         // trusted for that exact class of "let things settle first" concern.
+        // A map opens in RNM, whatever view the previous one was left in.
+        _prev = PreviewMode.TexturedRNM;
         SchedulePreviewBuild();
+        OnPreviewModeChanged?.Invoke(_prev);
         Repaint();
         // Lets sibling shells this class has no direct reference to (e.g.
         // SC2ObjectsShell, owned alongside this one by SC2GameViewEditorUI)
