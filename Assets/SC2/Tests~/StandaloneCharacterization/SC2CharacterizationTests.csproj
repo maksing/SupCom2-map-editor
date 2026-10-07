@@ -114,7 +114,6 @@
     <!-- Built-in brush image paths. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2BrushPresets.cs" Link="Source\SC2BrushPresets.cs" />
     <!-- Distance-based dabs of a custom stamp stroke. -->
-    <Compile Include="$(SC2Root)\Scripts\Core\SC2StampStroke.cs" Link="Source\SC2StampStroke.cs" />
     <!-- Which terrain surface (core / background) a brush reaches. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SeamReach.cs" Link="Source\SC2SeamReach.cs" />
     <!-- Which object shadows which in the lighting bake. -->

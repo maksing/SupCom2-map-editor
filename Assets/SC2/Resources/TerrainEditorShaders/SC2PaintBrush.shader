@@ -23,7 +23,6 @@ Shader "Hidden/SC2/PaintBrush"
             int    _PaintMode;      // 0=paint(hard) 1=erase 2=soft(RNM blend)
                                     // 3=soft paint into a blend mask LAYER (R value, G coverage)
                                     // 4=soft erase from a blend mask LAYER (lowers G coverage, keeps R)
-                                    // 5=clear the stroke envelope kept in B of a blend mask LAYER (start of a stroke)
 
             // Optional custom stamp for Soft-blend (RNM) painting only — Pair
             // assign/erase (modes 0/1) always keep the built-in round brush
@@ -77,10 +76,6 @@ Shader "Hidden/SC2/PaintBrush"
             {
                 float4 src    = tex2D(_MainTex, i.uv);
                 float2 offset = (i.uv - _BrushUV) / _BrushRadius;
-                // 5 = start of a stroke: clears the blue channel of a blend mask LAYER, where a custom stamp keeps the strongest
-                // amplitude any dab of the stroke has had at the pixel (see below).
-                if (_PaintMode == 5)
-                    return float4(src.r, src.g, 0.0, 1.0);
                 if (_LockMode > 0.5 && PairIsLocked(src, i.uv))
                     return src;
 
@@ -133,22 +128,6 @@ Shader "Hidden/SC2/PaintBrush"
                     float4 stampSample = tex2D(_BrushTex, stampUv);
                     float  luminance   = dot(stampSample.rgb, float3(0.299, 0.587, 0.114));
                     float  amt         = luminance * stampSample.a * _BrushStrength;
-                    if (_PaintMode >= 3)
-                    {
-                        // A stamp on a mask layer only adds what its dabs reach at the pixel at most over the whole stroke (the
-                        // envelope, kept in blue): dozens of dabs landing on the same pixel as the mouse crawls no longer add up and
-                        // saturate it, so the stamp's pattern is not lost in a flat blob. The step moves the value the share of
-                        // the way to the target that takes the envelope from its old to its new value; the steps together
-                        // equal one lerp by the final envelope.
-                        // (The envelope lives in an 8-bit channel: amplitudes are rounded to its steps first so the stored value
-                        // is exactly the one the step used.)
-                        float previousMax = src.b;
-                        float grown = max(previousMax, floor(amt * 255.0 + 0.5) / 255.0);
-                        float share = (grown - previousMax) / max(1.0 - previousMax, 0.0001);
-                        float4 stepped = ApplySoft(src, share);
-                        stepped.b = grown;
-                        return stepped;
-                    }
                     return ApplySoft(src, amt);
                 }
 
