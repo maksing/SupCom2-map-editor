@@ -113,6 +113,7 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2AxisRotation.cs" Link="Source\SC2AxisRotation.cs" />
     <!-- Built-in brush image paths. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2BrushPresets.cs" Link="Source\SC2BrushPresets.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2StampGesture.cs" Link="Source\SC2StampGesture.cs" />
     <!-- Distance-based dabs of a custom stamp stroke. -->
     <!-- Which terrain surface (core / background) a brush reaches. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SeamReach.cs" Link="Source\SC2SeamReach.cs" />

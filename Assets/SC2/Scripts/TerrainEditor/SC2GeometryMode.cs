@@ -99,6 +99,13 @@ public class SC2GeometryMode
     private bool    _brushVis, _isPainting;
     private double  _lastApply;
     private const double kMinInterval = 0.016;
+    // "Place as stamp": the custom brush lays the stamp down once, sized and turned by a press-drag-release (see SC2StampPlacement).
+    // A stamp raises, lowers or roughens by Strength (its alpha) x _stampHeight world units at its brightest point.
+    private readonly SC2StampPlacement _stamp = new SC2StampPlacement();
+    private float _stampHeight = 8f;
+    // SculptBrush adds falloff x strength x this per dab (dt = strength * 0.016 * 60), and Smooth moves a vertex half of that toward
+    // its neighbours' average.
+    private const float SculptHeightPerStrength = 0.96f;
 
     // F interactive resize, Blender-style — see
     // SC2BrushRadiusGesture's own doc comment.
@@ -219,6 +226,9 @@ public class SC2GeometryMode
         if (_win.Data.UseCustomGeometryBrush)
         {
             DrawCustomGeometryBrushPicker();
+            _stamp.DrawOptions("geometry");
+            if (_stamp.Enabled && (_tool == Tool.Raise || _tool == Tool.Lower || _tool == Tool.Noise))
+                _stampHeight = SC2TerrainShell.DrawCompactSlider("Stamp height", _stampHeight, 0.5f, 200f, "geometry-stamp-height");
             var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", _win.Data.RandomizeGeometryBrushRotation);
             if (nextRandomize != _win.Data.RandomizeGeometryBrushRotation)
             {
@@ -475,7 +485,7 @@ public class SC2GeometryMode
         if (e == null || camera == null)
             return;
 
-        if (!viewportRect.Contains(mousePosition) && !_isPainting)
+        if (!viewportRect.Contains(mousePosition) && !_isPainting && !_stamp.Active)
             return;
 
         HandleScroll(e);
@@ -609,6 +619,14 @@ public class SC2GeometryMode
 
     void DrawGameViewGizmo(Camera camera, Rect viewportRect)
     {
+        if (_stamp.Active)
+        {
+            // A stamp being placed: the preview sits at its anchor, not under the mouse.
+            SC2StampPreview.Draw(camera, viewportRect, _stamp.Gesture.Anchor, _stamp.Gesture.Radius, _stamp.Gesture.AngleRad, _customGeoBrushCache,
+                _strength, new Color(1f, 1f, 0.1f, 0.95f), SampleActiveHeight, _stamp.Readout(_strength),
+                _tool == Tool.Raise ? _stampHeight : _tool == Tool.Lower ? -_stampHeight : 0f);
+            return;
+        }
         if (!_brushVis) return;
 
         SC2TerrainShell.DrawGameViewBrush(
@@ -803,6 +821,23 @@ public class SC2GeometryMode
         if (background) _strokeTouchedBackground = true; else _strokeTouchedCore = true;
     }
 
+    /// <summary>Places a stamp the user sized and turned with a press-drag-release: replays the ordinary stroke (a first dab, then the
+    /// stroke's end) at the anchor with that radius and angle, so symmetry, the seam, flatten planes and undo work as for any other dab.</summary>
+    void PlaceStamp(Event release, Vector3 anchor, float radius, float angleRad)
+    {
+        var savedPos = _brushPos; var savedRadius = _radius;
+        _brushPos = anchor; _radius = radius;
+        try
+        {
+            _stamp.Replay(angleRad, () =>
+            {
+                HandleInput(SC2StampPlacement.SyntheticPress(release));
+                HandleInput(release);
+            });
+        }
+        finally { _brushPos = savedPos; _radius = savedRadius; }
+    }
+
     void HandleInput(Event e)
     {
         if (!_brushVis || _win.ActiveRuntime == null) return;
@@ -831,6 +866,15 @@ public class SC2GeometryMode
             _win.RecordUndoCheckpointFor(Data, "Pick Height");
             _setHeight = SC2TerrainData.ClampHeight(_brushPos.y);
             e.Use();
+            _win.Repaint();
+            return;
+        }
+
+        // A custom brush in "Place as stamp" mode: press anchors, drag sizes and turns it, release places it once (by replaying an
+        // ordinary first dab below with the chosen size and angle).
+        if (_win.Data.UseCustomGeometryBrush && _stamp.Enabled && _customGeoBrushCache != null && !_stamp.Applying
+            && _stamp.HandleEvent(e, _brushPos, _radius, Data.CellSize, _win.Data.RandomizeGeometryBrushRotation, (anchor, radius, angle) => PlaceStamp(e, anchor, radius, angle)))
+        {
             _win.Repaint();
             return;
         }
@@ -921,8 +965,8 @@ public class SC2GeometryMode
             // and (re)build the readable-pixel cache the mask sampler needs
             // — see _geoBrushRotationRad/EnsureGeoBrushPixelCache's own doc
             // comments.
-            _geoBrushRotationRad = (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation)
-                ? Random.Range(0f, Mathf.PI * 2f) : 0f;
+            _geoBrushRotationRad = _stamp.Applying ? _stamp.AppliedRotation
+                : (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation) ? Random.Range(0f, Mathf.PI * 2f) : 0f;
             EnsureGeoBrushPixelCache();
             _flattenPlanes = System.Array.Empty<SC2FlattenPlane>(); // "Original plane" is re-sampled for every stroke
             _lastFlattenDab = null;
@@ -943,7 +987,7 @@ public class SC2GeometryMode
         // still rolls once per stroke (mouse-down) and holds it fixed for
         // the drag; this one re-rolls on every single application (down AND
         // every drag frame that passes the throttle above).
-        if (_win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation && _win.Data.RandomizeGeometryBrushRotationContinuous)
+        if (!_stamp.Applying && _win.Data.UseCustomGeometryBrush && _win.Data.RandomizeGeometryBrushRotation && _win.Data.RandomizeGeometryBrushRotationContinuous)
             _geoBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
 
         // A little wider than the nominal brush radius when notifying
@@ -1050,6 +1094,14 @@ public class SC2GeometryMode
             var effectiveStrength = appliesRadiusCompensation
                 ? _strength * (_radius / StrengthRadiusReference)
                 : _strength;
+            if (_stamp.Applying)
+            {
+                // One dab places the whole stamp: Strength is its alpha, and it moves the ground by _stampHeight at its brightest point.
+                if (_tool == Tool.Raise || _tool == Tool.Lower || _tool == Tool.Noise)
+                    effectiveStrength = _strength * _stampHeight / SculptHeightPerStrength;
+                else if (_tool == Tool.Smooth)
+                    effectiveStrength = _strength * 2f / SculptHeightPerStrength;
+            }
             var sculptPositions = _win.Data.GetSymmetricPositions(_brushPos);
             for (var slot = 0; slot < sculptPositions.Count; slot++)
             {

@@ -71,6 +71,9 @@ public class SC2PaintMode
     private bool _assignLockFoldout, _blendLockFoldout;
 
 
+    // "Place as stamp": the custom brush lays the stamp down once, sized and turned by a press-drag-release (see SC2StampPlacement).
+    private readonly SC2StampPlacement _stamp = new SC2StampPlacement();
+
     private bool  _autoOutline = false;
     private float _outlineWidth = 8f;
     private float _outlineSoftness = 0.5f;
@@ -343,6 +346,7 @@ public class SC2PaintMode
         if (_win.Data.UseCustomBrush)
         {
             DrawCustomBrushPicker();
+            _stamp.DrawOptions("blend");
             var nextRandomize = EditorGUILayout.Toggle("Randomize Rotation", _win.Data.RandomizeBrushRotation);
             if (nextRandomize != _win.Data.RandomizeBrushRotation)
             {
@@ -999,7 +1003,7 @@ public class SC2PaintMode
         if (e == null || camera == null)
             return;
         FlushPendingComposites();
-        if (!viewportRect.Contains(mousePosition) && !_isPainting)
+        if (!viewportRect.Contains(mousePosition) && !_isPainting && !_stamp.Active)
             return;
 
         HandleScroll(e);
@@ -1105,6 +1109,14 @@ public class SC2PaintMode
 
     void DrawGameViewGizmo(Camera camera, Rect viewportRect)
     {
+        if (_stamp.Active && _sub == Sub.RNM)
+        {
+            // A stamp being placed: the preview sits at its anchor, not under the mouse.
+            var erasingStamp = _rnmErase || (Event.current != null && Event.current.control);
+            SC2StampPreview.Draw(camera, viewportRect, _stamp.Gesture.Anchor, _stamp.Gesture.Radius, _stamp.Gesture.AngleRad, _customBrushCache,
+                _strength, erasingStamp ? new Color(1f, .3f, .25f, .95f) : new Color(0f, .85f, 1f, .95f), SampleActiveHeight, _stamp.Readout(_strength));
+            return;
+        }
         if (!_brushVis) return;
         Color col;
         if (_sub == Sub.Assign) col = new Color(1f, .55f, 0f, .95f);
@@ -1264,6 +1276,14 @@ public class SC2PaintMode
     void HandleRnm(Event e)
     {
         if (!_brushVis || _win.ActiveRuntime == null) return;
+        // A custom brush in "Place as stamp" mode: press anchors, drag sizes and turns it, release places it once (by replaying an
+        // ordinary first dab below with the chosen size and angle).
+        if (_win.Data.UseCustomBrush && _stamp.Enabled && _customBrushCache != null && !_stamp.Applying
+            && _stamp.HandleEvent(e, _brushPos, _radius, _win.Data.CellSize, _win.Data.RandomizeBrushRotation, (anchor, radius, angle) => PlaceStamp(e, anchor, radius, angle)))
+        {
+            _win.Repaint();
+            return;
+        }
         var offset = _win.ActiveWorldOffset;
         var down = e.type == EventType.MouseDown && e.button == 0 && !e.alt;
         var drag = e.type == EventType.MouseDrag  && e.button == 0 && !e.alt;
@@ -1308,8 +1328,8 @@ public class SC2PaintMode
             _isPainting = true;
             // Roll a fresh stamp rotation for this stroke only —
             // see _rnmBrushRotationRad's own doc comment.
-            _rnmBrushRotationRad = (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation)
-                ? Random.Range(0f, Mathf.PI * 2f) : 0f;
+            _rnmBrushRotationRad = _stamp.Applying ? _stamp.AppliedRotation
+                : (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation) ? Random.Range(0f, Mathf.PI * 2f) : 0f;
             // Ensure correct pair's blend RT is active before painting.
             // Core routes through CombinedUndo's own dedicated RNM-blend
             // channel; the background has no such channel (its own snapshot
@@ -1340,7 +1360,7 @@ public class SC2PaintMode
         // frame that passes the throttle above), so continuously dragging
         // the mouse keeps stamping fresh random orientations instead of one
         // fixed one for the whole stroke.
-        if (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation && _win.Data.RandomizeBrushRotationContinuous)
+        if (!_stamp.Applying && _win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation && _win.Data.RandomizeBrushRotationContinuous)
             _rnmBrushRotationRad = Random.Range(0f, Mathf.PI * 2f);
 
         var symmetricPositions = _win.Data.GetSymmetricPositions(_brushPos);
@@ -1364,6 +1384,23 @@ public class SC2PaintMode
         SceneView.RepaintAll();
 #endif
         e.Use();
+    }
+
+    /// <summary>Places a stamp the user sized and turned with a press-drag-release: replays the ordinary stroke (a first dab, then the
+    /// stroke's end) at the anchor with that radius and angle, so symmetry, locks, layers and undo work as for any other dab.</summary>
+    void PlaceStamp(Event release, Vector3 anchor, float radius, float angleRad)
+    {
+        var savedPos = _brushPos; var savedRadius = _radius;
+        _brushPos = anchor; _radius = radius;
+        try
+        {
+            _stamp.Replay(angleRad, () =>
+            {
+                HandleRnm(SC2StampPlacement.SyntheticPress(release));
+                HandleRnm(release);
+            });
+        }
+        finally { _brushPos = savedPos; _radius = savedRadius; }
     }
 
     // ── RNM blend undo ──────────────────────────────────────────────

@@ -1187,6 +1187,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // minimap/preview capture has to render before this method's own
         // prop/marker/pick-dot draw calls, not after.
         SC2MapPreviewCapture.ProcessPendingCapture();
+        SC2StampPreview.HideIfStale();
 
         // THE fix for the editor-UI-baked-into-the-blend-mask bug. IMGUI
         // (OnGUI) captures the "current" render target ONCE at the start of the
