@@ -4749,11 +4749,11 @@ public class SC2TerrainShell : ScriptableObject
     private bool _forceRnmOverlay;
     public bool ForceRnmOverlay => _forceRnmOverlay;
 
-    // Tracks the RnmBakeGeneration last used to refresh RnmPreviewMask0/1/2
-    // in ApplyPreviewModeToChunksFor — see that method's own comment on why
-    // this gate exists (that refresh is expensive and this method runs on
-    // nearly every repaint while PreviewMode==4 is active).
-    private int _lastRnmPreviewGeneration = -1;
+    // The RnmBakeGeneration last used to refresh RnmPreviewMask0/1/2, per terrain (the core and the background each hold their
+    // own pairs) — see ApplyPreviewModeToChunksFor's own comment on why this gate exists (that refresh is expensive and the
+    // method runs on nearly every repaint while PreviewMode==4 is active). One counter for both would let the core's refresh
+    // mark the generation as done before the background's pairs were refreshed.
+    private readonly Dictionary<SC2TerrainData, int> _rnmPreviewGeneration = new Dictionary<SC2TerrainData, int>();
 
     /// <summary>Forces the RNM-textured shader mode (PreviewMode.TexturedRNM's
     /// shaderMode==4) regardless of the Terrain tab's own selected preview
@@ -5255,10 +5255,18 @@ public class SC2TerrainShell : ScriptableObject
         // remaining RNM-mode-only lag (the array-rebuild gate added earlier
         // only covered RebuildRnmArrays itself, not this upstream step).
         // Only worth redoing when the bake data has actually changed.
-        if (shaderMode == 4 && _lastRnmPreviewGeneration != _data.RnmBakeGeneration)
+        if (shaderMode == 4)
         {
-            foreach (var pair in data.Pairs) pair.RefreshRnmPreviewTextures();
-            _lastRnmPreviewGeneration = _data.RnmBakeGeneration;
+            var stale = !_rnmPreviewGeneration.TryGetValue(data, out var refreshedGeneration) || refreshedGeneration != _data.RnmBakeGeneration;
+            // A pair created after the last refresh (undo, a regenerated background) carries baked bytes but no textures yet.
+            if (!stale)
+                foreach (var pair in data.Pairs)
+                    if (pair.RnmPreviewMask0 == null && pair.HasBakedRnmLighting) { stale = true; break; }
+            if (stale)
+            {
+                foreach (var pair in data.Pairs) pair.RefreshRnmPreviewTextures();
+                _rnmPreviewGeneration[data] = _data.RnmBakeGeneration;
+            }
         }
         for (var i = 0; i < n; i++)
         {
