@@ -681,28 +681,47 @@ public static class SC2RnmMaskBaker
         }
     }
 
-    /// <summary>Mirrors SC2HfieldProjectionService.FillGaps, extended to 3 RGB
-    /// arrays + shadow alpha at once - texels no triangle covers (mask
-    /// resolution finer than geometry, or map edges) get a nearest-neighbour
-    /// average instead of staying at zero/black.</summary>
-    private static void FillGapsRgb(byte[] rgb0, byte[] rgb1, byte[] rgb2, byte[] shadowAlpha, bool[] written, int w, int h)
+    /// <summary>Texels no triangle covers (a map edge, a UV gap, the hole the background leaves for the core) take the average of
+    /// their already-filled neighbours, ring by ring from the covered texels outward until nothing is left, so no texel stays at
+    /// the default dark value. A gap of any width is filled: the background's own hole is hundreds of texels across, and a texel
+    /// left dark there bleeds through bilinear filtering into the texels next to the seam as a black band.</summary>
+    internal static void FillGapsRgb(byte[] rgb0, byte[] rgb1, byte[] rgb2, byte[] shadowAlpha, bool[] written, int w, int h)
     {
-        for (var pass = 0; pass < 5; pass++)
+        var queued = new bool[w * h];
+        var frontier = new List<int>();
+        var ring = new List<(int Index, byte R0, byte G0, byte B0, byte R1, byte G1, byte B1, byte R2, byte G2, byte B2, byte A)>();
+        var neighbours = new int[4];
+
+        int Neighbours(int i)
         {
-            var anyFilled = false;
-            for (var y = 0; y < h; y++)
-            for (var x = 0; x < w; x++)
+            var x = i % w; var y = i / w; var count = 0;
+            if (x > 0) neighbours[count++] = i - 1;
+            if (x < w - 1) neighbours[count++] = i + 1;
+            if (y > 0) neighbours[count++] = i - w;
+            if (y < h - 1) neighbours[count++] = i + w;
+            return count;
+        }
+
+        for (var i = 0; i < written.Length; i++)
+        {
+            if (written[i]) continue;
+            var count = Neighbours(i);
+            for (var k = 0; k < count; k++)
+                if (written[neighbours[k]]) { queued[i] = true; frontier.Add(i); break; }
+        }
+
+        while (frontier.Count > 0)
+        {
+            // Every value of a ring is computed from the previous ring only, then the ring is committed at once.
+            ring.Clear();
+            foreach (var i in frontier)
             {
-                var i = y * w + x;
-                if (written[i]) continue;
                 float r0 = 0, g0 = 0, b0 = 0, r1 = 0, g1 = 0, b1 = 0, r2 = 0, g2 = 0, b2 = 0, a = 0;
                 var n = 0;
-                foreach (var (dx, dy) in new[] { (-1, 0), (1, 0), (0, -1), (0, 1) })
+                var count = Neighbours(i);
+                for (var k = 0; k < count; k++)
                 {
-                    var nx = x + dx;
-                    var ny = y + dy;
-                    if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-                    var j = ny * w + nx;
+                    var j = neighbours[k];
                     if (!written[j]) continue;
                     r0 += rgb0[j * 3]; g0 += rgb0[j * 3 + 1]; b0 += rgb0[j * 3 + 2];
                     r1 += rgb1[j * 3]; g1 += rgb1[j * 3 + 1]; b1 += rgb1[j * 3 + 2];
@@ -710,17 +729,31 @@ public static class SC2RnmMaskBaker
                     a += shadowAlpha[j];
                     n++;
                 }
-                if (n > 0)
+                ring.Add((i, (byte)(r0 / n), (byte)(g0 / n), (byte)(b0 / n), (byte)(r1 / n), (byte)(g1 / n), (byte)(b1 / n),
+                    (byte)(r2 / n), (byte)(g2 / n), (byte)(b2 / n), (byte)(a / n)));
+            }
+
+            frontier.Clear();
+            foreach (var t in ring)
+            {
+                var i = t.Index;
+                rgb0[i * 3] = t.R0; rgb0[i * 3 + 1] = t.G0; rgb0[i * 3 + 2] = t.B0;
+                rgb1[i * 3] = t.R1; rgb1[i * 3 + 1] = t.G1; rgb1[i * 3 + 2] = t.B1;
+                rgb2[i * 3] = t.R2; rgb2[i * 3 + 1] = t.G2; rgb2[i * 3 + 2] = t.B2;
+                shadowAlpha[i] = t.A;
+                written[i] = true;
+            }
+            foreach (var t in ring)
+            {
+                var count = Neighbours(t.Index);
+                for (var k = 0; k < count; k++)
                 {
-                    rgb0[i * 3] = (byte)(r0 / n); rgb0[i * 3 + 1] = (byte)(g0 / n); rgb0[i * 3 + 2] = (byte)(b0 / n);
-                    rgb1[i * 3] = (byte)(r1 / n); rgb1[i * 3 + 1] = (byte)(g1 / n); rgb1[i * 3 + 2] = (byte)(b1 / n);
-                    rgb2[i * 3] = (byte)(r2 / n); rgb2[i * 3 + 1] = (byte)(g2 / n); rgb2[i * 3 + 2] = (byte)(b2 / n);
-                    shadowAlpha[i] = (byte)(a / n);
-                    written[i] = true;
-                    anyFilled = true;
+                    var j = neighbours[k];
+                    if (written[j] || queued[j]) continue;
+                    queued[j] = true;
+                    frontier.Add(j);
                 }
             }
-            if (!anyFilled) break;
         }
     }
 }
