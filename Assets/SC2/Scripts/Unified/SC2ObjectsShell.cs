@@ -1962,6 +1962,8 @@ public sealed class SC2ObjectsShell
         _clipboardMarkers.Clear();
         _clipboardUnits.Clear();
         _clipboardPasteCount = 0;
+        _lastPasteCursor = null;
+        _pasteRepeatAtCursor = 0;
 
         foreach (var p in Data.ObjProps.Where(x => _selProps.Contains(x.Id)))
             _clipboardProps.Add(new SC2ObjProp
@@ -2009,12 +2011,11 @@ public sealed class SC2ObjectsShell
     }
 
     /// <summary>Ctrl+V — pastes the clipboard as brand-new objects (fresh
-    /// Ids, unique names) offset from where they were copied, and selects
-    /// the pasted set. Each repeated paste offsets further from the
-    /// originals (via _clipboardPasteCount) so pasting several times in a
-    /// row doesn't stack copies exactly on top of each other or of the
-    /// previous paste.</summary>
-    private void PasteClipboard()
+    /// Ids, unique names) and selects the pasted set. With <paramref name="cursor"/> (the ground point under the mouse) the copied
+    /// set lands centred on it, keeping its own layout; pasting again without moving the mouse nudges the copies so they do not
+    /// stack. Without a cursor the copies are offset from where they were copied, further for every repeated paste
+    /// (_clipboardPasteCount).</summary>
+    private void PasteClipboard(Vector3? cursor = null)
     {
         var total = _clipboardProps.Count + _clipboardMarkers.Count + _clipboardUnits.Count;
         if (total == 0)
@@ -2027,6 +2028,20 @@ public sealed class SC2ObjectsShell
         PushUndo();
         _clipboardPasteCount++;
         var offset = new Vector3(4f * _clipboardPasteCount, 0f, 4f * _clipboardPasteCount);
+        if (cursor.HasValue)
+        {
+            var sum = Vector3.zero;
+            foreach (var p in _clipboardProps) sum += p.Position;
+            foreach (var m in _clipboardMarkers) sum += m.Position;
+            foreach (var u in _clipboardUnits) sum += u.Position;
+            var centre = sum / total;
+            offset = cursor.Value - centre;
+            var sameSpot = _lastPasteCursor.HasValue &&
+                new Vector2(cursor.Value.x - _lastPasteCursor.Value.x, cursor.Value.z - _lastPasteCursor.Value.z).sqrMagnitude < 1f;
+            _pasteRepeatAtCursor = sameSpot ? _pasteRepeatAtCursor + 1 : 0;
+            _lastPasteCursor = cursor;
+            offset += new Vector3(4f * _pasteRepeatAtCursor, 0f, 4f * _pasteRepeatAtCursor);
+        }
 
         _selProps.Clear();
         _selMarkers.Clear();
@@ -5275,6 +5290,10 @@ public sealed class SC2ObjectsShell
     private readonly List<SC2ObjMarker> _clipboardMarkers = new();
     private readonly List<SC2ObjUnitNode> _clipboardUnits = new();
     private int _clipboardPasteCount;
+    // Where the last paste landed (the ground point under the cursor) and how many times in a row it has been pasted at that same
+    // spot, so pasting again without moving the mouse nudges the copies instead of stacking them exactly.
+    private Vector3? _lastPasteCursor;
+    private int _pasteRepeatAtCursor;
 
     // ── Box/marquee select — Select-tool click-drag on empty space selects
     // every object of the CURRENTLY OPEN Objects sub-tab's kind (Props/
@@ -6529,7 +6548,16 @@ public sealed class SC2ObjectsShell
         }
         if (canPick && e != null && e.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.Paste", e))
         {
-            PasteClipboard();
+            // The copies land at the cursor: the ground point under the mouse (imported terrain first, as placement does).
+            Vector3? pasteAt = null;
+            if (viewportRect.Contains(mousePosition))
+            {
+                var pasteRay = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
+                if (TryRaycastImportedTerrain(pasteRay.origin, pasteRay.direction, out var pasteHit) ||
+                    SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, pasteRay, out pasteHit))
+                    pasteAt = pasteHit;
+            }
+            PasteClipboard(pasteAt);
             e.Use();
             RepaintHost?.Invoke();
             return;
