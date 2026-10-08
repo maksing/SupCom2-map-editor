@@ -299,6 +299,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         public string Id = System.Guid.NewGuid().ToString("N");
         public GameObject Root;
         public string DisplayName;
+        // Hidden in the viewport only (session state, like the Objects tab's hidden sets): the renderer is off, but the object stays in
+        // the scene, keeps its collider and still ships in the export.
+        public bool Hidden;
         public List<SC2TerrainMaterialFactory.TextureLoadAttempt> TextureAttempts;
         public BdfIO.Formats.Terrain.TerrainModel Model; // raw parsed model, for merging into "Export terrain.bdf" — see SC2TerrainExporter.MergeImportedTerrain
         // The exact bytes Model was parsed from (SC2TerrainBdfImporter.
@@ -4083,7 +4086,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         for (var i = 0; i < _importedTerrains.Count; i++)
         {
             var root = _importedTerrains[i]?.Root;
-            if (root == null || !root.activeInHierarchy) continue;
+            if (root == null || !root.activeInHierarchy || _importedTerrains[i].Hidden) continue;
             var collider = root.GetComponent<Collider>();
             if (collider == null || !collider.Raycast(ray, out var hit, 1_000_000f) || hit.distance >= pickedDistance) continue;
             pickedDistance = hit.distance;
@@ -5957,7 +5960,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // real deletion — see "Remove From Scene" — and the collider must
         // stay enabled regardless, so height-sampling/raycasting keep
         // working while the mesh is merely hidden).
-        meshRenderer.enabled = _terrainShell == null || _terrainShell.TerrainOverlayVisible;
+        meshRenderer.enabled = !entry.Hidden && (_terrainShell == null || _terrainShell.TerrainOverlayVisible);
 
         // "Hfield"/"RNM" Visibility-menu checkboxes previously only forced
         // the live procedural terrain's shader mode (SC2TerrainShell.
@@ -6871,6 +6874,38 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private bool _deleteGeometryExpanded;
 
+    private void SetImportedHidden(SC2ImportedTerrainEntry entry, bool hidden)
+    {
+        if (entry == null || entry.Hidden == hidden) return;
+        entry.Hidden = hidden;
+        var meshRenderer = entry.Root != null ? entry.Root.GetComponent<MeshRenderer>() : null;
+        // Only the renderer: the collider stays, so placement, decals and the height grid see the object as before (see
+        // ApplyPreviewModeToImportedTerrain). The Terrain visibility toggle still has the last word.
+        if (meshRenderer != null) meshRenderer.enabled = !hidden && (_terrainShell == null || _terrainShell.TerrainOverlayVisible);
+    }
+
+    private void DrawImportedVisibilityControls(SC2ImportedTerrainEntry entry, float width)
+    {
+        var visible = GUILayout.Toggle(!entry.Hidden, " Visible in viewport", GUILayout.Width(width), GUILayout.MaxWidth(width));
+        if (visible == entry.Hidden) SetImportedHidden(entry, !visible);
+
+        if (_importedTerrains.Count > 1)
+        {
+            var anyHidden = _importedTerrains.Any(x => x != null && x.Hidden);
+            EditorGUILayout.BeginHorizontal(GUILayout.Width(width), GUILayout.MaxWidth(width));
+            if (GUILayout.Button("Only This"))
+                foreach (var other in _importedTerrains) SetImportedHidden(other, other != entry);
+            var previousEnabled = GUI.enabled;
+            GUI.enabled = previousEnabled && anyHidden;
+            if (GUILayout.Button("Show All"))
+                foreach (var other in _importedTerrains) SetImportedHidden(other, false);
+            GUI.enabled = previousEnabled;
+            EditorGUILayout.EndHorizontal();
+        }
+        SC2TerrainShell.DrawUnifiedNote("Hiding only takes the object out of the viewport. It still ships in the export and still counts for placement and decals.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+    }
+
     private void DrawImportedTerrainsLeftPanelContent(float width)
     {
         _importedTerrains.RemoveAll(e => e.Root == null);
@@ -6891,13 +6926,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_importedTerrains.Count > 1)
         {
             var names = new string[_importedTerrains.Count];
-            for (var i = 0; i < _importedTerrains.Count; i++) names[i] = _importedTerrains[i].DisplayName;
+            for (var i = 0; i < _importedTerrains.Count; i++)
+                names[i] = _importedTerrains[i].Hidden ? _importedTerrains[i].DisplayName + " (hidden)" : _importedTerrains[i].DisplayName;
             _selectedImportedTerrain = SC2TerrainShell.DrawUnifiedSegmentGrid(_selectedImportedTerrain, names, Mathf.Min(3, names.Length));
             EditorGUILayout.Space(SC2UiScale.Pxf(8f));
         }
 
         var entry = _importedTerrains[_selectedImportedTerrain];
         if (entry.Root == null) return;
+
+        DrawImportedVisibilityControls(entry, width);
 
         SC2TerrainShell.DrawUnifiedSectionLabel("Transform");
         var t = entry.Root.transform;
