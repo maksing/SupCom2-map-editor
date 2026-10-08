@@ -1155,8 +1155,18 @@ public static class SC2TerrainExporter
                     return Mathf.Lerp(Mathf.Lerp(H(x0, z0), H(x1, z0), tx), Mathf.Lerp(H(x0, z1), H(x1, z1), tx), tz);
                 }
 
+                // Land and water are told apart by the 3D model itself, not by the heightfield's one top surface per cell: a bridge over
+                // water would otherwise read as land and leave the river under it dry (see SC2WaterFloorSampler).
+                Func<float, float, float> sampleWaterFloor = SampleHeightForWaterDepth;
+                if (hfieldModel.Heightmap != null && hfieldModel.MapX > 0 && hfieldModel.MapY > 0)
+                {
+                    var floorSampler = SC2WaterFloorSampler.Build(model, (int)hfieldModel.MapX, (int)hfieldModel.MapY,
+                        infoModelForWater.WaterElevation, SC2HfieldProjectionService.IsWaterMaterial);
+                    sampleWaterFloor = (x, z) => floorSampler.Sample(x, z, SampleHeightForWaterDepth);
+                }
+
                 var waterColor = new Color(infoModelForWater.WaterColorR, infoModelForWater.WaterColorG, infoModelForWater.WaterColorB, 1f);
-                SC2WaterDepthTextureGenerator.Generate(data, SampleHeightForWaterDepth, infoModelForWater.WaterElevation,
+                SC2WaterDepthTextureGenerator.Generate(data, sampleWaterFloor, infoModelForWater.WaterElevation,
                     waterColor, out var wdRgb, out var wdAlpha, out var wdTexSize);
                 File.WriteAllBytes(Path.Combine(mapDir, $"{mapName}.waterDepth.dds"),
                     SC2DdsEncoder.BuildDxt5(wdTexSize, wdTexSize, wdRgb, wdAlpha));

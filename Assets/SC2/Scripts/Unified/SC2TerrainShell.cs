@@ -1529,7 +1529,21 @@ public class SC2TerrainShell : ScriptableObject
         DestroyWaterDepthPreview();
         var info = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true);
         var waterColor = new Color(info.WaterColorR, info.WaterColorG, info.WaterColorB, 1f);
-        SC2WaterDepthTextureGenerator.Generate(_data, SampleLiveHeightGrid, info.WaterElevation, waterColor,
+        // Land and water are told apart by the 3D model itself, like the export does (see SC2WaterFloorSampler): a bridge over water
+        // must not make the river under it land.
+        System.Func<float, float, float> sampleWaterFloor = SampleLiveHeightGrid;
+        try
+        {
+            var geometry = SC2TerrainExporter.BuildPreviewGeometryModel(_data, GetImportedTerrainsForExport?.Invoke(), Session, skipSimplification: true);
+            var floorSampler = SC2WaterFloorSampler.Build(geometry, Mathf.Max(1, _data.CostsGridSize) + 1, Mathf.Max(1, _data.CostsGridSize) + 1,
+                info.WaterElevation, SC2HfieldProjectionService.IsWaterMaterial);
+            sampleWaterFloor = (x, z) => floorSampler.Sample(x, z, SampleLiveHeightGrid);
+        }
+        catch (System.Exception exception)
+        {
+            SC2Log.LogWarning("[SC2TerrainShell] Water depth preview: the model's water floor could not be built, using the heightfield. " + exception.Message);
+        }
+        SC2WaterDepthTextureGenerator.Generate(_data, sampleWaterFloor, info.WaterElevation, waterColor,
             out var rgb, out var alpha, out var texSize);
         _waterDepthPreviewTex = SC2WaterDepthTextureGenerator.BuildPreviewTexture(rgb, alpha, texSize);
 
