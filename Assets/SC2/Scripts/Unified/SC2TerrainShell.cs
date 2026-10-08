@@ -5220,6 +5220,39 @@ public class SC2TerrainShell : ScriptableObject
         }
     }
 
+    /// <summary>The pair's SPECULAR_LIGHTING / GLOW / ENVIRONMENT_MAPPING flags for the preview shader. A pair with no flag list yet has
+    /// the editor's defaults (specular on, glow and environment mapping off).</summary>
+    private static int MaskFlagBits(SC2MaterialPair pair)
+    {
+        bool specular = true, glow = false, environment = false;
+        if (pair.ShaderFlags != null)
+            foreach (var flag in pair.ShaderFlags)
+            {
+                if (flag.Key == "SPECULAR_LIGHTING") specular = flag.Value;
+                else if (flag.Key == "GLOW") glow = flag.Value;
+                else if (flag.Key == "ENVIRONMENT_MAPPING") environment = flag.Value;
+            }
+        return (specular ? SC2TerrainRuntime.PairMaterialData.FlagSpecular : 0)
+             | (glow ? SC2TerrainRuntime.PairMaterialData.FlagGlow : 0)
+             | (environment ? SC2TerrainRuntime.PairMaterialData.FlagEnvironment : 0);
+    }
+
+    private string _environmentCubePath;
+    private Cubemap _environmentCube;
+
+    /// <summary>The map's environment cubemap for the preview's environment reflection (null when none is set or it cannot be loaded).
+    /// Loaded once per path.</summary>
+    private Cubemap LoadEnvironmentCube(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (path != _environmentCubePath)
+        {
+            _environmentCubePath = path;
+            _environmentCube = SC2TerrainMaterialFactory.LoadTexturePublicAny(path) as Cubemap;
+        }
+        return _environmentCube;
+    }
+
     /// <summary>Parameterized so the background's own SC2TerrainRuntime can
     /// share this exact same Textured/RNM/Mats/Pairs/Slope logic instead of
     /// a second copy — the shell-level preview-mode state (_prev,
@@ -5290,6 +5323,8 @@ public class SC2TerrainShell : ScriptableObject
             mats[i] = new SC2TerrainRuntime.PairMaterialData
             {
                 Diffuse1 = m1?.Diffuse, Diffuse2 = m2?.Diffuse,
+                Normal1 = m1?.Normal, Normal2 = m2?.Normal, Mask1 = m1?.Mask, Mask2 = m2?.Mask,
+                FlagBits = MaskFlagBits(p),
                 Color1 = m1?.Color ?? Color.grey, Color2 = m2?.Color ?? Color.grey,
                 // The shared tiling size lives only on the CORE's own
                 // SC2TerrainData (it is never set on the background's own
@@ -5308,6 +5343,10 @@ public class SC2TerrainShell : ScriptableObject
         // "there's only one Lighting Bake config" for both core and
         // background bakes — see SC2RnmBakeService.BakeInternal's own
         // bakeSettingsSource parameter).
+        var anyEnvironmentMapping = false;
+        foreach (var pairMaterial in mats)
+            if ((pairMaterial.FlagBits & SC2TerrainRuntime.PairMaterialData.FlagEnvironment) != 0) { anyEnvironmentMapping = true; break; }
+        runtime.SetEnvironmentCube(anyEnvironmentMapping ? LoadEnvironmentCube(_data.EnvironmentMap) : null);
         runtime.SetAllPairMaterials(mats, shaderMode, _data.RnmBakeGeneration);
         runtime.SetHeightGradientOverlay(_prev == PreviewMode.HeightGradient || _forceHfieldOverlay, _heightGradientMin, _heightGradientMax);
         // Map-wide, not tied to core-vs-background — cheap (cache-gated on the

@@ -834,6 +834,8 @@ public class SC2PairsMode
         if (AddMissingFlags(pair.ShaderFlags))
             EditorUtility.SetDirty(Data);
 
+        // SPECULAR_LIGHTING / GLOW / ENVIRONMENT_MAPPING decide what the pair's mask does in the viewport preview, so a change refreshes it.
+        var flagsChanged = false;
         EditorGUI.indentLevel++;
         foreach (var flag in pair.ShaderFlags)
         {
@@ -843,6 +845,7 @@ public class SC2PairsMode
             {
                 _win.RecordUndoCheckpointFor(Data, "Change Shader Flag");
                 flag.Value = newFlagValue;
+                flagsChanged = true;
             }
             EditorGUILayout.LabelField(flag.Key);
             if (flag.Key == "ALPHA_TEST" && flag.Value)
@@ -867,13 +870,20 @@ public class SC2PairsMode
         {
             _win.RecordUndoCheckpointFor(Data, "Shader Flags All ON");
             foreach (var f in pair.ShaderFlags) f.Value = true;
+            flagsChanged = true;
         }
         if (GUILayout.Button("Reset", GUILayout.Height(SC2UiScale.Pxf(20f))))
         {
             _win.RecordUndoCheckpointFor(Data, "Reset Shader Flags");
             pair.ShaderFlags = DefaultFlags();
+            flagsChanged = true;
         }
         EditorGUILayout.EndHorizontal();
+        if (flagsChanged)
+        {
+            if (Data == _win.Data) _win.ApplyPreviewModeToChunks();
+            else _win.RefreshBackgroundRuntime();
+        }
         }
         EditorGUILayout.Space(SC2UiScale.Pxf(14f));
         DrawPairRampAndEnvironment(pair, i);
