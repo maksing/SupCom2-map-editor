@@ -607,6 +607,13 @@ public static class SC2RuntimeTerrainPersistence
         doc.Collision2.Wireframe = data.Collision2Wireframe;
         doc.Collision2.ExcludedMaterialNames = data.Collision2ExcludedMaterialNames != null
             ? new List<string>(data.Collision2ExcludedMaterialNames) : new List<string>();
+        doc.Collision2.FloorEnabled = data.Collision2FloorEnabled;
+        doc.Collision2.FloorHeight = data.Collision2FloorHeight;
+        doc.Collision2.CustomArea = data.Collision2CustomArea;
+        doc.Collision2.AreaMinX = data.Collision2AreaMinX;
+        doc.Collision2.AreaMinZ = data.Collision2AreaMinZ;
+        doc.Collision2.AreaSizeX = data.Collision2AreaSizeX;
+        doc.Collision2.AreaSizeZ = data.Collision2AreaSizeZ;
 
         // Prefer the ACTIVE session's Decals document when one exists —
         // SC2DecalsShell has no legacy SC2TerrainData field to fall back to
@@ -970,6 +977,12 @@ public static class SC2RuntimeTerrainPersistence
         public bool Collision2Wireframe;
         // Collision2 tab > Exclude from Collision2: material names left out of the generated mesh. Absent in older saves.
         public string[] Collision2ExcludedMaterialNames;
+        // Collision2 tab > Floor plane. Absent in older saves (off).
+        public bool Collision2FloorEnabled;
+        public float Collision2FloorHeight;
+        // Collision2 tab > Custom area. Absent in older saves (off).
+        public bool Collision2CustomArea;
+        public float Collision2AreaMinX, Collision2AreaMinZ, Collision2AreaSizeX, Collision2AreaSizeZ;
         public string DisplayName;
         // Scenario > Preview: the map-select preview pixels and an imported custom minimap.
         public byte[] MapShotBgraPixels;
@@ -1181,6 +1194,11 @@ public static class SC2RuntimeTerrainPersistence
         dto.Collision2HidePreview = data.Collision2HidePreview;
         dto.Collision2Wireframe = data.Collision2Wireframe;
         dto.Collision2ExcludedMaterialNames = data.Collision2ExcludedMaterialNames != null ? data.Collision2ExcludedMaterialNames.ToArray() : Array.Empty<string>();
+        dto.Collision2FloorEnabled = data.Collision2FloorEnabled;
+        dto.Collision2FloorHeight = data.Collision2FloorHeight;
+        dto.Collision2CustomArea = data.Collision2CustomArea;
+        dto.Collision2AreaMinX = data.Collision2AreaMinX; dto.Collision2AreaMinZ = data.Collision2AreaMinZ;
+        dto.Collision2AreaSizeX = data.Collision2AreaSizeX; dto.Collision2AreaSizeZ = data.Collision2AreaSizeZ;
         dto.DisplayName = data.DisplayName ?? "";
         dto.MapShotBgraPixels = data.MapShotBgraPixels ?? Array.Empty<byte>();
         dto.CustomMinimapPng = data.CustomMinimapPng ?? Array.Empty<byte>();
@@ -1411,6 +1429,11 @@ public static class SC2RuntimeTerrainPersistence
         data.Collision2HidePreview = dto.Collision2HidePreview;
         data.Collision2Wireframe = dto.Collision2Wireframe;
         data.Collision2ExcludedMaterialNames = dto.Collision2ExcludedMaterialNames != null ? new List<string>(dto.Collision2ExcludedMaterialNames) : new List<string>();
+        data.Collision2FloorEnabled = dto.Collision2FloorEnabled;
+        data.Collision2FloorHeight = dto.Collision2FloorHeight;
+        data.Collision2CustomArea = dto.Collision2CustomArea;
+        data.Collision2AreaMinX = dto.Collision2AreaMinX; data.Collision2AreaMinZ = dto.Collision2AreaMinZ;
+        data.Collision2AreaSizeX = dto.Collision2AreaSizeX; data.Collision2AreaSizeZ = dto.Collision2AreaSizeZ;
         data.DisplayName = dto.DisplayName ?? "";
         data.MapShotBgraPixels = dto.MapShotBgraPixels is { Length: > 0 } ? dto.MapShotBgraPixels : null;
         data.CustomMinimapPng = dto.CustomMinimapPng is { Length: > 0 } ? dto.CustomMinimapPng : null;

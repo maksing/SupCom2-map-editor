@@ -462,6 +462,22 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// world units.</summary>
     public float Collision2HeightOffset = 0.25f;
 
+    /// <summary>Collision2 floor plane: when on, no vertex of the generated collision mesh lies below <see cref="Collision2FloorHeight"/>
+    /// - the ground under it (a chasm, a lake bed, a hole in the map) is lifted to a flat plane at that height. Off by default: the
+    /// mesh follows the terrain all the way down.</summary>
+    public bool Collision2FloorEnabled;
+
+    /// <summary>World height of the Collision2 floor plane (see <see cref="Collision2FloorEnabled"/>): the lowest height a vertex of the
+    /// collision mesh may have, after the Height Offset is applied.</summary>
+    public float Collision2FloorHeight;
+
+    /// <summary>Collision2 custom area: when on, the collision mesh covers the world rectangle (<see cref="Collision2AreaMinX"/>,
+    /// <see cref="Collision2AreaMinZ"/>) + (<see cref="Collision2AreaSizeX"/> x <see cref="Collision2AreaSizeZ"/>) instead of the hfield /
+    /// costs grid plus its 5% margin. Where the rectangle reaches past the hfield, the height of the nearest hfield edge is carried
+    /// outward.</summary>
+    public bool Collision2CustomArea;
+    public float Collision2AreaMinX, Collision2AreaMinZ, Collision2AreaSizeX, Collision2AreaSizeZ;
+
     /// <summary>Ground TIN triangle budget for Collision2 generation
     /// (SC2Collision2MeshBuilder's maxTriangles) — user-adjustable 2500
     /// (the vanilla-observed convention, kept as the default) up to 10000.

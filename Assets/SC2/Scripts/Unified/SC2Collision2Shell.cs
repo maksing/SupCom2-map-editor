@@ -124,6 +124,9 @@ public sealed class SC2Collision2Shell : System.IDisposable
         SC2TerrainShell.DrawUnifiedNote("Uniform vertical shift applied to the whole collision mesh (default 0.25) — keeps camera/air-unit collision from clipping into the visual terrain at seams instead of floating above or sinking below it.");
 
         EditorGUILayout.Space(4);
+        DrawFloorAndArea();
+
+        EditorGUILayout.Space(4);
         DrawPolygonBudgetSlider();
         SC2TerrainShell.DrawUnifiedNote("Ground TIN triangle budget (default 2500, the vanilla-observed convention — the file format itself has no fixed ceiling here). Raising it lets the error-adaptive refinement spend more triangles on steep/detailed terrain before it runs out of budget.");
 
@@ -244,7 +247,9 @@ public sealed class SC2Collision2Shell : System.IDisposable
         {
             _session.Document.Collision2.Generation.VerticalOffset = Data.Collision2HeightOffset;
             _session.Document.Collision2.Generation.MaxPolygons = Data.Collision2PolygonBudget;
+            CurrentExtents().WriteTo(_session.Document.Collision2);
         }
+        _extentsDirty = false;
         _offsetBeforeDrag = null;
         _budgetBeforeDrag = null;
         _loadedForData = Data;
@@ -305,6 +310,89 @@ public sealed class SC2Collision2Shell : System.IDisposable
     /// edit gesture rather than once per frame (see DrawCompactSlider's own
     /// DraggingSliderKeys doc comment for why a naive per-frame diff would
     /// flood the undo stack during a slider drag).</summary>
+    // The floor plane and the custom area change live on the terrain data (cheap, every keystroke) and are committed to the document's
+    // history once the edit has settled (a toggle at once, a slider or a typed number when the mouse is up and no field has the focus),
+    // so one edit is one undo step and typing in a field does no work beyond storing the number.
+    private bool _extentsDirty;
+
+    private SC2CollisionExtents CurrentExtents() => new SC2CollisionExtents(
+        Data.Collision2FloorEnabled, Data.Collision2FloorHeight, Data.Collision2CustomArea,
+        Data.Collision2AreaMinX, Data.Collision2AreaMinZ, Data.Collision2AreaSizeX, Data.Collision2AreaSizeZ);
+
+    /// <summary>The floor plane (nothing in the mesh is lower than the chosen height - the ground under it becomes a flat plane there)
+    /// and the custom area (the X / Z rectangle the mesh covers, when it should not follow the hfield / costs size).</summary>
+    private void DrawFloorAndArea()
+    {
+        var changed = false;
+        var settleNow = false;
+
+        var floorOn = EditorGUILayout.ToggleLeft(" Floor plane (minimum height of the mesh)", Data.Collision2FloorEnabled);
+        if (floorOn != Data.Collision2FloorEnabled) { Data.Collision2FloorEnabled = floorOn; changed = true; settleNow = true; }
+        if (Data.Collision2FloorEnabled)
+        {
+            var height = SC2TerrainShell.DrawCompactSlider("Floor height", Data.Collision2FloorHeight, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight, "collision2-floor");
+            if (!Mathf.Approximately(height, Data.Collision2FloorHeight)) { Data.Collision2FloorHeight = height; changed = true; }
+            SC2TerrainShell.DrawUnifiedNote("No vertex of the collision mesh lies below this height: the ground under it becomes a flat plane at it. Generate again to update the preview.");
+        }
+
+        EditorGUILayout.Space(4);
+        var areaOn = EditorGUILayout.ToggleLeft(" Custom area (X / Z size of the mesh)", Data.Collision2CustomArea);
+        if (areaOn != Data.Collision2CustomArea)
+        {
+            Data.Collision2CustomArea = areaOn;
+            if (areaOn && Data.Collision2AreaSizeX < 2f)
+            {
+                // Starts as what the mesh covers without a custom area: the grid plus its 5% margin on each side.
+                var grid = Mathf.Max(1, Data.CostsGridSize);
+                var margin = Mathf.Max(1, Mathf.RoundToInt(grid * 0.05f));
+                Data.Collision2AreaMinX = Data.Collision2AreaMinZ = -margin;
+                Data.Collision2AreaSizeX = Data.Collision2AreaSizeZ = grid + 2 * margin;
+            }
+            changed = true; settleNow = true;
+        }
+        if (Data.Collision2CustomArea)
+        {
+            changed |= DrawAreaField("Origin X", ref Data.Collision2AreaMinX, -2048f, 4096f, "collision2-area-minx");
+            changed |= DrawAreaField("Origin Z", ref Data.Collision2AreaMinZ, -2048f, 4096f, "collision2-area-minz");
+            changed |= DrawAreaField("Size X", ref Data.Collision2AreaSizeX, 16f, 8192f, "collision2-area-sizex");
+            changed |= DrawAreaField("Size Z", ref Data.Collision2AreaSizeZ, 16f, 8192f, "collision2-area-sizez");
+            SC2TerrainShell.DrawUnifiedNote("The world rectangle the collision mesh covers (it is not always the hfield / costs size). Past the hfield the height of its nearest edge is carried outward. Generate again to update the preview.");
+        }
+
+        if (changed)
+        {
+            _extentsDirty = true;
+            InvalidatePreview();
+            EditorUtility.SetDirty(Data);
+            // The exported Collision2 mesh depends on it: a smart export must regenerate the mesh.
+            _terrainShell.Session?.MarkDirty(SC2.MapEditor.SmartExport.SC2DirtyFlags.Collision2);
+        }
+
+        if (_extentsDirty && (settleNow || (Event.current != null && Event.current.type == EventType.Repaint
+                                           && !Input.GetMouseButton(0) && GUIUtility.keyboardControl == 0)))
+            CommitExtents();
+    }
+
+    private static bool DrawAreaField(string label, ref float value, float min, float max, string key)
+    {
+        var next = SC2TerrainShell.DrawCompactSlider(label, value, min, max, key);
+        if (Mathf.Approximately(next, value)) return false;
+        value = next;
+        return true;
+    }
+
+    private void CommitExtents()
+    {
+        _extentsDirty = false;
+        var document = _session?.Document;
+        if (document == null) return;
+        var current = CurrentExtents();
+        if (current.Equals(SC2CollisionExtents.From(document.Collision2))) return;
+        _session.History.Execute(document, new SC2SetCollision2ExtentsCommand(current));
+        // See CommitOffsetChange's own comment: the global Ctrl+Z routing needs this shell's timestamp.
+        _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    }
+
     private void DrawHeightOffsetSlider()
     {
         var before = Data.Collision2HeightOffset;
@@ -468,6 +556,12 @@ public sealed class SC2Collision2Shell : System.IDisposable
         if (_session?.Document == null) return;
         Data.Collision2HeightOffset = _session.Document.Collision2.Generation.VerticalOffset;
         Data.Collision2PolygonBudget = _session.Document.Collision2.Generation.MaxPolygons;
+        var extents = SC2CollisionExtents.From(_session.Document.Collision2);
+        Data.Collision2FloorEnabled = extents.FloorEnabled; Data.Collision2FloorHeight = extents.FloorHeight;
+        Data.Collision2CustomArea = extents.CustomArea;
+        Data.Collision2AreaMinX = extents.AreaMinX; Data.Collision2AreaMinZ = extents.AreaMinZ;
+        Data.Collision2AreaSizeX = extents.AreaSizeX; Data.Collision2AreaSizeZ = extents.AreaSizeZ;
+        _extentsDirty = false;
         InvalidatePreview(); // stale until regenerated with the restored offset/budget
         _offsetBeforeDrag = null;
         _budgetBeforeDrag = null;

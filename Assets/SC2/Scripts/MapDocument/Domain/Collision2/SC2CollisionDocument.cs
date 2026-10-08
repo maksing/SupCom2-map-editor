@@ -43,5 +43,15 @@ namespace SC2.MapEditor.Document
         /// <summary>Names of the materials the Collision2 tab leaves out of the generated mesh ("Exclude from Collision2": decorative
         /// geometry that is not walkable ground).</summary>
         public List<string> ExcludedMaterialNames = new();
+
+        /// <summary>The Collision2 floor plane: with <see cref="FloorEnabled"/> no vertex of the generated mesh is lower than
+        /// <see cref="FloorHeight"/>.</summary>
+        public bool FloorEnabled;
+        public float FloorHeight;
+
+        /// <summary>The Collision2 custom area: with <see cref="CustomArea"/> the mesh covers this world rectangle (min corner and size in
+        /// X / Z) instead of the hfield / costs grid plus its margin.</summary>
+        public bool CustomArea;
+        public float AreaMinX, AreaMinZ, AreaSizeX, AreaSizeZ;
     }
 }

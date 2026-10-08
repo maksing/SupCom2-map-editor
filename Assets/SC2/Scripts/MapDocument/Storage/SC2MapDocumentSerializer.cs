@@ -378,6 +378,13 @@ namespace SC2.MapEditor.Document
             o.Set("hidePreview", SC2JsonValue.Of(c.HidePreview));
             o.Set("wireframe", SC2JsonValue.Of(c.Wireframe));
             o.Set("excludedMaterialNames", WriteStringList(c.ExcludedMaterialNames));
+            o.Set("floorEnabled", SC2JsonValue.Of(c.FloorEnabled));
+            o.Set("floorHeight", SC2JsonValue.Of(c.FloorHeight));
+            o.Set("customArea", SC2JsonValue.Of(c.CustomArea));
+            o.Set("areaMinX", SC2JsonValue.Of(c.AreaMinX));
+            o.Set("areaMinZ", SC2JsonValue.Of(c.AreaMinZ));
+            o.Set("areaSizeX", SC2JsonValue.Of(c.AreaSizeX));
+            o.Set("areaSizeZ", SC2JsonValue.Of(c.AreaSizeZ));
             return o;
         }
 
@@ -401,6 +408,13 @@ namespace SC2.MapEditor.Document
                 HidePreview = o.Get("hidePreview").AsBool(false),
                 Wireframe = o.Get("wireframe").AsBool(false),
                 ExcludedMaterialNames = ReadStringList(o.Get("excludedMaterialNames")),
+                FloorEnabled = o.Get("floorEnabled").AsBool(false),
+                FloorHeight = (float)o.Get("floorHeight").AsDouble(0),
+                CustomArea = o.Get("customArea").AsBool(false),
+                AreaMinX = (float)o.Get("areaMinX").AsDouble(0),
+                AreaMinZ = (float)o.Get("areaMinZ").AsDouble(0),
+                AreaSizeX = (float)o.Get("areaSizeX").AsDouble(0),
+                AreaSizeZ = (float)o.Get("areaSizeZ").AsDouble(0),
             };
         }
 

@@ -75,6 +75,7 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaBlocks.cs" Link="Source\SC2LuaBlocks.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2SaveLuaParser.cs" Link="Source\SC2SaveLuaParser.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaValue.cs" Link="Source\SC2LuaValue.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2Collision2Floor.cs" Link="Source\SC2Collision2Floor.cs" />
     <Compile Include="$(SC2Root)\Scripts\SC2ScdEntryPointResolver.cs" Link="Source\SC2ScdEntryPointResolver.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2MarkerOrientation.cs" Link="Source\SC2MarkerOrientation.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ShaderFlag.cs" Link="Source\SC2ShaderFlag.cs" />

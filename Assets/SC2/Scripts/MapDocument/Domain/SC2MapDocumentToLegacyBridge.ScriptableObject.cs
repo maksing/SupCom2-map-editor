@@ -105,6 +105,13 @@ namespace SC2.MapEditor.Document
             data.Collision2Wireframe = document.Collision2.Wireframe;
             data.Collision2ExcludedMaterialNames = document.Collision2.ExcludedMaterialNames != null
                 ? new List<string>(document.Collision2.ExcludedMaterialNames) : new List<string>();
+            data.Collision2FloorEnabled = document.Collision2.FloorEnabled;
+            data.Collision2FloorHeight = document.Collision2.FloorHeight;
+            data.Collision2CustomArea = document.Collision2.CustomArea;
+            data.Collision2AreaMinX = document.Collision2.AreaMinX;
+            data.Collision2AreaMinZ = document.Collision2.AreaMinZ;
+            data.Collision2AreaSizeX = document.Collision2.AreaSizeX;
+            data.Collision2AreaSizeZ = document.Collision2.AreaSizeZ;
 
             if (document.Scenario != null)
             {

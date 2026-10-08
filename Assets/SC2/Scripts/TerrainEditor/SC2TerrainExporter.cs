@@ -2698,21 +2698,37 @@ public static class SC2TerrainExporter
         // unrelated level — a real map's edge is rarely flat, and a
         // mismatched flat shelf would show a cliff/step right at the map
         // boundary instead of a smooth continuation.
-        var marginCells = Mathf.Max(1, Mathf.RoundToInt((meshMapX - 1) * 0.05f));
-        var paddedSize = (meshMapX - 1) + marginCells * 2 + 1;
-        var padded = new ushort[paddedSize * paddedSize];
-        for (var gz = 0; gz < paddedSize; gz++)
+        // The mesh covers either the hfield grid plus that margin, or - Collision2's Custom area - a world rectangle of its own: its
+        // size in X / Z is not always the hfield / costs size. Both are a window over the hfield with the nearest edge height carried
+        // outward; the window's grid index 0 sits at world (windowOriginX, windowOriginZ).
+        var windowOriginX = -Mathf.Max(1, Mathf.RoundToInt((meshMapX - 1) * 0.05f));
+        var windowOriginZ = windowOriginX;
+        var windowSizeX = (meshMapX - 1) - windowOriginX * 2 + 1;
+        var windowSizeZ = windowSizeX;
+        if (data != null && data.Collision2CustomArea && data.Collision2AreaSizeX >= 2f && data.Collision2AreaSizeZ >= 2f)
         {
-            var srcZ = Mathf.Clamp(gz - marginCells, 0, meshMapY - 1);
-            for (var gx = 0; gx < paddedSize; gx++)
+            windowOriginX = Mathf.RoundToInt(data.Collision2AreaMinX);
+            windowOriginZ = Mathf.RoundToInt(data.Collision2AreaMinZ);
+            windowSizeX = Mathf.Clamp(Mathf.RoundToInt(data.Collision2AreaSizeX), 2, 8192) + 1;
+            windowSizeZ = Mathf.Clamp(Mathf.RoundToInt(data.Collision2AreaSizeZ), 2, 8192) + 1;
+        }
+        var padded = new ushort[windowSizeX * windowSizeZ];
+        for (var gz = 0; gz < windowSizeZ; gz++)
+        {
+            var srcZ = Mathf.Clamp(windowOriginZ + gz, 0, meshMapY - 1);
+            for (var gx = 0; gx < windowSizeX; gx++)
             {
-                var srcX = Mathf.Clamp(gx - marginCells, 0, meshMapX - 1);
-                padded[gz * paddedSize + gx] = collisionHfield.Heightmap[srcZ * meshMapX + srcX];
+                var srcX = Mathf.Clamp(windowOriginX + gx, 0, meshMapX - 1);
+                padded[gz * windowSizeX + gx] = collisionHfield.Heightmap[srcZ * meshMapX + srcX];
             }
         }
+        // The floor plane (Collision2 tab): no vertex of the mesh lies below the chosen height. The mesh builder adds the Height Offset to
+        // every vertex afterwards, so the heightmap is raised to the floor minus that offset.
+        if (data != null && data.Collision2FloorEnabled)
+            SC2Collision2Floor.Apply(padded, data.Collision2FloorHeight - heightOffset);
         var heightmapForMesh = padded;
-        meshMapX = paddedSize;
-        meshMapY = paddedSize;
+        meshMapX = windowSizeX;
+        meshMapY = windowSizeZ;
 
         // maxPolygons is user-adjustable (2500-10000, see SC2Collision2Shell's
         // slider) — 2500 is only the vanilla-observed convention, not a
@@ -2728,7 +2744,7 @@ public static class SC2TerrainExporter
         for (var i = 0; i < raw.Vertices.Count; i++)
         {
             var v = raw.Vertices[i];
-            raw.Vertices[i] = (v.X - marginCells, v.Y, v.Z - marginCells);
+            raw.Vertices[i] = (v.X + windowOriginX, v.Y, v.Z + windowOriginZ);
         }
 
         var flatVerts = new TerrainVertex[raw.Vertices.Count];
