@@ -229,6 +229,13 @@ public sealed class SC2EffectMarkerPicker
             SetOffset(marker, newOffset);
             changed = true;
         }
+
+        SC2EffectPreview.Enabled = SC2EnvFieldGui.Toggle("Show effects in the viewport", SC2EffectPreview.Enabled);
+        if (SC2EffectPreview.Enabled)
+        {
+            SC2EnvFieldGui.WrapLabel("An approximate preview of the game's particles: it shows what the effect looks like and how big it is, not frame-exact motion.", width);
+            if (!string.IsNullOrEmpty(SC2EffectPreview.Problem)) SC2EnvFieldGui.WrapLabel(SC2EffectPreview.Problem, width);
+        }
         return changed;
     }
 }

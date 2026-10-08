@@ -306,6 +306,7 @@ public sealed class SC2ObjectsShell
             return;
 
         SC2MarkerScenePreview.Sync(Data, _hiddenMarkerIds, showMarkers);
+        SC2EffectPreview.Sync(Data, _hiddenMarkerIds, showMarkers);
         _lastMarkerScenePreviewDataVersion = _dataVersion;
         _lastMarkerScenePreviewHiddenSig = hiddenSig;
         _lastMarkerScenePreviewShowMarkers = showMarkers;

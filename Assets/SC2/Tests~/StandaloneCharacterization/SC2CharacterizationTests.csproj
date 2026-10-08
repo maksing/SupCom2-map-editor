@@ -62,6 +62,7 @@
     <!-- Runtime-only model/blueprint parsing foundation for the unit/prop browser.
          Keep it independent of UnityEditor and UnityEngine so it is usable in Player builds. -->
     <Compile Include="$(SC2Root)\Runtime\GameAssets\**\*.cs" LinkBase="Source\GameAssets" />
+    <Compile Include="$(SC2Root)\Scripts\GameAssets\SC2ParticleEmitter.cs" Link="Source\SC2ParticleEmitter.cs" />
     <!-- 2026-07-17: SC2TerrainData.cs and its narrow dependency closure
          (SC2LuaBlocks/SC2SaveLuaParser/SC2LuaValue/SC2ShaderFlag/
          SC2TerrainMaterialModel among them) moved from Scripts/ and

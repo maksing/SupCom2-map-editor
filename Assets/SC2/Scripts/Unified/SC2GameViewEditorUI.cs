@@ -1260,6 +1260,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         try { SC2MarkerScenePreview.DrawAllBatches(scenePreviewCamera); }
         catch (System.Exception ex) { Debug.LogError("[SC2 LateUpdate] SC2MarkerScenePreview.DrawAllBatches threw: " + ex); }
 
+        // The running preview of Effect markers (the game's particle emitters, approximated) - advances and draws every frame.
+        try { SC2EffectPreview.DrawAll(scenePreviewCamera); }
+        catch (System.Exception ex) { Debug.LogError("[SC2 LateUpdate] SC2EffectPreview.DrawAll threw: " + ex); }
+
         // GPU-instanced replacement for the Objects tab's IMGUI viewport
         // pick-dots (SC2ObjectMarkerRenderer, user-specced) — same "needs a
         // real per-frame call site" reasoning as the two calls above. Its
