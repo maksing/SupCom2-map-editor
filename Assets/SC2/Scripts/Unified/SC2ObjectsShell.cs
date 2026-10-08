@@ -6130,11 +6130,16 @@ public sealed class SC2ObjectsShell
         // showProps — see that variable's own comment.
         SyncMarkerRendererIfNeeded(showPropsIcon, showUnits, showMarkers);
 
-        if ((_placementKind != PlacementKind.None || _propsBrushActive) && allowInput && Event.current != null &&
-            Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
+        // Not gated on the mouse being over the viewport (allowInput): after picking a marker in the side panel the cursor is still
+        // over the panel, and Esc must leave the placement mode from there too. The key is also polled (Input.GetKeyDown), because the
+        // KeyDown event never reaches here when a text field of the panel (the marker list's search box) has the keyboard focus and
+        // swallows it.
+        if ((_placementKind != PlacementKind.None || _propsBrushActive) && objectsTabActive && Event.current != null &&
+            ((Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape) || Input.GetKeyDown(KeyCode.Escape)))
         {
             CancelActiveTools();
-            Event.current.Use();
+            GUIUtility.keyboardControl = 0;
+            if (Event.current.type == EventType.KeyDown) Event.current.Use();
             RepaintHost?.Invoke();
             return;
         }
