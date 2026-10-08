@@ -270,7 +270,7 @@ public static class SC2ObjectsExport
         if (m.OrientationIsQuaternion)
         {
             var q = Quaternion.Euler(m.OrientationEuler);
-            Field("orientation", $"QUATERNION( {Fmt(q.w)}, {Fmt(q.x)}, {Fmt(q.y)}, {Fmt(q.z)} )");
+            Field("orientation", SC2MarkerOrientation.FormatQuaternion(q, Fmt));
         }
         else
         {

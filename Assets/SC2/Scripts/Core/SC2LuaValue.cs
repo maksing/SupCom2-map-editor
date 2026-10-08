@@ -17,7 +17,7 @@ public static class SC2LuaValue
     private static readonly Regex FloatRe = new(@"FLOAT\(\s*(?<v>-?[\d.]+)\s*\)", RegexOptions.Compiled);
     private static readonly Regex IntegerRe = new(@"INTEGER\(\s*(?<v>-?\d+)\s*\)", RegexOptions.Compiled);
     private static readonly Regex QuaternionRe = new(
-        @"QUATERNION\(\s*(?<w>-?[\d.]+)\s*,\s*(?<x>-?[\d.]+)\s*,\s*(?<y>-?[\d.]+)\s*,\s*(?<z>-?[\d.]+)\s*\)", RegexOptions.Compiled);
+        @"QUATERNION\(\s*(?<x>-?[\d.]+)\s*,\s*(?<y>-?[\d.]+)\s*,\s*(?<z>-?[\d.]+)\s*,\s*(?<w>-?[\d.]+)\s*\)", RegexOptions.Compiled);
 
     /// <summary>Accepts the STRING(...) wrapper, or a bare Lua string literal
     /// with no wrapper at all — real _save.lua Armies blocks store
@@ -54,8 +54,9 @@ public static class SC2LuaValue
         return null;
     }
 
-    /// <summary>QUATERNION(w, x, y, z) — matches the wrapper's own component
-    /// order (w first), same order SC2ObjectsExport writes it in.</summary>
+    /// <summary>QUATERNION(x, y, z, w) — the order the game's own save.lua files
+    /// store it in (the identity is QUATERNION( 0, 0, 0, 1 )), same order
+    /// SC2ObjectsExport writes it in.</summary>
     public static Quaternion? ExtractQuaternion(string raw)
     {
         var m = QuaternionRe.Match(raw);

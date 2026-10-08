@@ -231,11 +231,11 @@ public static class SC2SaveLuaBytecodeReader
         return new Vector3((float)x.NumberValue, (float)y.NumberValue, (float)z.NumberValue);
     }
 
-    /// <summary>QUATERNION(w, x, y, z) - matches SC2LuaValue.ExtractQuaternion's own (w-first) component order.</summary>
+    /// <summary>QUATERNION(x, y, z, w) - matches SC2LuaValue.ExtractQuaternion's own component order (the identity is 0, 0, 0, 1).</summary>
     public static Quaternion? AsQuaternion(SC2LuaBytecodeValue value)
     {
         if (WrapperOf(value) != "QUATERNION") return null;
-        var w = WrapArg(value, 1); var x = WrapArg(value, 2); var y = WrapArg(value, 3); var z = WrapArg(value, 4);
+        var x = WrapArg(value, 1); var y = WrapArg(value, 2); var z = WrapArg(value, 3); var w = WrapArg(value, 4);
         if (w?.Kind != SC2LuaBytecodeValueKind.Number || x?.Kind != SC2LuaBytecodeValueKind.Number ||
             y?.Kind != SC2LuaBytecodeValueKind.Number || z?.Kind != SC2LuaBytecodeValueKind.Number)
             return null;

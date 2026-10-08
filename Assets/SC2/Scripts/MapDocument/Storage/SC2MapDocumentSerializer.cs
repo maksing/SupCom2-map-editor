@@ -614,6 +614,7 @@ namespace SC2.MapEditor.Document
             o.Set("position", WriteVector3(m.Position));
             o.Set("orientationEuler", WriteVector3(m.OrientationEuler));
             o.Set("orientationIsQuaternion", SC2JsonValue.Of(m.OrientationIsQuaternion));
+            o.Set("orientationFormat", SC2JsonValue.Of(SC2MarkerOrientation.StorageFormat));
             o.Set("colorHex", SC2JsonValue.Of(m.ColorHex));
             o.Set("prop", SC2JsonValue.Of(m.Prop));
             o.Set("extraFields", WriteLuaFields(m.ExtraFields));
@@ -622,7 +623,16 @@ namespace SC2.MapEditor.Document
             return o;
         }
 
-        private static SC2ObjMarker ReadMarker(SC2JsonValue o) => new SC2ObjMarker
+        private static SC2ObjMarker ReadMarker(SC2JsonValue o)
+        {
+            var marker = ReadMarkerFields(o);
+            // A document written before the quaternion order was fixed holds Euler angles decoded as (w, x, y, z).
+            if (marker.OrientationIsQuaternion && o.Get("orientationFormat").AsInt(1) < SC2MarkerOrientation.StorageFormat)
+                marker.OrientationEuler = SC2MarkerOrientation.MigrateLegacyEuler(marker.OrientationEuler);
+            return marker;
+        }
+
+        private static SC2ObjMarker ReadMarkerFields(SC2JsonValue o) => new SC2ObjMarker
         {
             Id = o.Get("id").AsInt(0),
             Name = o.Get("name").AsString(""),

@@ -961,7 +961,7 @@ public static class SC2ObjectsImport
                 return $"VECTOR3( {v3.x.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {v3.y.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {v3.z.ToString(System.Globalization.CultureInfo.InvariantCulture)} )";
             case "QUATERNION":
                 var q = SC2SaveLuaBytecodeReader.AsQuaternion(value) ?? Quaternion.identity;
-                return $"QUATERNION( {q.w.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {q.x.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {q.y.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {q.z.ToString(System.Globalization.CultureInfo.InvariantCulture)} )";
+                return SC2MarkerOrientation.FormatQuaternion(q, f => f.ToString(System.Globalization.CultureInfo.InvariantCulture));
             case "RECTANGLE":
                 var r = SC2SaveLuaBytecodeReader.AsRectangle(value);
                 return r.HasValue
