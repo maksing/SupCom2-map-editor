@@ -1141,6 +1141,9 @@ public sealed class SC2DecalsShell : IDisposable
     /// branch, which always does a real, correct full rebuild against the current scene.</summary>
     public void InvalidatePreviewCache()
     {
+        // The surfaces the decals are clipped against may have been created just now (a load restores the imported terrains right
+        // after the data changed): a scene search cached a moment ago would miss them and leave every decal sitting under the model.
+        _surfaces.InvalidateSceneCache();
         _fragmentSources.Clear();
         _placementFragmentCache.Clear();
         _builtEntriesSignature = null;

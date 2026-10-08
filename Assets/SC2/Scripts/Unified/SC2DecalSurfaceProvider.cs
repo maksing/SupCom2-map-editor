@@ -25,6 +25,16 @@ public sealed class SC2DecalSurfaceProvider
     private double _sceneCacheExpiry;
     private const double SceneCacheSeconds = 0.5;
 
+    /// <summary>Forgets the cached scene search: the next Collect / Raycast looks for the colliders and projection surfaces again. Needed
+    /// when terrain objects were just created (the imported terrains restored after a load), which a cache younger than
+    /// <see cref="SceneCacheSeconds"/> would not contain yet.</summary>
+    public void InvalidateSceneCache()
+    {
+        _cachedColliders = null;
+        _cachedSurfaces = null;
+        _sceneCacheExpiry = 0;
+    }
+
     private void EnsureSceneCache()
     {
         var now = Time.realtimeSinceStartupAsDouble;
@@ -164,7 +174,11 @@ public sealed class SC2DecalSurfaceProvider
         var colliderMeshes = 0;
         foreach (var collider in _cachedColliders)
         {
-            if (collider == null || collider.sharedMesh == null || !collider.enabled || !IsProjectionSurface(collider.gameObject) || !IntersectsAny(boundsList, collider.bounds)) continue;
+            if (collider == null || collider.sharedMesh == null || !collider.enabled || !IsProjectionSurface(collider.gameObject)) continue;
+            // The bounds come from the mesh and the transform, not from Collider.bounds: a collider created (or moved) this frame - the
+            // imported terrains a load has just restored - reports the physics scene's stale bounds until the next physics sync, so it
+            // was skipped and the decals were clipped against the core terrain only, under the imported model.
+            if (!IntersectsAny(boundsList, WorldBounds(collider.sharedMesh.bounds, collider.transform.localToWorldMatrix))) continue;
             var renderer = collider.GetComponent<MeshRenderer>();
             AddMesh(result, collider.sharedMesh, collider.transform.localToWorldMatrix, boundsList, renderer != null ? renderer.sharedMaterials : null);
             colliderMeshes++;

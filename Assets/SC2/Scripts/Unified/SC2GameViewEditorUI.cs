@@ -5059,6 +5059,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             RuntimeTerrainData = _terrainShell.Data;
             RestoreImportedTerrainsFromDocument(loadedDocument?.Terrain?.ImportedEntries);
+            // The imported terrains exist now, after the data-changed notification that already told the decals to rebuild: the height
+            // grid and the decals' projection surfaces must be taken again so the decals are clipped against the imported models too,
+            // not only against the core terrain (which lies under them).
+            _terrainShell.InvalidateLiveHeightGrid();
+            _decalsShell?.InvalidatePreviewCache();
             ResetView(instant: true); // same reasoning as AdoptNewlyCreatedTerrainData's own call
             SetStatus("Loaded terrain: " + mapName);
         }
