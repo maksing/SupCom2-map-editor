@@ -62,6 +62,14 @@ public sealed class SC2DecalsShell : IDisposable
     private string _builtEntriesSignature;
     private int _selectedEntry = -1;
     private int _selectedPlacement = -1;
+
+    // "By type": a whole group of decals (every placement that uses one atlas entry) can be selected, hidden or isolated at once.
+    // Session-only, like the markers' and props' own hide sets: hiding only takes a decal out of the viewport preview, never out of
+    // the document or the export. Placement ids, not indices, so they survive edits that reorder the list.
+    private readonly HashSet<string> _hiddenPlacementIds = new();
+    private readonly HashSet<string> _groupSelection = new();
+    private bool _byTypeExpanded;
+    private Vector2 _byTypeScroll;
     private bool _placementsExpanded = true;
     private Vector2 _atlasPan;
     private float _atlasZoom = 0.8f;
@@ -142,6 +150,8 @@ public sealed class SC2DecalsShell : IDisposable
         DrawSelectedEntrySection(w);
         GUILayout.Space(8);
         DrawPlacementsSection(w);
+        GUILayout.Space(8);
+        DrawByTypePanel(w);
         GUILayout.EndVertical();
         EnsurePreview();
         DrawAtlasModal();
@@ -287,6 +297,99 @@ public sealed class SC2DecalsShell : IDisposable
             _mode = InteractionMode.Place;
     }
 
+    /// <summary>"By type" - select, hide or isolate every placement of one decal type (atlas entry) at once, like the Markers tab's
+    /// By type panel. S highlights the whole group in the viewport (and offers to delete it), H hides / shows it, I shows only it.</summary>
+    private void DrawByTypePanel(float w)
+    {
+        var groups = _byTypeExpanded ? SC2DecalGrouping.ByType(Doc) : null;
+        if (!SC2EnvFieldGui.Foldout(ref _byTypeExpanded, groups != null ? $"By type ({groups.Count})" : "By type")) return;
+        if (groups == null || groups.Count == 0) { GUILayout.Label("No decals placed yet."); return; }
+
+        if (_hiddenPlacementIds.Count > 0)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"{_hiddenPlacementIds.Count} decal(s) hidden.");
+            if (GUILayout.Button("Show All", GUILayout.Width(90f))) SetHidden(new HashSet<string>());
+            GUILayout.EndHorizontal();
+        }
+        if (_groupSelection.Count > 0)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"{_groupSelection.Count} decal(s) selected.");
+            if (GUILayout.Button("Delete", GUILayout.Width(70f))) DeleteGroupSelection();
+            if (GUILayout.Button("Clear", GUILayout.Width(70f))) { _groupSelection.Clear(); RepaintHost?.Invoke(); }
+            GUILayout.EndHorizontal();
+        }
+
+        _byTypeScroll = GUILayout.BeginScrollView(_byTypeScroll, GUILayout.Height(Mathf.Min(220f, groups.Count * 26f + 4f)));
+        foreach (var group in groups)
+        {
+            var ids = group.PlacementIds;
+            var hiddenCount = ids.Count(id => _hiddenPlacementIds.Contains(id));
+            var fullyHidden = hiddenCount == ids.Count;
+            var fullySelected = ids.Count > 0 && ids.All(id => _groupSelection.Contains(id));
+
+            GUILayout.BeginHorizontal();
+            var labelWidth = Mathf.Max(50f, w - (3 * 26f + 14f));
+            var label = $"{group.Name} ({ids.Count})" + (hiddenCount > 0 ? $"  [{hiddenCount} hidden]" : "");
+            GUILayout.Label(label, GUILayout.Width(labelWidth));
+
+            var previousColor = GUI.backgroundColor;
+            GUI.backgroundColor = fullySelected ? new Color(1f, .9f, .3f) : previousColor;
+            if (GUILayout.Button("S", GUILayout.Width(24f))) SelectGroup(ids);
+            GUI.backgroundColor = fullyHidden ? new Color(1f, .55f, .3f) : previousColor;
+            if (GUILayout.Button("H", GUILayout.Width(24f)))
+            {
+                var next = new HashSet<string>(_hiddenPlacementIds);
+                if (fullyHidden) next.ExceptWith(ids); else next.UnionWith(ids);
+                SetHidden(next);
+            }
+            GUI.backgroundColor = previousColor;
+            if (GUILayout.Button("I", GUILayout.Width(24f))) SetHidden(SC2DecalGrouping.IdsExcept(Doc, ids));
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndScrollView();
+    }
+
+    private void SelectGroup(IEnumerable<string> ids)
+    {
+        _groupSelection.Clear();
+        foreach (var id in ids) _groupSelection.Add(id);
+        // A group selection replaces a single selection, so the two highlights never mix.
+        _selectedPlacement = -1;
+        _mode = InteractionMode.Edit;
+        ResetPlacementDraft();
+        RepaintHost?.Invoke();
+    }
+
+    /// <summary>Changes which placements are hidden in the viewport. The preview fragments of the placements whose visibility changed
+    /// are rebuilt (EnsurePreview diffs the document it builds, in which the hidden ones are disabled, against what each fragment was built from).</summary>
+    private void SetHidden(HashSet<string> hidden)
+    {
+        _hiddenPlacementIds.Clear();
+        foreach (var id in hidden) _hiddenPlacementIds.Add(id);
+        // Hidden decals cannot stay selected.
+        _groupSelection.RemoveWhere(id => _hiddenPlacementIds.Contains(id));
+        if (_selectedPlacement >= 0 && _selectedPlacement < Doc.Placements.Count && _hiddenPlacementIds.Contains(Doc.Placements[_selectedPlacement].Id))
+        {
+            _selectedPlacement = -1;
+            ResetPlacementDraft();
+        }
+        _renderedRevision = -1;
+        RepaintHost?.Invoke();
+    }
+
+    private void DeleteGroupSelection()
+    {
+        if (_groupSelection.Count == 0) return;
+        var next = Doc.Clone();
+        var removed = next.Placements.RemoveAll(p => p?.Id != null && _groupSelection.Contains(p.Id));
+        _groupSelection.Clear();
+        _selectedPlacement = -1;
+        Commit(removed == 1 ? "Delete Decal" : $"Delete {removed} Decals", next);
+        ResetPlacementDraft();
+    }
+
     private void DrawPlacementsSection(float w)
     {
         if (!SC2EnvFieldGui.Foldout(ref _placementsExpanded, $"Authored placements: {Doc.Placements.Count}"))
@@ -393,7 +496,7 @@ public sealed class SC2DecalsShell : IDisposable
             if (entry != null && _diffuseAtlas != null) GUI.DrawTextureWithTexCoords(thumb, _diffuseAtlas, AtlasUv(entry), true);
             else GUI.Box(thumb, "");
             var pos = p.Position != null && p.Position.Length >= 3 ? p.Position : new float[3];
-            var label = $"{(i == _selectedPlacement ? "● " : "○ ")}{p.Name}\n({pos[0]:0.#}, {pos[2]:0.#})  {p.Width:0.#}x{p.Length:0.#}" + (p.Enabled ? "" : "  [disabled]");
+            var label = $"{(i == _selectedPlacement || _groupSelection.Contains(p.Id) ? "● " : "○ ")}{p.Name}\n({pos[0]:0.#}, {pos[2]:0.#})  {p.Width:0.#}x{p.Length:0.#}" + (p.Enabled ? "" : "  [disabled]") + (_hiddenPlacementIds.Contains(p.Id) ? "  [hidden]" : "");
             // Selecting a placement arms Edit mode — see the Mode field's
             // own doc comment.
             if (GUI.Button(new Rect(rowRect.x + 36f, rowRect.y, rowRect.width - 36f, 32f), label)) { _selectedPlacement = i; _mode = InteractionMode.Edit; }
@@ -902,12 +1005,12 @@ public sealed class SC2DecalsShell : IDisposable
             var stored = Doc.Placements[i];
             var p = i == _selectedPlacement && _transformPreview != null ? _transformPreview
                 : (_transformGroupPreview != null && _transformGroupPreview.TryGetValue(stored.Id, out var live) ? live : stored);
-            if (!p.Enabled) continue;
+            if (!p.Enabled || _hiddenPlacementIds.Contains(stored.Id)) continue;
             var c = new Vector3(p.Position[0], p.Position[1], p.Position[2]);
             var s = SC2TopViewMirror.WorldToGui(camera, c); if (s.z <= 0) continue;
             if (s.x < viewport.xMin - margin || s.x > viewport.xMax + margin || s.y < viewport.yMin - margin || s.y > viewport.yMax + margin) continue;
             s.x -= origin.x; s.y -= origin.y;
-            var selected = i == _selectedPlacement;
+            var selected = i == _selectedPlacement || _groupSelection.Contains(stored.Id);
             DrawOriginMarker(s.x, s.y, selected);
         }
         GUI.EndClip();
@@ -980,7 +1083,8 @@ public sealed class SC2DecalsShell : IDisposable
         var best = 18f; index = -1;
         for (var i = 0; i < Doc.Placements.Count; i++)
         {
-            var p = Doc.Placements[i]; var s = SC2TopViewMirror.WorldToGui(camera, new Vector3(p.Position[0], p.Position[1], p.Position[2]));
+            var p = Doc.Placements[i]; if (_hiddenPlacementIds.Contains(p.Id)) continue;
+            var s = SC2TopViewMirror.WorldToGui(camera, new Vector3(p.Position[0], p.Position[1], p.Position[2]));
             if (s.z <= 0) continue; var d = Vector2.Distance(mouse, new Vector2(s.x, s.y)); if (d < best) { best = d; index = i; }
         }
         return index >= 0;
@@ -1141,6 +1245,8 @@ public sealed class SC2DecalsShell : IDisposable
     /// branch, which always does a real, correct full rebuild against the current scene.</summary>
     public void InvalidatePreviewCache()
     {
+        _hiddenPlacementIds.Clear();
+        _groupSelection.Clear();
         // The surfaces the decals are clipped against may have been created just now (a load restores the imported terrains right
         // after the data changed): a scene search cached a moment ago would miss them and leave every decal sitting under the model.
         _surfaces.InvalidateSceneCache();
@@ -1213,6 +1319,14 @@ public sealed class SC2DecalsShell : IDisposable
             _renderedRevision = _session.Document.Revision; _renderedTransformVersion = _transformVersion; _renderedTerrainVersion = SC2TerrainShell.TerrainGeometryVersion;
             _dirtyPlacementIds.Clear();
             return;
+        }
+
+        // Hidden decals (By type) are disabled in the document the preview is built from, never in the document itself.
+        if (_hiddenPlacementIds.Count > 0)
+        {
+            if (ReferenceEquals(previewDocument, Doc)) previewDocument = Doc.Clone();
+            foreach (var placement in previewDocument.Placements)
+                if (placement?.Id != null && _hiddenPlacementIds.Contains(placement.Id)) placement.Enabled = false;
         }
 
         // See SC2LiveHeightGrid.EnsureFreshImmediate's own doc comment: this
