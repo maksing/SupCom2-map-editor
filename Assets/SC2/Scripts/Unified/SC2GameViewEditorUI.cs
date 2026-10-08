@@ -3996,6 +3996,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 CancelImportedGesture();
             return;
         }
+        if (_importedGestureKind == ImportedGestureKind.None)
+            TrySelectImportedTerrainByClick();
         if (_selectedImportedTerrain < 0 || _selectedImportedTerrain >= _importedTerrains.Count)
             return;
         var entry = _importedTerrains[_selectedImportedTerrain];
@@ -4060,6 +4062,41 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             SetStatus("Imported terrain gesture error (see log): " + ex.Message);
             CancelImportedGesture();
         }
+    }
+
+    /// <summary>A left click on an imported terrain object in the viewport selects it (the same selection the panel's object buttons
+    /// make). The click only counts when it lands on the object's own collider and nothing else (a menu, the panel, the Measure tool)
+    /// has taken it; a click on empty ground leaves the selection alone.</summary>
+    private void TrySelectImportedTerrainByClick()
+    {
+        var e = Event.current;
+        if (e == null || e.type != EventType.MouseDown || e.button != 0 || e.alt || _tool == "Measure") return;
+        if (!_viewportRect.Contains(e.mousePosition) || IsMouseOverUi(e.mousePosition) || AnyMenuOpen()) return;
+        var camera = ResolveCamera();
+        if (camera == null) return;
+
+        // A collider keeps the pose it had at the last physics step until transforms are synced, and the object may just have been moved.
+        Physics.SyncTransforms();
+        var ray = SC2TerrainShell.GameGuiPointToRay(camera, _viewportRect, e.mousePosition);
+        var picked = -1;
+        var pickedDistance = float.MaxValue;
+        for (var i = 0; i < _importedTerrains.Count; i++)
+        {
+            var root = _importedTerrains[i]?.Root;
+            if (root == null || !root.activeInHierarchy) continue;
+            var collider = root.GetComponent<Collider>();
+            if (collider == null || !collider.Raycast(ray, out var hit, 1_000_000f) || hit.distance >= pickedDistance) continue;
+            pickedDistance = hit.distance;
+            picked = i;
+        }
+        if (picked < 0) return;
+
+        if (picked != _selectedImportedTerrain)
+        {
+            _selectedImportedTerrain = picked;
+            SetStatus("Selected imported object: " + _importedTerrains[picked].DisplayName);
+        }
+        e.Use();
     }
 
     /// <summary>A frame around the imported terrain object selected in the Imported tab (the one being moved, rotated or scaled while a
