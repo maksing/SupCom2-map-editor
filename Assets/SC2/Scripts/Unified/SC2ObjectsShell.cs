@@ -5255,6 +5255,10 @@ public sealed class SC2ObjectsShell
     private string _gestureTyped = "";
     private Camera _gestureCamera;
     private readonly List<(SC2ObjProp prop, Quaternion originalRotation, float originalScale)> _gestureItems = new();
+    // The selected markers take part in the same gesture: R turns a marker (its orientation), S scales the ones that have a scale
+    // (an Effect marker's EmitterScale). Their symmetry siblings follow like a prop's do.
+    private readonly List<(SC2ObjMarker marker, Vector3 originalEuler, Quaternion originalRotation, float originalScale)> _gestureMarkerItems = new();
+    private readonly Dictionary<int, (Vector3 Euler, Quaternion Rotation, float Scale)> _gestureMarkerSiblingOriginals = new();
     // Rotation/scale of the symmetry siblings (not selected themselves) of the gesture's props at
     // its start, so every frame recomputes them from there and Esc can restore them.
     private readonly Dictionary<int, (Quaternion Rotation, float Scale)> _gestureSiblingOriginals = new();
@@ -6198,7 +6202,7 @@ public sealed class SC2ObjectsShell
         // Props selection so a stray press with nothing selected does
         // nothing. Takes over the frame entirely while active, same as the
         // brush-radius-resize gesture below.
-        if (_propsGestureKind == PropsGestureKind.None && allowInput && !_dragActive && !_boxSelectActive && _selProps.Count > 0 &&
+        if (_propsGestureKind == PropsGestureKind.None && allowInput && !_dragActive && !_boxSelectActive && _selProps.Count + _selMarkers.Count > 0 &&
             Event.current != null && Event.current.type == EventType.KeyDown &&
             (SC2Hotkeys.Matches("Objects.RotateGesture", Event.current) || SC2Hotkeys.Matches("Objects.ScaleGesture", Event.current)) &&
             TryComputeGesturePivot(out var gesturePivot) && TryWorldToGui(camera, viewportRect, gesturePivot, out var gestureAnchorScreen))
@@ -6234,7 +6238,11 @@ public sealed class SC2ObjectsShell
                 }
             }
             finally { EndBulkLookup(); }
+            GatherMarkerGestureItems();
             PushUndo();
+            // An Effect marker carries its scale as a field; give it one before the gesture changes it.
+            foreach (var (marker, _, _, _) in _gestureMarkerItems)
+                if (IsEffectMarker(marker)) SC2EffectMarkerPicker.EnsureScaleAndOffset(marker);
             Event.current.Use();
             RepaintHost?.Invoke();
             return;
@@ -7042,9 +7050,66 @@ public sealed class SC2ObjectsShell
         var sum = Vector3.zero;
         var count = 0;
         foreach (var p in Data.ObjProps) if (_selProps.Contains(p.Id)) { sum += p.Position; count++; }
+        foreach (var m in Data.ObjMarkers) if (_selMarkers.Contains(m.Id)) { sum += m.Position; count++; }
         if (count == 0) { pivot = default; return false; }
         pivot = sum / count;
         return true;
+    }
+
+    private static bool IsEffectMarker(SC2ObjMarker marker) => string.Equals(marker.Type, "Effect", StringComparison.OrdinalIgnoreCase);
+
+    private static float MarkerGestureScale(SC2ObjMarker marker) => IsEffectMarker(marker) ? SC2EffectMarkerPicker.GetScale(marker) : 1f;
+
+    /// <summary>Snapshots the selected markers (and their symmetry siblings) at the start of a rotate / scale gesture.</summary>
+    private void GatherMarkerGestureItems()
+    {
+        _gestureMarkerItems.Clear();
+        _gestureMarkerSiblingOriginals.Clear();
+        if (_selMarkers.Count == 0) return;
+        BeginBulkLookup();
+        try
+        {
+            foreach (var id in _selMarkers)
+            {
+                var m = LookupMarker(id);
+                if (m != null) _gestureMarkerItems.Add((m, m.OrientationEuler, Quaternion.Euler(m.OrientationEuler), MarkerGestureScale(m)));
+            }
+            foreach (var (marker, _, _, _) in _gestureMarkerItems)
+            {
+                var group = FindSymmetryGroup(marker.Id);
+                if (group == null) continue;
+                foreach (var member in group.Members)
+                {
+                    if (_selMarkers.Contains(member.ObjectId)) continue;
+                    var sibling = LookupMarker(member.ObjectId);
+                    if (sibling != null)
+                        _gestureMarkerSiblingOriginals[sibling.Id] = (sibling.OrientationEuler, Quaternion.Euler(sibling.OrientationEuler), MarkerGestureScale(sibling));
+                }
+            }
+        }
+        finally { EndBulkLookup(); }
+    }
+
+    /// <summary>A marker gesture changed orientation / scale: the symmetry siblings follow (turned the opposite way for a mirrored
+    /// copy, like a prop's).</summary>
+    private void PropagateMarkerSymmetryRotationScale(SC2ObjMarker edited, Quaternion editedBefore, ISet<int> skipIds, bool applyScale)
+    {
+        var group = FindSymmetryGroup(edited.Id);
+        if (group == null) return;
+        var editedMember = group.Members.FirstOrDefault(m => m.ObjectId == edited.Id);
+        if (editedMember == null) return;
+        var delta = Quaternion.Euler(edited.OrientationEuler) * Quaternion.Inverse(editedBefore);
+        foreach (var member in group.Members)
+        {
+            if (member.ObjectId == edited.Id || skipIds.Contains(member.ObjectId)) continue;
+            var sibling = LookupMarker(member.ObjectId);
+            if (sibling == null) continue;
+            var baseRotation = _gestureMarkerSiblingOriginals.TryGetValue(sibling.Id, out var before) ? before.Rotation : Quaternion.Euler(sibling.OrientationEuler);
+            var siblingDelta = SC2SymmetryMath.TurnsOpposite(Data.Symmetry, editedMember.SlotIndex, member.SlotIndex) ? Quaternion.Inverse(delta) : delta;
+            sibling.OrientationEuler = (siblingDelta * baseRotation).eulerAngles;
+            if (applyScale && IsEffectMarker(sibling) && IsEffectMarker(edited))
+                SC2EffectMarkerPicker.SetScale(sibling, SC2EffectMarkerPicker.GetScale(edited));
+        }
     }
 
     /// <summary>Per-frame update for an active R/S gesture (see the field
@@ -7068,11 +7133,15 @@ public sealed class SC2ObjectsShell
         if (e != null && ((e.type == EventType.MouseDown && e.button == 0) ||
                            (e.type == EventType.KeyDown && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))))
         {
+            var gestureCount = _gestureItems.Count + _gestureMarkerItems.Count;
+            var gestureNoun = _gestureMarkerItems.Count == 0 ? "prop(s)" : _gestureItems.Count == 0 ? "marker(s)" : "object(s)";
             _lastActionSummary = _propsGestureKind == PropsGestureKind.Rotate
-                ? $"Rotated {_gestureItems.Count} prop(s)."
-                : $"Scaled {_gestureItems.Count} prop(s).";
+                ? $"Rotated {gestureCount} {gestureNoun}."
+                : $"Scaled {gestureCount} {gestureNoun}.";
             _propsGestureKind = PropsGestureKind.None;
             _gestureItems.Clear();
+            _gestureMarkerItems.Clear();
+            _gestureMarkerSiblingOriginals.Clear();
             _gestureSiblingOriginals.Clear();
             _gestureCamera = null;
             e.Use();
@@ -7115,6 +7184,21 @@ public sealed class SC2ObjectsShell
                 sibling.Scale = original.Scale;
             }
             _gestureSiblingOriginals.Clear();
+            foreach (var (marker, originalEuler, _, originalScale) in _gestureMarkerItems)
+            {
+                marker.OrientationEuler = originalEuler;
+                if (IsEffectMarker(marker)) SC2EffectMarkerPicker.SetScale(marker, originalScale);
+            }
+            foreach (var (siblingId, original) in _gestureMarkerSiblingOriginals)
+            {
+                var sibling = LookupMarker(siblingId);
+                if (sibling == null) continue;
+                sibling.OrientationEuler = original.Euler;
+                if (IsEffectMarker(sibling)) SC2EffectMarkerPicker.SetScale(sibling, original.Scale);
+            }
+            if (_gestureMarkerItems.Count > 0) BumpDataVersion();
+            _gestureMarkerItems.Clear();
+            _gestureMarkerSiblingOriginals.Clear();
             _propsGestureKind = PropsGestureKind.None;
             _gestureItems.Clear();
             _gestureCamera = null;
@@ -7153,6 +7237,15 @@ public sealed class SC2ObjectsShell
                     prop.Rotation = SC2AxisRotation.Apply(originalRotation, _gestureAxis, _gestureAxisLocal, deltaDegrees * viewSign);
                     PropagateSymmetryRotationScale(prop, originalRotation, _gestureSiblingOriginals, gestureIds, applyScale: false);
                 }
+                var markerGestureIds = new HashSet<int>(_gestureMarkerItems.Select(x => x.marker.Id));
+                foreach (var (marker, _, originalRotation, _) in _gestureMarkerItems)
+                {
+                    var viewSign = !typedAngle && _gestureCamera != null
+                        ? SC2AxisRotation.ViewSign(_gestureAxis, _gestureAxisLocal, originalRotation, _gestureCamera.transform.forward) : 1f;
+                    marker.OrientationEuler = SC2AxisRotation.Apply(originalRotation, _gestureAxis, _gestureAxisLocal, deltaDegrees * viewSign).eulerAngles;
+                    PropagateMarkerSymmetryRotationScale(marker, originalRotation, markerGestureIds, applyScale: false);
+                }
+                if (_gestureMarkerItems.Count > 0) BumpDataVersion();
                 var axisText = SC2AxisRotation.Describe(_gestureAxis, _gestureAxisLocal);
                 _lastActionSummary = $"Rotate{(axisText.Length > 0 ? " " + axisText : "")}: {(typedAngle ? _gestureTyped : deltaDegrees.ToString("0.#"))}° — X/Y/Z axis (again: local), type an angle, click/Enter to confirm, Esc to cancel.";
             }
@@ -7171,7 +7264,19 @@ public sealed class SC2ObjectsShell
                 prop.Scale = Mathf.Max(0.01f, originalScale * factor);
                 PropagateSymmetryRotationScale(prop, prop.Rotation, _gestureSiblingOriginals, gestureIds);
             }
-            _lastActionSummary = $"Scale: {factor:0.00}x — click/Enter to confirm, Esc to cancel.";
+            var scaledMarkers = 0;
+            var scaleMarkerIds = new HashSet<int>(_gestureMarkerItems.Select(x => x.marker.Id));
+            foreach (var (marker, _, _, originalScale) in _gestureMarkerItems)
+            {
+                if (!IsEffectMarker(marker)) continue;
+                SC2EffectMarkerPicker.SetScale(marker, Mathf.Max(0.01f, originalScale * factor));
+                PropagateMarkerSymmetryRotationScale(marker, Quaternion.Euler(marker.OrientationEuler), scaleMarkerIds, applyScale: true);
+                scaledMarkers++;
+            }
+            if (scaledMarkers > 0) BumpDataVersion();
+            _lastActionSummary = _gestureItems.Count == 0 && scaledMarkers == 0
+                ? "Only props and Effect markers can be scaled."
+                : $"Scale: {factor:0.00}x — click/Enter to confirm, Esc to cancel.";
         }
         RepaintHost?.Invoke();
     }
