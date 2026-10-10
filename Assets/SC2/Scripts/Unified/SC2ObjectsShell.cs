@@ -1798,7 +1798,20 @@ public sealed class SC2ObjectsShell
         {
             _validationExpanded = GUILayout.Toggle(_validationExpanded, _validationExpanded ? "Hide details" : "Show details", "Button", GUILayout.Width(SC2UiScale.Pxf(120f)));
             if (_validationExpanded)
-                foreach (var p in problems) SC2EnvFieldGui.WrapLabel("• " + p, w);
+                foreach (var p in problems)
+                {
+                    if (!_massBuildIssueMarkers.TryGetValue(p, out var markerId))
+                    {
+                        SC2EnvFieldGui.WrapLabel("• " + p, w);
+                        continue;
+                    }
+                    // A problem that belongs to one marker has a button that takes the camera to it.
+                    GUILayout.BeginHorizontal();
+                    if (SC2EnvFieldGui.Button("Go to", GUILayout.Width(SC2UiScale.Pxf(52f)), GUILayout.Height(SC2UiScale.Pxf(18f))))
+                        GoToValidationMarker(markerId);
+                    SC2EnvFieldGui.WrapLabel("• " + p, w - SC2UiScale.Pxf(58f));
+                    GUILayout.EndHorizontal();
+                }
         }
 
         // The import itself is File > Import map objects; its outcome stays visible here.
@@ -1811,6 +1824,17 @@ public sealed class SC2ObjectsShell
     }
 
     private bool _validationExpanded;
+
+    /// <summary>Selects the marker a validation problem is about (showing it again if it was hidden) and moves the camera to it.</summary>
+    private void GoToValidationMarker(int markerId)
+    {
+        var marker = Data.ObjMarkers.FirstOrDefault(m => m.Id == markerId);
+        if (marker == null) return;
+        _hiddenMarkerIds.Remove(markerId);
+        ClearAllSelections();
+        _selMarkers.Add(markerId);
+        RequestCameraFocus?.Invoke(marker.Position);
+    }
 
     private int CountDisconnectedGraphIslands()
     {
@@ -1894,7 +1918,87 @@ public sealed class SC2ObjectsShell
         return _lastImportSummary;
     }
 
-    // Validate()'s own cache — see that method's comment for why.
+    // The blueprint of the building a Mass marker stands for: every Mass marker must be a spot where it can be built.
+    private const string MassExtractorBlueprintId = "uub0701";
+    private const double MassBuildRefreshSeconds = 0.5;
+    private readonly SC2BuildRestriction _massRestriction = new();
+    private SC2ReferenceUnitIntel _massIntel;
+    private SC2GameAsset _massIntelAsset;
+    private double _massBuildAt = double.MinValue;
+    private List<string> _massBuildIssues = new();
+    // Which marker each Mass problem is about, by its text, for the "Go to" button next to it.
+    private Dictionary<string, int> _massBuildIssueMarkers = new();
+    private readonly HashSet<int> _massBuildFailing = new();
+    private List<string> _validationCombined;
+    private List<string> _validationCombinedBase;
+    private List<string> _validationCombinedMass;
+
+    /// <summary>The structural problems (see ValidateStructure) plus the Mass markers the extractor cannot be built on. The Mass check
+    /// reads the terrain, the Costs and every footprint on the map, so it runs at most a couple of times a second and its text
+    /// is only replaced when it really changed.</summary>
+    private List<string> Validate()
+    {
+        var structural = ValidateStructure();
+        RefreshMassBuildability();
+        if (_massBuildIssues.Count == 0) return structural;
+        if (_validationCombined == null || !ReferenceEquals(_validationCombinedBase, structural) || !ReferenceEquals(_validationCombinedMass, _massBuildIssues))
+        {
+            _validationCombined = new List<string>(structural);
+            _validationCombined.AddRange(_massBuildIssues);
+            _validationCombinedBase = structural;
+            _validationCombinedMass = _massBuildIssues;
+        }
+        return _validationCombined;
+    }
+
+    private void RefreshMassBuildability()
+    {
+        var now = Time.realtimeSinceStartupAsDouble;
+        if (now - _massBuildAt < MassBuildRefreshSeconds) return;
+        _massBuildAt = now;
+
+        List<SC2ObjMarker> masses = null;
+        foreach (var marker in Data.ObjMarkers)
+            if (string.Equals(marker.Type, "Mass", StringComparison.OrdinalIgnoreCase)) (masses ??= new List<SC2ObjMarker>()).Add(marker);
+
+        var issues = new List<string>();
+        var issueMarkers = new Dictionary<string, int>();
+        _massBuildFailing.Clear();
+        var asset = masses != null ? _assetBrowser.FindUnitAsset(MassExtractorBlueprintId) : null;
+        if (asset != null && _terrainShell != null && _terrainShell.TryGetLiveHeightGridSnapshot(out var heights, out var mapX, out var mapY))
+        {
+            if (!ReferenceEquals(asset, _massIntelAsset))
+            {
+                _massIntel = SC2ReferenceUnitIntelReader.Read(asset.Blueprint);
+                _massIntelAsset = asset;
+            }
+            if (_massIntel.HasBuildSkirt)
+            {
+                _massRestriction.Refresh(Data, _massIntel, heights, mapX, mapY, CurrentWaterSurface);
+                var obstacles = SC2BuildabilityChecker.GatherObstacles(Data, _assetBrowser, -1, out _);
+                string N(float value) => value.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+                foreach (var marker in masses)
+                {
+                    var check = SC2BuildabilityChecker.Check(_massIntel, heights, mapX, mapY, obstacles, _massRestriction, marker.Position.x, marker.Position.z);
+                    if (check.CanBuild) continue;
+                    _massBuildFailing.Add(marker.Id);
+                    var text = $"Mass marker '{marker.Name}' ({N(marker.Position.x)}, {N(marker.Position.z)}): {MassExtractorBlueprintId.ToUpperInvariant()} can't be built here - "
+                               + SC2BuildabilityChecker.DescribeRefusal(check, _massRestriction) + ".";
+                    issues.Add(text);
+                    issueMarkers[text] = marker.Id;
+                }
+            }
+        }
+
+        // Keep the same list object while nothing changed, so the combined list above is not rebuilt every time.
+        if (!issues.SequenceEqual(_massBuildIssues))
+        {
+            _massBuildIssues = issues;
+            _massBuildIssueMarkers = issueMarkers;
+        }
+    }
+
+    // ValidateStructure()'s own cache — see that method's comment for why.
     private int _validationCacheMarkersCount = -1;
     private int _validationCacheGraphEdgeTotal = -1;
     private int _validationCacheChainsCount = -1;
@@ -1915,7 +2019,7 @@ public sealed class SC2ObjectsShell
     /// O(1) marker-id HashSet instead of the linear scan, plus caching the
     /// whole result against cheap Count-based fingerprints so a mouse
     /// wiggle with nothing changed costs nothing at all.</summary>
-    private List<string> Validate()
+    private List<string> ValidateStructure()
     {
         var graphEdgeTotal = 0;
         foreach (var g in Data.ObjGraphs) graphEdgeTotal += g.MarkerIdsA?.Count ?? 0;
@@ -6763,7 +6867,7 @@ public sealed class SC2ObjectsShell
             {
                 if (_hiddenMarkerIds.Contains(marker.Id)) continue;
                 var template = SC2MarkerTemplates.Find(marker.Type);
-                var invalid = string.IsNullOrEmpty(marker.Type) || string.IsNullOrEmpty(marker.Name);
+                var invalid = string.IsNullOrEmpty(marker.Type) || string.IsNullOrEmpty(marker.Name) || _massBuildFailing.Contains(marker.Id);
                 if (invalid) DrawInvalidRing(camera, viewportRect, marker.Position);
                 var color = template != null ? SC2MarkerTemplates.HexToColor(marker.ColorHex) : new Color(.35f, .9f, .95f, .75f);
                 if (_selMarkers.Contains(marker.Id)) color = new Color(1f, .9f, .12f, .98f);
