@@ -40,6 +40,13 @@ public sealed class SC2UnitPropBrowser
     private const string AllPropFolders = "All folders";
     private static readonly Dictionary<string, SC2GameAssetDiscoveryResult> SharedIndexes = new Dictionary<string, SC2GameAssetDiscoveryResult>(StringComparer.OrdinalIgnoreCase);
 
+    // Favorite props (the prop browser only), shared by every browser instance and kept across sessions. A prop is identified like
+    // the browser identifies it everywhere else (AssetIdentity), so the copy of a prop under mods/<mod>/base|shadow/ is the same favorite.
+    private const string FavoritePropsPrefsKey = "SC2.PropBrowserFavorites";
+    private static HashSet<string> _favoriteProps;
+    private bool _favoritesOnly;
+    private GUIStyle _favoriteStarStyle;
+
     private string _search = string.Empty;
     private bool _showUnavailable;
     private AssetKind _kind;
@@ -144,6 +151,7 @@ public sealed class SC2UnitPropBrowser
         _kind = kind;
         _onPick = onPick ?? throw new ArgumentNullException(nameof(onPick));
         _search = string.Empty;
+        _favoritesOnly = false;
         _selectedPropFolder = AllPropFolders;
         _selectedUnitFaction = AllFactions;
         _selectedUnitCategories.Clear();
@@ -224,9 +232,12 @@ public sealed class SC2UnitPropBrowser
     private void DrawWindowContent()
     {
         GUILayout.BeginVertical();
-        GUILayout.Label(_kind == AssetKind.Unit
-            ? "Blueprint -> SCM -> DDS. Unit cards use the game's UI icon when it exists."
-            : "Blueprint -> SCM -> DDS. Prop cards show a 3D render of the model; hover one for a turning preview.");
+        // The prop browser is kept to its favorites switch and the folder filter; the unit browser keeps its full header
+        // (description, game data root, Reindex, search, incomplete toggle, count).
+        bool fullHeader = _kind == AssetKind.Unit;
+        if (fullHeader)
+        {
+        GUILayout.Label("Blueprint -> SCM -> DDS. Unit cards use the game's UI icon when it exists.");
 
         GUILayout.BeginHorizontal();
         // Read-only: the gamedata root is configured once, on the startup
@@ -242,6 +253,7 @@ public sealed class SC2UnitPropBrowser
         if (GUILayout.Button(_result == null ? "Index" : "Reindex", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
         GUI.enabled = guiEnabledBeforeIndexButton;
         GUILayout.EndHorizontal();
+        }
 
         if (_loadTask != null)
         {
@@ -256,11 +268,15 @@ public sealed class SC2UnitPropBrowser
         {
             GUILayout.FlexibleSpace();
             GUILayout.Label("Set the gamedata root on the startup screen, then press Index.", GUI.skin.box, GUILayout.Height(SC2UiScale.Pxf(42f)));
+            // Without the header's Reindex button the prop browser still needs a way to retry a failed index.
+            if (!fullHeader && !string.IsNullOrWhiteSpace(GameDataRoot) && GUILayout.Button("Index", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
             GUILayout.FlexibleSpace();
             GUILayout.EndVertical();
             return;
         }
 
+        if (fullHeader)
+        {
         GUILayout.BeginHorizontal();
         string nextSearch = GUILayout.TextField(_search ?? string.Empty, GUI.skin.textField, GUILayout.ExpandWidth(true));
         if (!string.Equals(nextSearch, _search, StringComparison.Ordinal)) { _search = nextSearch; InvalidateVisibleEntries(); }
@@ -268,8 +284,9 @@ public sealed class SC2UnitPropBrowser
         if (nextShowUnavailable != _showUnavailable) { _showUnavailable = nextShowUnavailable; InvalidateVisibleEntries(); }
         GUILayout.Label(GetVisibleEntries().Count + " assets", GUILayout.Width(SC2UiScale.Pxf(76f)));
         GUILayout.EndHorizontal();
+        }
 
-        if (_kind == AssetKind.Prop) DrawPropFolderFilter();
+        if (_kind == AssetKind.Prop) { DrawFavoritesSwitch(); DrawPropFolderFilter(); }
         if (_kind == AssetKind.Unit) DrawUnitFilterRow();
         var entries = GetVisibleEntries();
         if (_kind == AssetKind.Prop)
@@ -458,7 +475,7 @@ public sealed class SC2UnitPropBrowser
 
     private List<SC2GameAssetDiscoveryEntry> GetVisibleEntries()
     {
-        string signature = _kind + "|" + _showUnavailable + "|" + _selectedPropFolder + "|" + (_search ?? string.Empty) +
+        string signature = _kind + "|" + _showUnavailable + "|" + _favoritesOnly + "|" + _selectedPropFolder + "|" + (_search ?? string.Empty) +
             "|" + _selectedUnitFaction + "|" + string.Join(",", _selectedUnitCategories.OrderBy(c => c, StringComparer.OrdinalIgnoreCase));
         if (signature == _visibleSignature) return _visibleEntries;
 
@@ -470,6 +487,8 @@ public sealed class SC2UnitPropBrowser
         if (!_showUnavailable) candidates = candidates.Where(entry => entry.IsReady);
         if (_kind == AssetKind.Prop && !string.Equals(_selectedPropFolder, AllPropFolders, StringComparison.OrdinalIgnoreCase))
             candidates = candidates.Where(entry => string.Equals(GetPropFolder(entry), _selectedPropFolder, StringComparison.OrdinalIgnoreCase));
+        if (_kind == AssetKind.Prop && _favoritesOnly)
+            candidates = candidates.Where(IsFavorite);
         if (_kind == AssetKind.Unit)
         {
             if (!string.Equals(_selectedUnitFaction, AllFactions, StringComparison.OrdinalIgnoreCase))
@@ -843,7 +862,55 @@ public sealed class SC2UnitPropBrowser
         GUI.Label(new Rect(rect.x + 5, rect.y + 126, rect.width - 10, 17), GetSecondaryLabel(entry), CardLabelStyle);
         string state = !entry.IsReady ? entry.Issues.First(issue => issue.IsBlocking).Kind : entry.Issues.Count == 0 ? "Ready" : "Ready (fallback)";
         GUI.Label(new Rect(rect.x + 5, rect.y + 144, rect.width - 10, 17), state, entry.IsReady ? CardStateReadyStyle : CardStateIssueStyle);
+        // Before the card-sized button below, so a click on the star toggles the favorite instead of picking the prop.
+        if (_kind == AssetKind.Prop) DrawFavoriteStar(previewRect, entry);
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Select(entry);
+    }
+
+    /// <summary>The favorites filter, placed with the folder filter it combines with.</summary>
+    private void DrawFavoritesSwitch()
+    {
+        bool next = GUILayout.Toggle(_favoritesOnly, "Favorites (" + FavoriteProps.Count + ")", GUI.skin.button, GUILayout.Width(SC2UiScale.Pxf(140f)), GUILayout.Height(SC2UiScale.Pxf(26f)));
+        if (next == _favoritesOnly) return;
+        _favoritesOnly = next;
+        _scroll = Vector2.zero;
+        InvalidateVisibleEntries(false);
+    }
+
+    private static HashSet<string> FavoriteProps
+    {
+        get
+        {
+            if (_favoriteProps != null) return _favoriteProps;
+            _favoriteProps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var id in PlayerPrefs.GetString(FavoritePropsPrefsKey, string.Empty).Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                _favoriteProps.Add(id);
+            return _favoriteProps;
+        }
+    }
+
+    private static bool IsFavorite(SC2GameAssetDiscoveryEntry entry) => FavoriteProps.Contains(AssetIdentity(entry));
+
+    private void ToggleFavorite(SC2GameAssetDiscoveryEntry entry)
+    {
+        var id = AssetIdentity(entry);
+        if (!FavoriteProps.Add(id)) FavoriteProps.Remove(id);
+        PlayerPrefs.SetString(FavoritePropsPrefsKey, string.Join("\n", FavoriteProps));
+        PlayerPrefs.Save();
+        // With the Favorites filter on, the card that was just un-starred has to leave the grid.
+        if (_favoritesOnly) InvalidateVisibleEntries(false);
+    }
+
+    private void DrawFavoriteStar(Rect previewRect, SC2GameAssetDiscoveryEntry entry)
+    {
+        var starRect = new Rect(previewRect.xMax - 22f, previewRect.y + 3f, 19f, 19f);
+        bool favorite = IsFavorite(entry);
+        _favoriteStarStyle ??= new GUIStyle(GUI.skin.button) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold, padding = new RectOffset(0, 0, 0, 0) };
+        var previousColor = GUI.backgroundColor;
+        GUI.backgroundColor = favorite ? new Color(1f, 0.82f, 0.2f, 1f) : previousColor;
+        if (GUI.Button(starRect, new GUIContent(favorite ? "*" : "+", favorite ? "Remove from favorites" : "Add to favorites"), _favoriteStarStyle))
+            ToggleFavorite(entry);
+        GUI.backgroundColor = previousColor;
     }
 
     private void Select(SC2GameAssetDiscoveryEntry entry)
