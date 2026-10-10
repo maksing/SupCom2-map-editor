@@ -606,7 +606,10 @@ public static class SC2MarkerScenePreview
     private static string ResolveIconKey(SC2ObjMarker marker)
     {
         if (SC2ObjectsShell.IsArmyStartPosition(marker.Name)) return SC2MarkerTemplates.ArmyIconKey;
-        return SC2MarkerTemplates.Find(marker.Type)?.IconKey;
+        // Markers of the removed weather types, from an older map, keep their gizmo.
+        return SC2MarkerTemplates.Find(marker.Type)?.IconKey
+            ?? (string.Equals(marker.Type, "Weather Definition", System.StringComparison.OrdinalIgnoreCase) ? "other"
+                : string.Equals(marker.Type, "Weather Generator", System.StringComparison.OrdinalIgnoreCase) ? "weather_generator" : null);
     }
 
     private static GameObject LoadPrefab(string key)

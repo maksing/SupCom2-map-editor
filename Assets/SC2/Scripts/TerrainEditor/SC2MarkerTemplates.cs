@@ -37,12 +37,10 @@ public static class SC2MarkerTemplates
         /// (Resources/EditorIcons/Markers/&lt;Key&gt;.png, used by the marker
         /// placement picker) and a real 3D gizmo mesh (Resources/MarkerModels/
         /// &lt;Key&gt;.fbx, instantiated in the viewport by SC2MarkerScenePreview)
-        /// for 26 of the 30 registered types. The remaining 4
-        /// types with no per-type asset (Hydrocarbon, Weather Definition,
-        /// Base Marker, gpnav Playable Island — already grouped under one
-        /// "Other" picker tile in MarkerCategories) share one generic
-        /// "other" gizmo (Resources/MarkerModels/other.fbx) instead of the
-        /// old plain flat-dot viewport rendering.</summary>
+        /// for every registered type except Hydrocarbon and gpnav Playable Island
+        /// (grouped under one "Other" picker tile in MarkerCategories), which
+        /// share one generic "other" gizmo (Resources/MarkerModels/other.fbx)
+        /// instead of the old plain flat-dot viewport rendering.</summary>
         public string IconKey = "";
     }
 
@@ -63,8 +61,6 @@ public static class SC2MarkerTemplates
         new() { Name = "Rally Point", Hint = true, Prop = "/props/markers/M_Defensive_prop.bp", ColorHex = "FF808000", IconKey = "rally_point" },
         new() { Name = "Island", Hint = true, Prop = "/props/markers/M_CombatZone_prop.bp", ColorHex = "ff0000AA", IconKey = "island" },
         new() { Name = "Naval Exclude", Hint = true, Prop = "/props/markers/M_CombatZone_prop.bp", ColorHex = "ff0000AA", IconKey = "naval_exclude" },
-        new() { Name = "Weather Definition", Hint = true, Prop = "/props/markers/M_Defensive_prop.bp", ColorHex = "FF808000", IconKey = "other" },
-        new() { Name = "Weather Generator", Hint = true, Prop = "/props/markers/M_Defensive_prop.bp", ColorHex = "FF808000", IconKey = "weather_generator" },
         new() { Name = "Camera Info", Prop = "/props/markers/M_Camera_prop.bp", ColorHex = "ff808000", EditorIcon = "/textures/editor/marker_mass.bmp", IconKey = "camera_info" },
         new() { Name = "Attack Marker", Prop = "/props/markers/M_Blank_prop.bp", ColorHex = "ff800080", IconKey = "attack_marker" },
         new() { Name = "Transport Marker", Prop = "/props/markers/M_Blank_prop.bp", ColorHex = "ff80A088", IconKey = "transport_marker" },
@@ -79,7 +75,7 @@ public static class SC2MarkerTemplates
         // every type actually found on disk, not just the documented ones.
         new() { Name = "Default Path Node", Hint = true, Prop = "/props/markers/M_Path_prop.bp", ColorHex = "ff008000", IconKey = "default_path_node" },
         new() { Name = "Sound", Prop = "", ColorHex = "ff008000", IconKey = "sound" },
-        new() { Name = "Base Marker", Prop = "", ColorHex = "ff008000", IconKey = "other" },
+        new() { Name = "Base Marker", Prop = "", ColorHex = "ff008000", IconKey = "base_marker" },
         new() { Name = "gpnav Playable Island", Prop = "", ColorHex = "ff008000", IconKey = "other" },
 
         // Not a real engine type — an authoring convenience (FAF map editor

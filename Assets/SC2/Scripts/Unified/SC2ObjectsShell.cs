@@ -4310,7 +4310,7 @@ public sealed class SC2ObjectsShell
         new() { Key = "NavalExclude", Label = "Nav. Excl.", IconResource = "EditorIcons/Markers/naval_exclude", TemplateNames = new[] { "Naval Exclude" } },
         new() { Key = "NavalLink", Label = "Nav. Link", IconResource = "EditorIcons/Markers/naval_link", TemplateNames = new[] { "Naval Link" } },
         new() { Key = "Effect", Label = "Effect", IconResource = "EditorIcons/Markers/effect", TemplateNames = new[] { "Effect" } },
-        new() { Key = "Weather", Label = "Weather", IconResource = "EditorIcons/Markers/weather_generator", TemplateNames = new[] { "Weather Generator" } },
+        new() { Key = "Base", Label = "Base", IconResource = "EditorIcons/Markers/base_marker", TemplateNames = new[] { "Base Marker" } },
         new() { Key = "Attack", Label = "Attack", IconResource = "EditorIcons/Markers/attack_marker", TemplateNames = new[] { "Attack Marker" } },
         new() { Key = "Transport", Label = "Transport", IconResource = "EditorIcons/Markers/transport_marker", TemplateNames = new[] { "Transport Marker" } },
         new() { Key = "Sound", Label = "Sound", IconResource = "EditorIcons/Markers/sound", TemplateNames = new[] { "Sound" } },
@@ -4320,7 +4320,7 @@ public sealed class SC2ObjectsShell
         new() { Key = "PathAmphib", Label = "Amphib. Path", IconResource = "EditorIcons/Markers/amphibious_path_node", TemplateNames = new[] { "Amphibious Path Node" } },
         new() { Key = "PathAuto", Label = "Auto Path", IconResource = "EditorIcons/Markers/auto_path_node", TemplateNames = new[] { "Auto Path Node" } },
         new() { Key = "PathDefault", Label = "Def. Path", IconResource = "EditorIcons/Markers/default_path_node", TemplateNames = new[] { "Default Path Node" } },
-        new() { Key = "Other", Label = "Other", IconResource = "EditorIcons/marker_other", TemplateNames = new[] { "Hydrocarbon", "Weather Definition", "Base Marker", "gpnav Playable Island" } },
+        new() { Key = "Other", Label = "Other", IconResource = "EditorIcons/marker_other", TemplateNames = new[] { "Hydrocarbon", "gpnav Playable Island" } },
     };
 
     private static readonly Dictionary<string, Texture2D> _markerIconCache = new();
