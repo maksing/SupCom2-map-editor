@@ -83,6 +83,8 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PropFacing.cs" Link="Source\SC2PropFacing.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2BuildSkirtMath.cs" Link="Source\SC2BuildSkirtMath.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ImportedPivot.cs" Link="Source\SC2ImportedPivot.cs" />
+    <!-- Where a saved map lives on disk and in what order its files are read. -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2SaveLayout.cs" Link="Source\SC2SaveLayout.cs" />
     <Compile Include="$(SC2Root)\Scripts\TerrainEditor\SC2HfieldProjectionService.cs" Link="Source\SC2HfieldProjectionService.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ShaderFlag.cs" Link="Source\SC2ShaderFlag.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2EnvironmentDefaults.cs" Link="Source\SC2EnvironmentDefaults.cs" />

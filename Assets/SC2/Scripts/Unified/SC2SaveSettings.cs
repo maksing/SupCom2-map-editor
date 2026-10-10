@@ -19,6 +19,7 @@ public static class SC2SaveSettings
     private const string AutosaveEnabledPrefKey = "SC2.Autosave.Enabled";
     private const string AutosaveMinutesPrefKey = "SC2.Autosave.IntervalMinutes";
     private const string BackupCountPrefKey = "SC2.Backups.MaxCount";
+    private const string WriteLegacyJsonPrefKey = "SC2.Save.WriteLegacyJson";
 
     public const float DefaultAutosaveIntervalMinutes = 15f;
     public const int DefaultMaxBackupsPerMap = 2;
@@ -31,6 +32,25 @@ public static class SC2SaveSettings
     private static int _autosaveEnabled = -1;
     private static float _autosaveIntervalMinutes = -1f;
     private static int _maxBackupsPerMap = -1;
+    private static int _writeLegacyJson = -1;
+
+    /// <summary>Whether a save (and every backup) also writes the legacy JSON copy of the whole map next to the document. On by
+    /// default: it is the fallback when the document or one of its blobs cannot be read, and what older versions of the editor read.
+    /// It is the largest file of a save (hundreds of megabytes on a big map), so it can be switched off once saves are trusted.</summary>
+    public static bool WriteLegacyJson
+    {
+        get
+        {
+            if (_writeLegacyJson < 0) _writeLegacyJson = PlayerPrefs.GetInt(WriteLegacyJsonPrefKey, 1);
+            return _writeLegacyJson != 0;
+        }
+        set
+        {
+            _writeLegacyJson = value ? 1 : 0;
+            PlayerPrefs.SetInt(WriteLegacyJsonPrefKey, _writeLegacyJson);
+            PlayerPrefs.Save();
+        }
+    }
 
     /// <summary>On by default (matches the requested "15 minutes by default,
     /// the user can configure or turn it off" — off is a deliberate choice,

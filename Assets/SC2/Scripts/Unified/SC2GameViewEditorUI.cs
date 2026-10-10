@@ -1146,7 +1146,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // compiled #if !UNITY_EDITOR only (Build & Run-only persistence),
             // so this file — which must compile in both contexts — can't
             // call into it here even though OnEnable() itself runs in both.
-            BlobStore = new SC2DirectoryBlobStore(System.IO.Path.Combine(Application.persistentDataPath, "SC2Terrains", "Blobs")),
+            BlobStore = SC2SaveStorage.CreateSessionBlobStore(),
         };
         // Keep the runtime build visible in screenshots: Editor Game View and
         // Build & Run can otherwise be mistaken for the same player instance.
@@ -2615,8 +2615,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         var contentHeight = 1 * MenuItemHeight + 70f * SC2UiScale.Factor;
 #if !UNITY_EDITOR
-        // + the Build-only "Backups to keep" field.
-        contentHeight += 16f * SC2UiScale.Factor + MenuItemHeight;
+        // + the Build-only "Backups to keep" field and "Write legacy JSON copy" switch.
+        contentHeight += 16f * SC2UiScale.Factor + MenuItemHeight * 2f;
 #endif
         DrawMenuPanel(_autosaveMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
@@ -2631,6 +2631,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // (SC2RuntimeTerrainPersistence) — same Build-only scope as
             // Load/Delete Saved Terrain in the File menu.
             SC2SaveSettings.MaxBackupsPerMap = Mathf.Max(0, SC2EnvFieldGui.IntField("Backups to keep", SC2SaveSettings.MaxBackupsPerMap, "MaxBackupsPerMap"));
+            // The whole-map JSON copy is the fallback when the document cannot be read, and the biggest file of a save.
+            var writeLegacyJson = GUILayout.Toggle(SC2SaveSettings.WriteLegacyJson, "Write legacy JSON copy", _dropdownToggleStyle);
+            if (writeLegacyJson != SC2SaveSettings.WriteLegacyJson) SC2SaveSettings.WriteLegacyJson = writeLegacyJson;
 #endif
         });
     }

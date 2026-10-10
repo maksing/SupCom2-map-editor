@@ -4929,9 +4929,10 @@ public class SC2TerrainShell : ScriptableObject
                 // audit: Save Terrain was silently discarding every catalog
                 // entry/placement/symmetry group SC2DecalsShell had authored.
                 SC2RuntimeTerrainPersistence.Save(_data, Session);
-                var savePath = SC2RuntimeTerrainPersistence.GetSavePath(_data.MapName);
-                var savedBytes = System.IO.File.Exists(savePath) ? new System.IO.FileInfo(savePath).Length : -1L;
-                _lastSaveInfo = $"Saved to: {savePath}\n({savedBytes:N0} bytes, MapName='{_data.MapName}')";
+                var saveFolder = SC2RuntimeTerrainPersistence.SharePackageDirectory(_data.MapName);
+                var manifestPath = SC2RuntimeTerrainPersistence.GetSavePath(_data.MapName);
+                var savedBytes = System.IO.File.Exists(manifestPath) ? new System.IO.FileInfo(manifestPath).Length : -1L;
+                _lastSaveInfo = $"Saved to: {saveFolder}\n(manifest {savedBytes:N0} bytes, MapName='{_data.MapName}')";
                 SC2Log.Log($"[SC2TerrainShell] Save: SC2RuntimeTerrainPersistence.Save done ({sw.ElapsedMilliseconds}ms), {savedBytes:N0} bytes.");
 #endif
                 LastSaveRealtimeSeconds = Time.realtimeSinceStartupAsDouble;
@@ -4970,7 +4971,7 @@ public class SC2TerrainShell : ScriptableObject
     /// <summary>The autosave timer's entry point — writes a rotating backup
     /// snapshot from the current live data WITHOUT touching any canonical
     /// save file (never AssetDatabase.SaveAssets in the Editor, never the
-    /// .sc2terrain.json/manifest.json/shareable package in a Build). Before
+    /// map's .sc2mapshare folder in a Build). Before
     /// this existed, autosave called the exact same RequestSave() a manual
     /// Save does, so leaving the map open for an hour with autosave on
     /// meant the "last saved state" on disk was always whatever autosave
