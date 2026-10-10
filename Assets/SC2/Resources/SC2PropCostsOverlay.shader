@@ -32,6 +32,9 @@ Shader "SC2/PropCostsOverlay"
 
             sampler2D _CostsOverlayTex;
             float _CostsOverlayGridSize;
+            // The Collision2 floor plane (SC2FloorOverlayPlane): where the ground lies below it the overlay is drawn on the plane instead.
+            float _SC2OverlayFloorOn;
+            float _SC2OverlayFloorY;
 
             struct appdata { float4 vertex : POSITION; float3 normal : NORMAL; };
             struct v2f { float4 pos : SV_POSITION; float3 world : TEXCOORD0; float3 normal : TEXCOORD1; };
@@ -47,6 +50,7 @@ Shader "SC2/PropCostsOverlay"
 
             fixed4 frag(v2f i) : SV_Target
             {
+                if (_SC2OverlayFloorOn > 0.5 && i.world.y < _SC2OverlayFloorY) discard;
                 half4 overlay = tex2D(_CostsOverlayTex, saturate(i.world.xz / max(_CostsOverlayGridSize, 1.0)));
                 // Every surface of the prop shows the cells under it, walls included (a wall shows its cell's colour straight
                 // up its side), so the building reads as see-through to the costs; a wall faces away only a little less.

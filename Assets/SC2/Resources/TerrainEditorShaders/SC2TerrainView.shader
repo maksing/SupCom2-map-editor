@@ -112,6 +112,9 @@ Shader "Hidden/SC2/TerrainView"
             int _PreviewMode, _PairCount, _HeightGradientEnabled, _UseArrayTextures;
             sampler2D _CostsOverlayTex;
             int _CostsOverlayEnabled;
+            // The Collision2 floor plane (SC2FloorOverlayPlane): where the ground lies below it the overlay is drawn on the plane instead.
+            float _SC2OverlayFloorOn;
+            float _SC2OverlayFloorY;
             int _HeightGridEnabled;
             float _HeightGridCellSize;
             int _WireframeEnabled;
@@ -381,9 +384,11 @@ Shader "Hidden/SC2/TerrainView"
             // view vs. a real build) — a plain texture sample here has none
             // of that timing dependency, it just always shows whatever the
             // CPU side last uploaded via SC2TerrainRuntime.SetCostsOverlayTexture.
-            half4 ApplyCostsOverlay(half4 baseColor, float2 uv1)
+            half4 ApplyCostsOverlay(half4 baseColor, float2 uv1, float worldY)
             {
                 if (_CostsOverlayEnabled == 0)
+                    return baseColor;
+                if (_SC2OverlayFloorOn > 0.5 && worldY < _SC2OverlayFloorY)
                     return baseColor;
 
                 half4 overlay = tex2D(_CostsOverlayTex, SafeMapUV(uv1));
@@ -552,7 +557,7 @@ Shader "Hidden/SC2/TerrainView"
                     float3 c = s < .5
                         ? lerp(float3(.05, .85, .1), float3(.95, .85, 0), s * 2)
                         : lerp(float3(.95, .85, 0), float3(.9, .1, .05), (s - .5) * 2);
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(c, 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(c, 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
                 int pIdx = DecodePair(i.uv1);
@@ -563,11 +568,11 @@ Shader "Hidden/SC2/TerrainView"
                 if (_PreviewMode == 2)
                 {
                     half3 col = tex2D(_PairColorTex, SafeMapUV(i.uv1)).rgb;
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(col, i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(col, i.nrm), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
                 if (unassigned)
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(UnassignedCheckerColor(i.uv0), i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(UnassignedCheckerColor(i.uv0), i.nrm), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
 
                 half blend = tex2D(_BlendTex, SafeBlendUV(i.uv1)).a;
                 float ts = GetTiling(pIdx);
@@ -580,7 +585,7 @@ Shader "Hidden/SC2/TerrainView"
                 {
                     half3 c1 = tex2Dlod(_PairLUT, float4(LutUV(pIdx, .25), 0, 0)).rgb;
                     half3 c2 = tex2Dlod(_PairLUT, float4(LutUV(pIdx, .75), 0, 0)).rgb;
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(lerp(c1, c2, blend), i.nrm), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(MatCapLit(lerp(c1, c2, blend), i.nrm), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
                 half3 d1;
@@ -606,7 +611,7 @@ Shader "Hidden/SC2/TerrainView"
                     half flatShade0 = (half)(0.35 + 0.65 * saturate(dot(normalize(i.nrm), kPreviewLight)));
                     half shade0 = (half)(0.35 + 0.65 * saturate(dot(nWorld0, kPreviewLight))) / max(flatShade0, 0.2h);
                     half3 readableDiffuse = saturate(albedo * _TexturedBrightness * shade0);
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
                 // _HasRNM-style gate, matching the real game's own
@@ -627,7 +632,7 @@ Shader "Hidden/SC2/TerrainView"
                     float3 nrm2 = ApplyTangentNormal(normalize(i.nrm), tn2);
                     half ndl2 = abs(dot(nrm2, kPreviewLight)) * 0.3 + 0.7;
                     half3 lit2 = albedo * ndl2;
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
                 // Real baked RNM lighting (SC2RnmBakeService) instead of a
@@ -689,7 +694,7 @@ Shader "Hidden/SC2/TerrainView"
                 const half RNM_CONTRAST = 2.2;
                 rnmColor = saturate((rnmColor - 0.5) * RNM_CONTRAST + 0.5);
                 half3 lit = albedo * rnmColor;
-                return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1), i.uv0), i.uv0), refCol);
+                return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
             }
             ENDCG
         }

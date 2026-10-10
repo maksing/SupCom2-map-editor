@@ -222,6 +222,9 @@ Shader "SC2/Terrain"
             sampler2D _CostsOverlayTex;
             float   _CostsOverlayEnabled;
             float   _CostsOverlayGridSize;
+            // The Collision2 floor plane (SC2FloorOverlayPlane): where the ground lies below it the overlay is drawn on the plane instead.
+            float _SC2OverlayFloorOn;
+            float _SC2OverlayFloorY;
             float   _HeightGridEnabled;
             float   _HeightGridCellSize;
             sampler2D _ReferenceOverlayTex;
@@ -592,7 +595,7 @@ Shader "SC2/Terrain"
                 // Costs/TerrainTypes overlay — sampled from world-space XZ /
                 // _CostsOverlayGridSize (see this shader's own Properties
                 // comment for why i.uv2 is the wrong space here).
-                if (_CostsOverlayEnabled > 0.5)
+                if (_CostsOverlayEnabled > 0.5 && !(_SC2OverlayFloorOn > 0.5 && i.worldPos.y < _SC2OverlayFloorY))
                 {
                     half4 overlay = tex2D(_CostsOverlayTex, saturate(i.worldPos.xz / max(_CostsOverlayGridSize, 1.0)));
                     color = lerp(color, overlay.rgb, overlay.a);

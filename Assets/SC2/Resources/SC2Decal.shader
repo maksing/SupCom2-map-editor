@@ -95,6 +95,9 @@ Shader "SC2/Decal"
             sampler2D _CostsOverlayTex;
             float _CostsOverlayEnabled;
             float _CostsOverlayGridSize;
+            // The Collision2 floor plane (SC2FloorOverlayPlane): where the ground lies below it the overlay is drawn on the plane instead.
+            float _SC2OverlayFloorOn;
+            float _SC2OverlayFloorY;
 
             // Decal lighting consistency (GLOBAL properties, no Properties{}
             // block entry needed — see SC2TerrainRuntime.
@@ -294,7 +297,7 @@ Shader "SC2/Decal"
                 // Costs/TerrainTypes overlay — same world-space XZ sampling
                 // as SC2Terrain.shader, so painted passability data shows
                 // through a decal instead of being hidden underneath it.
-                if (_CostsOverlayEnabled > 0.5)
+                if (_CostsOverlayEnabled > 0.5 && !(_SC2OverlayFloorOn > 0.5 && i.worldPos.y < _SC2OverlayFloorY))
                 {
                     half4 overlay = tex2D(_CostsOverlayTex, saturate(i.worldPos.xz / max(_CostsOverlayGridSize, 1.0)));
                     lit = lerp(lit, overlay.rgb, overlay.a);
