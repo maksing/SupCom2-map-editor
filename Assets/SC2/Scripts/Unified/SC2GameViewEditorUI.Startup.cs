@@ -57,9 +57,7 @@ public sealed partial class SC2GameViewEditorUI
 
     // Loaded from Resources so both the Editor and a real Build & Run find
     // the same asset (matching SharedTerrainDataResourceName's own
-    // convention) - the actual image is added later as a real Resources
-    // asset at this path; until then this stays null and only the plain
-    // dark tint below shows, no error either way.
+    // convention). Without it the panel shows at once over the plain dark tint.
     private const string StartupBackgroundResourceName = "SC2StartupBackground";
     private static Texture2D _startupBackground;
     private static bool _startupBackgroundLoadAttempted;
@@ -67,6 +65,14 @@ public sealed partial class SC2GameViewEditorUI
 
     private const string StartupMadeByText = "maksing";
     private const string StartupThanksToText = "FoxTermelon, Crya and r3code";
+
+    // The picture comes first, alone and at full brightness, until a click, a key press or StartupSplashSeconds; then the dimming and
+    // the panel fade in over StartupRevealSeconds. Without the picture there is nothing to show first, so the panel appears at once.
+    private const float StartupSplashSeconds = 3f;
+    private const float StartupRevealSeconds = 0.8f;
+    private float _startupShownAt = -1f;
+    private float _startupRevealAt = -1f;
+    private float _startupLastDrawTime = -100f;
 
     private void DrawStartupOverlay(int screenWidth, int screenHeight)
     {
@@ -79,13 +85,47 @@ public sealed partial class SC2GameViewEditorUI
             _startupBackground = Resources.Load<Texture2D>(StartupBackgroundResourceName);
             _startupBackgroundLoadAttempted = true;
         }
+
+        var now = Time.realtimeSinceStartup;
+        // A screen that was not drawn for a while is being shown anew, and starts with the picture again.
+        if (now - _startupLastDrawTime > 1.5f)
+        {
+            _startupShownAt = now;
+            _startupRevealAt = -1f;
+        }
+        _startupLastDrawTime = now;
+
+        var e = Event.current;
+        if (_startupRevealAt < 0f)
+        {
+            var dismissed = e != null && (e.type == EventType.MouseDown || e.type == EventType.KeyDown);
+            if (dismissed || _startupBackground == null || now - _startupShownAt >= StartupSplashSeconds)
+            {
+                _startupRevealAt = now;
+                if (dismissed) e.Use();
+            }
+        }
+        var reveal = _startupRevealAt < 0f ? 0f : Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((now - _startupRevealAt) / StartupRevealSeconds));
+
         if (_startupBackground != null)
             GUI.DrawTexture(new Rect(0, 0, screenWidth, screenHeight), _startupBackground, ScaleMode.ScaleAndCrop);
 
         var prevColor = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, 0.6f);
+        GUI.color = new Color(0f, 0f, 0f, 0.6f * reveal);
         GUI.DrawTexture(new Rect(0, 0, screenWidth, screenHeight), Texture2D.whiteTexture);
         GUI.color = prevColor;
+
+        if (reveal <= 0f)
+        {
+            // Only the picture.
+            if (e != null && e.type == EventType.MouseDown) e.Use();
+            return;
+        }
+
+        // The panel fades in with the dimming and takes input once it is fully there.
+        var enabledBefore = GUI.enabled;
+        GUI.enabled = enabledBefore && reveal >= 0.99f;
+        GUI.color = new Color(1f, 1f, 1f, reveal);
 
         GUI.Box(rect, GUIContent.none);
         var innerRect = new Rect(rect.x + 14f, rect.y + 12f, rect.width - 28f, rect.height - 24f);
@@ -132,6 +172,8 @@ public sealed partial class SC2GameViewEditorUI
         GUILayout.EndArea();
 
         DrawStartupCredits(screenWidth, screenHeight);
+        GUI.enabled = enabledBefore;
+        GUI.color = prevColor;
 
 #if !UNITY_EDITOR
         // Must draw (and let it claim the click on its own Cancel/Delete
@@ -149,7 +191,6 @@ public sealed partial class SC2GameViewEditorUI
 
         // Swallow every click on the background — nothing meaningful is
         // drawn behind this overlay anyway (no terrain shell exists yet).
-        var e = Event.current;
         if (e != null && e.type == EventType.MouseDown) e.Use();
     }
 
