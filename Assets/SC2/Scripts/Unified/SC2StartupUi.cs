@@ -233,6 +233,14 @@ public static class SC2StartupUi
 
     public static float ButtonHeight => SC2UiScale.PxfRaw(30f);
 
+    // A list row has a fixed height. Its buttons and labels are centred with flexible spaces, and a row that is only asked not to
+    // grow still takes the free space of the window when the list is short (one map showed rows a hundred pixels too tall).
+    /// <summary>Height of a row with one line of text (a map from an archive, the last opened map).</summary>
+    public static float RowHeight => SC2UiScale.PxfRaw(52f);
+
+    /// <summary>Height of a row with a name and a line of dates under it.</summary>
+    public static float TwoLineRowHeight => SC2UiScale.PxfRaw(60f);
+
     public static bool PrimaryButton(string label, float width) =>
         GUILayout.Button(label, Primary, GUILayout.Width(SC2UiScale.PxfRaw(width)), GUILayout.Height(ButtonHeight));
 

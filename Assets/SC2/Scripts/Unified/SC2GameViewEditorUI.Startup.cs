@@ -424,7 +424,7 @@ public sealed partial class SC2GameViewEditorUI
                     .OrderBy(c => c.DisplayName ?? c.BdfStem ?? "", StringComparer.OrdinalIgnoreCase);
                 foreach (var candidate in sorted)
                 {
-                    GUILayout.BeginHorizontal(SC2StartupUi.Row);
+                    GUILayout.BeginHorizontal(SC2StartupUi.Row, GUILayout.Height(SC2StartupUi.RowHeight));
                     SC2StartupUi.CenteredLabel(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", SC2StartupUi.RowName);
                     GUILayout.FlexibleSpace();
                     if (!string.IsNullOrEmpty(candidate.SourceArchivePath))
@@ -451,7 +451,7 @@ public sealed partial class SC2GameViewEditorUI
     /// <summary>One saved map: its name and dates on the left, Duplicate / Delete / Open on the right.</summary>
     private static void DrawStartupMapRow(string name, string dates, Action onOpen, Action onDuplicate, Action onDelete)
     {
-        GUILayout.BeginHorizontal(SC2StartupUi.Row);
+        GUILayout.BeginHorizontal(SC2StartupUi.Row, GUILayout.Height(string.IsNullOrEmpty(dates) ? SC2StartupUi.RowHeight : SC2StartupUi.TwoLineRowHeight));
         GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
         GUILayout.Label(name, SC2StartupUi.RowName);
         if (!string.IsNullOrEmpty(dates)) GUILayout.Label(dates, SC2StartupUi.Dim);
@@ -615,7 +615,7 @@ public sealed partial class SC2GameViewEditorUI
     private static void DrawLastOpenedRow(string name, string path, Action onOpen)
     {
         SC2StartupUi.SectionHeading("Last opened");
-        GUILayout.BeginHorizontal(SC2StartupUi.Row);
+        GUILayout.BeginHorizontal(SC2StartupUi.Row, GUILayout.Height(SC2StartupUi.RowHeight));
         SC2StartupUi.CenteredLabel(name, SC2StartupUi.RowName);
         GUILayout.FlexibleSpace();
         var modified = GetFileTimeSafe(path, created: false);
