@@ -231,38 +231,8 @@ public sealed class SC2ExportPanel
             RunExport();
         GUI.enabled = guiEnabledBeforeExport;
 
-        // An additive path sitting beside Export above, never replacing it — routes through SC2SmartExportPlanner/
-        // SC2SmartExportWriter instead of DoExport's direct File.WriteAllBytes sequence, sharing the exact same
-        // byte-generation code (see SC2TerrainExporter.BuildExportArtifacts) so both buttons' output is byte-identical on the
-        // same data. Everything is still marked dirty here (real per-domain dirty tracking), so this button regenerates every
-        // file every time too, same as Export above.
-        EditorGUILayout.Space(SC2UiScale.Pxf(4f));
-        if (SC2EnvFieldGui.PrimaryButton("Smart Export", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
-            RunSmartExport();
-        SC2TerrainShell.DrawUnifiedNote("Smart Export writes the same files and also fills the Report tab with a per-file breakdown.");
-
         if (!string.IsNullOrEmpty(_lastExportResult))
             SC2TerrainShell.DrawUnifiedNote(_lastExportResult);
-    }
-
-    private void RunSmartExport()
-    {
-        var smartData = Data;
-        var smartDir = _exportDir;
-        var smartArchives = _exportAsArchives;
-        var smartSession = _win.Session;
-        var importedTerrains = _win.GetImportedTerrainsForExport?.Invoke();
-        // The export runs on a worker thread behind the busy plate (see SC2BusyOverlay).
-        SC2BusyOverlay.RunInBackground("Exporting map", ExportDetail, () =>
-        {
-            _win.SaveTerrainState(writeAssets: false);
-            System.IO.Directory.CreateDirectory(smartDir);
-            return () =>
-            {
-                var result = SC2TerrainExporter.ExportCorrectSmart(smartData, smartDir, importedTerrains, smartSession, smartArchives);
-                return () => _lastExportResult = result;
-            };
-        }, ex => _lastExportResult = "Export failed: " + ex.Message);
     }
 
     /// <summary>One card per pair: swatch, name and the triangles before and after simplification, then its Simplify slider.</summary>

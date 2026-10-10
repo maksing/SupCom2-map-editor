@@ -2,20 +2,14 @@ using UnityEngine;
 using SC2.MapEditor.Document;
 
 /// <summary>
-/// "Export" top-level tab (SC2GameViewEditorUI.DrawMainPanel, case 6) —
-/// fills in the 3 sub-tabs SC2EditorTabs.ExportTabs already declared
-/// ("Smart Export"/"Report"/"Validation") but that were never reachable
-/// from the visible tab bar. Sibling of SC2ScenarioShell/SC2EnvironmentShell
-/// — same "lives in Scripts/Unified so it compiles for both the Editor and
-/// a real .exe build" reasoning.
+/// "Export" top-level tab (SC2GameViewEditorUI.DrawMainPanel, case 6) with
+/// the sub-tabs of SC2EditorTabs.ExportTabs ("Export"/"Validation"). Sibling of
+/// SC2ScenarioShell/SC2EnvironmentShell — same "lives in Scripts/Unified so it
+/// compiles for both the Editor and a real .exe build" reasoning.
 ///
-/// Sub-tab 0 ("Smart Export") is today's "Export Preview" Terrain sub-tab
-/// content (SC2ExportPanel), just relocated here — no logic change.
-/// Sub-tabs 1/2 ("Report"/"Validation") are net-new, surfacing two pieces
-/// of already-built-but-never-shown-in-UI capability: SC2SmartExportPlan
-/// (built and discarded on every export, now exposed via
-/// SC2TerrainExporter.LastSmartExportPlan) and the 8 domain validators
-/// (previously only ever called from unit tests).
+/// Sub-tab 0 ("Export") is SC2ExportPanel. Sub-tab 1 ("Validation") runs the
+/// 8 domain validators. The Smart Export path itself (SC2TerrainExporter's
+/// ExportCorrectSmart / PreviewSmartExportPlan) has no entry in the UI.
 /// </summary>
 public sealed class SC2ExportShell
 {
@@ -57,9 +51,8 @@ public sealed class SC2ExportShell
 
         switch (subTab)
         {
-            case 2: DrawValidationTab(w); break;
-            case 1: DrawReportTab(w); break;
-            default: DrawSmartExportTab(); break;
+            case 1: DrawValidationTab(w); break;
+            default: DrawExportTab(); break;
         }
 
         GUILayout.EndVertical();
@@ -75,7 +68,7 @@ public sealed class SC2ExportShell
         return _exportPanel;
     }
 
-    private void DrawSmartExportTab() => ExportPanel().DrawPanel();
+    private void DrawExportTab() => ExportPanel().DrawPanel();
 
     /// <summary>The Export hotkey: the same export as the Export tab's Export button (same output folder
     /// and options), from any tab. Returns false when there is nothing to export or an earlier export's
@@ -86,67 +79,15 @@ public sealed class SC2ExportShell
         return ExportPanel().RunExport(onFinished);
     }
 
-    private void DrawReportTab(float w)
-    {
-        SC2EnvFieldGui.SectionLabel("Export Report");
-        SC2TerrainShell.DrawUnifiedNote("Per-file breakdown of the last Smart Export (or preview) — same data written to sc2_export_report.md, shown here directly.");
-
-        GUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        if (SC2EnvFieldGui.Button("Preview (dry run)"))
-        {
-            _terrainShell.SaveTerrainState(writeAssets: false);
-            var importedTerrains = _terrainShell.GetImportedTerrainsForExport?.Invoke();
-            var msg = SC2TerrainExporter.PreviewSmartExportPlan(Data, ExportDirForPreview(), importedTerrains, _session);
-            SC2Log.Log("[SC2ExportShell] " + msg);
-        }
-        GUILayout.EndHorizontal();
-
-        var plan = SC2TerrainExporter.LastSmartExportPlan;
-        if (plan == null)
-        {
-            SC2TerrainShell.DrawUnifiedNote("No export or preview has run yet this session.");
-            return;
-        }
-
-        GUILayout.Space(4);
-        foreach (var file in plan.Files)
-        {
-            SC2TerrainShell.BeginUnifiedPanelBox();
-            GUILayout.BeginHorizontal(GUILayout.Width(w - 16f), GUILayout.MaxWidth(w - 16f));
-            GUILayout.Label(file.RelativePath, GUILayout.Width((w - 16f) * 0.5f));
-            GUILayout.Label(file.Mode.ToString(), GUILayout.Width((w - 16f) * 0.25f));
-            GUILayout.Label(file.IsStale ? "stale" : "fresh", GUILayout.Width((w - 16f) * 0.2f));
-            GUILayout.EndHorizontal();
-            foreach (var err in file.Errors)
-                SC2TerrainShell.DrawUnifiedNote("Error: " + err);
-            foreach (var warn in file.Warnings)
-                SC2TerrainShell.DrawUnifiedNote("Warning: " + warn);
-            SC2TerrainShell.EndUnifiedPanelBox();
-        }
-    }
-
-    private string ExportDirForPreview()
-    {
-        // Mirrors SC2ExportPanel's own default — the Report tab's dry-run
-        // button has no output-folder field of its own (the plan never
-        // writes to disk), but BuildExportArtifacts still needs a folder
-        // path to resolve texture output locations against.
-#if UNITY_EDITOR
-        return "Assets/Exports";
-#else
-        return System.IO.Path.Combine(Application.persistentDataPath, "Exports");
-#endif
-    }
-
     /// <summary>Advisory-only per the approved plan — Errors get a banner
-    /// but never disable the Smart Export tab's buttons. Re-syncs live
+    /// but never disable the Export tab's buttons. Re-syncs live
     /// SC2TerrainData into the document first (same call every shell's own
     /// Export/Save path already uses) so validation always runs against
     /// current data, not whatever the document last happened to hold.</summary>
     private void DrawValidationTab(float w)
     {
         SC2EnvFieldGui.SectionLabel("Validation");
-        SC2TerrainShell.DrawUnifiedNote("Advisory only — issues found here do not block Smart Export. Re-run after making changes.");
+        SC2TerrainShell.DrawUnifiedNote("Advisory only — issues found here do not block the export. Re-run after making changes.");
 
         if (SC2EnvFieldGui.Button("Run Validation"))
             RunValidation();
