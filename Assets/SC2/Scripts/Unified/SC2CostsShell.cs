@@ -1299,11 +1299,24 @@ public sealed class SC2CostsShell
     {
         if (!IsReady || Runtime == null) return;
         if (_overlayDirty) RebuildOverlayTexture();
-        Runtime.SetCostsOverlayTexture(_overlayTex);
-        PushOverlayToImportedTerrains(_overlayTex);
-        PushOverlayToDecalPreview?.Invoke(_overlayTex, true, Data.CostsGridSize);
+        PushOverlayTexture(_overlayTex);
+    }
+
+    /// <summary>Shows another map-wide overlay (CostsGridSize x CostsGridSize, RGBA, row = Z) through the same shader slot the
+    /// Costs overlay uses. The caller must not call this while the Costs overlay itself is showing.</summary>
+    public void PushExternalOverlay(Texture overlay)
+    {
+        if (!IsReady || Runtime == null || overlay == null) return;
+        PushOverlayTexture(overlay);
+    }
+
+    private void PushOverlayTexture(Texture overlay)
+    {
+        Runtime.SetCostsOverlayTexture(overlay);
+        PushOverlayToImportedTerrains(overlay);
+        PushOverlayToDecalPreview?.Invoke(overlay, true, Data.CostsGridSize);
         // A building that is part of the heightmap carries the overlay on its own surfaces, not only on the ground under it.
-        SC2GameAssetScenePreview.SetPropCostsOverlay(_overlayTex, Data.CostsGridSize, SC2PropHeightmapGeometry.IncludedPropIds(Data));
+        SC2GameAssetScenePreview.SetPropCostsOverlay(overlay, Data.CostsGridSize, SC2PropHeightmapGeometry.IncludedPropIds(Data));
     }
 
     /// <summary>Wired in SC2GameViewEditorUI (same cross-shell callback

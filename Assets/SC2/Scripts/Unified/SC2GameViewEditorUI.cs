@@ -1799,6 +1799,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     HandleTerrainGameViewInput();
                 SyncTerrainOverlayFlags();
                 HandleCostsGameViewInput();
+                PushBuildableOverlay();
                 HandleCollision2GameViewInput();
                 HandleObjectsGameViewInput();
                 HandleDecalsGameViewInput();
@@ -3378,6 +3379,17 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
     }
 
+    /// <summary>The reference building's "where can it be built" colouring goes through the Costs overlay's shader slot, so it
+    /// is pushed after the Costs handling of the frame (which clears the slot when Costs is not shown) and yields to the Costs
+    /// overlay whenever that is showing.</summary>
+    private void PushBuildableOverlay()
+    {
+        var texture = _referenceUnitsShell?.BuildableOverlayTexture;
+        if (texture == null || _mainTab == 1 || OverlayCosts) return;
+        EnsureCostsShell();
+        _costsShell.PushExternalOverlay(texture);
+    }
+
     private void HandleCostsGameViewInput()
     {
         // mainTab index 1 = Costs (see SC2EditorTabs.MainTabs ordering, mirrored
@@ -3767,6 +3779,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             {
                 RepaintHost = RepaintGameView,
                 ReportStatus = SetStatus,
+                GetWaterSurface = ReadWaterSurface,
             };
             // Switching/reloading a map must not leave selection/drag state
             // (or a stale intel cache) pointed at ids from the PREVIOUS
@@ -3774,6 +3787,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // DataChanged hookups just above.
             _terrainShell.DataChanged += _ => _referenceUnitsShell?.OnDataChanged();
         }
+    }
+
+    /// <summary>The Y of the map's water surface, or null when its water is off (read the way the water plane itself reads it).</summary>
+    private float? ReadWaterSurface()
+    {
+        var data = _terrainShell?.Data;
+        if (data == null) return null;
+        var info = SC2TerrainExporter.BuildInfoModel(data, _mapSession, quiet: true);
+        return info.WaterEnabled != 0 ? info.WaterElevation : (float?)null;
     }
 
     /// <summary>Same raycast contract TryGetMeasureHit already implements —

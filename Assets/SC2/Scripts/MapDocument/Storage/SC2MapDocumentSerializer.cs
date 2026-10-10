@@ -790,6 +790,7 @@ namespace SC2.MapEditor.Document
             o.Set("showSonar", SC2JsonValue.Of(r.ShowSonar));
             o.Set("showVision", SC2JsonValue.Of(r.ShowVision));
             o.Set("showWeapons", SC2JsonValue.Of(r.ShowWeapons));
+            o.Set("showBuildable", SC2JsonValue.Of(r.ShowBuildable));
             return o;
         }
 
@@ -806,6 +807,7 @@ namespace SC2.MapEditor.Document
             ShowSonar = o.Get("showSonar").AsBool(true),
             ShowVision = o.Get("showVision").AsBool(true),
             ShowWeapons = o.Get("showWeapons").AsBool(true),
+            ShowBuildable = o.Get("showBuildable").AsBool(false),
         };
 
         private static SC2JsonValue WriteZone(SC2ObjZone z)

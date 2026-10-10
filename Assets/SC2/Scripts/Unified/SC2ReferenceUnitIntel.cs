@@ -33,6 +33,22 @@ public sealed class SC2ReferenceUnitIntel
     public float SonarRadius;
     public float VisionRadius;
     public List<SC2ReferenceUnitWeapon> Weapons = new();
+
+    /// <summary>The blueprint's `Footprint = { SizeX, SizeZ }`, the skirt the building is built on; 0 = no footprint.</summary>
+    public float FootprintSizeX;
+    public float FootprintSizeZ;
+    /// <summary>`Physics.FlattenSkirt`: the game levels the ground under the building when construction starts.</summary>
+    public bool FlattenSkirt = SC2BuildSkirtMath.DefaultFlattenSkirt;
+    /// <summary>`Physics.MaxGroundVariation`: how uneven the ground may be under the skirt.</summary>
+    public float MaxGroundVariation = SC2BuildSkirtMath.DefaultMaxGroundVariation;
+
+    public bool HasBuildSkirt => FootprintSizeX > 0f && FootprintSizeZ > 0f;
+
+    /// <summary>`Physics.BuildOnLayerCaps`: the layers the building can be built on. False when the blueprint has no such table.</summary>
+    public bool HasBuildOnLayerCaps;
+    public bool BuildOnLand;
+    public bool BuildOnSeabed;
+    public bool BuildOnWater;
 }
 
 public static class SC2ReferenceUnitIntelReader
@@ -49,6 +65,27 @@ public static class SC2ReferenceUnitIntelReader
             result.RadarRadius = intel.GetSingle("RadarRadius");
             result.SonarRadius = intel.GetSingle("SonarRadius");
             result.VisionRadius = intel.GetSingle("VisionRadius");
+        }
+
+        var footprint = table.GetTable("Footprint");
+        if (footprint != null)
+        {
+            result.FootprintSizeX = footprint.GetSingle("SizeX");
+            result.FootprintSizeZ = footprint.GetSingle("SizeZ");
+        }
+        var physics = table.GetTable("Physics");
+        if (physics != null)
+        {
+            result.FlattenSkirt = physics.GetBool("FlattenSkirt", SC2BuildSkirtMath.DefaultFlattenSkirt);
+            result.MaxGroundVariation = physics.GetSingle("MaxGroundVariation", SC2BuildSkirtMath.DefaultMaxGroundVariation);
+            var layerCaps = physics.GetTable("BuildOnLayerCaps");
+            if (layerCaps != null)
+            {
+                result.HasBuildOnLayerCaps = true;
+                result.BuildOnLand = layerCaps.GetBool("LAYER_Land");
+                result.BuildOnSeabed = layerCaps.GetBool("LAYER_Seabed");
+                result.BuildOnWater = layerCaps.GetBool("LAYER_Water");
+            }
         }
 
         // Confirmed field name is "Weapons" (plural) against real game data

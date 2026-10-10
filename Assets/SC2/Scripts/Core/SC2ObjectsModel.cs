@@ -200,6 +200,9 @@ public class SC2ObjReferenceUnit
     public bool ShowSonar = true;
     public bool ShowVision = true;
     public bool ShowWeapons = true;
+    /// <summary>Colours the whole map by whether this building could be built there (see SC2BuildSkirtMath). Only one reference
+    /// unit shows it at a time.</summary>
+    public bool ShowBuildable;
 }
 
 [Serializable]

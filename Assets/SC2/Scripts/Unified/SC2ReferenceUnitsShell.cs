@@ -79,6 +79,8 @@ public sealed class SC2ReferenceUnitsShell
         _placementArmed = false;
         _pendingAsset = null;
         _intelCache.Clear();
+        _buildableOverlay.Dispose();
+        BuildableOverlayTexture = null;
     }
 
     public void OpenBrowserForPlacement()
@@ -183,6 +185,157 @@ public sealed class SC2ReferenceUnitsShell
         // small scale/steep angles otherwise.
         DrawReferenceUnitGlyphs(camera, viewportRect);
         if (showOverlay) DrawIntelOverlays(camera, viewportRect);
+        UpdateBuildableOverlay(showOverlay);
+        DrawBuildableSkirt(camera, viewportRect);
+    }
+
+    private readonly SC2BuildableOverlay _buildableOverlay = new();
+
+    // Session-only: colour the vertices a building could be centred on instead of the ground a building could cover.
+    private bool _buildableShowCentres;
+
+    /// <summary>The colouring of the whole map by where the reference building that has "Buildable" on could be built; null when
+    /// no building shows it. The editor UI pushes it into the terrain (see SC2GameViewEditorUI.PushBuildableOverlay).</summary>
+    public Texture BuildableOverlayTexture { get; private set; }
+
+    // What the skirt outline and its verdict below are drawn from: the building that shows the colouring and the heightmap it was
+    // coloured from.
+    private SC2ObjReferenceUnit _buildableUnit;
+    private SC2ReferenceUnitIntel _buildableIntel;
+    private ushort[] _buildableHeights;
+    private int _buildableMapX, _buildableMapY;
+
+    private void UpdateBuildableOverlay(bool showOverlay)
+    {
+        BuildableOverlayTexture = null;
+        _buildableUnit = null;
+        if (!showOverlay || Data == null || _terrainShell == null) return;
+
+        SC2ObjReferenceUnit unit = null;
+        foreach (var candidate in Data.ObjReferenceUnits)
+        {
+            if (!candidate.ShowBuildable) continue;
+            if (unit == null || candidate.Id == _selectedId) unit = candidate;
+        }
+        if (unit == null || !_intelCache.TryGetValue(unit.Id, out var intel) || !intel.HasBuildSkirt) return;
+        if (!_terrainShell.TryGetLiveHeightGridSnapshot(out var heights, out var mapX, out var mapY)) return;
+
+        RefreshFootprintObstacles(unit);
+        RefreshBuildRestriction(unit, intel, heights, mapX, mapY);
+        BuildableOverlayTexture = _buildableOverlay.Update(heights, mapX, mapY, intel.FootprintSizeX, intel.FootprintSizeZ,
+            intel.FlattenSkirt, intel.MaxGroundVariation, _obstacles, _obstaclesSignature, !_buildableShowCentres,
+            _restriction.AllowedCells, _restriction.Signature);
+        _buildableUnit = unit;
+        _buildableIntel = intel;
+        _buildableHeights = heights;
+        _buildableMapX = mapX;
+        _buildableMapY = mapY;
+    }
+
+    // The footprints of the other buildings on the map, which the building cannot be put on top of. Gathering them walks every
+    // prop and unit, so it is redone a few times a second, and the overlay only recomputes when the result really changed.
+    private SC2PlacedFootprint[] _obstacles = Array.Empty<SC2PlacedFootprint>();
+    private int _obstaclesSignature;
+    private int _obstaclesForUnit = -1;
+    private double _obstaclesAt = double.MinValue;
+    private const double ObstacleRefreshSeconds = 0.25;
+
+    private void RefreshFootprintObstacles(SC2ObjReferenceUnit self)
+    {
+        var now = Time.realtimeSinceStartupAsDouble;
+        if (_obstaclesForUnit == self.Id && now - _obstaclesAt < ObstacleRefreshSeconds) return;
+        _obstaclesForUnit = self.Id;
+        _obstaclesAt = now;
+
+        var found = SC2BuildabilityChecker.GatherObstacles(Data, _assetBrowser, self.Id, out var signature);
+        if (signature == _obstaclesSignature && found.Length == _obstacles.Length) return;
+        _obstacles = found;
+        _obstaclesSignature = signature;
+    }
+
+    // What the Costs and the water allow the building. Telling walks every cell of the Costs block, so it is redone a few times a
+    // second and the overlay only recomputes when the result really changed.
+    private readonly SC2BuildRestriction _restriction = new();
+    private int _allowedForUnit = -1;
+    private double _allowedAt = double.MinValue;
+
+    /// <summary>The Y of the map's water surface, or null when its water is off. Wired by the editor UI, which owns the map session.</summary>
+    public Func<float?> GetWaterSurface;
+
+    private void RefreshBuildRestriction(SC2ObjReferenceUnit unit, SC2ReferenceUnitIntel intel, ushort[] heights, int mapX, int mapY)
+    {
+        var now = Time.realtimeSinceStartupAsDouble;
+        if (_allowedForUnit == unit.Id && now - _allowedAt < ObstacleRefreshSeconds) return;
+        _allowedForUnit = unit.Id;
+        _allowedAt = now;
+        _restriction.Refresh(Data, intel, heights, mapX, mapY, GetWaterSurface);
+    }
+
+    private static readonly Color SkirtColor = new Color(1f, 1f, 1f, 0.95f);
+
+    /// <summary>Outlines the skirt the ground check looks at and says in a label what the checks found, so a refused spot can be
+    /// explained.</summary>
+    private void DrawBuildableSkirt(Camera camera, Rect viewportRect)
+    {
+        if (_buildableUnit == null || _buildableHeights == null || Event.current == null || Event.current.type != EventType.Repaint) return;
+        var unit = _buildableUnit;
+        var intel = _buildableIntel;
+        var rect = SC2BuildSkirtMath.SkirtAround(unit.Position.x, unit.Position.z, intel.FootprintSizeX, intel.FootprintSizeZ);
+        var report = SC2BuildSkirtMath.Evaluate(_buildableHeights, _buildableMapX, _buildableMapY, rect, intel.FlattenSkirt, intel.MaxGroundVariation);
+        Func<float, float, float> sample = _terrainShell.SampleLiveHeightGrid;
+
+        DrawSkirtOutline(camera, viewportRect, rect.X0, rect.X1, rect.Z0, rect.Z1, SkirtColor, sample);
+        var overlaps = SC2BuildSkirtMath.FindOverlap(unit.Position.x, unit.Position.z, intel.FootprintSizeX, intel.FootprintSizeZ, _obstacles) >= 0;
+        var cellsWide = _buildableMapX - 1;
+        var costsBlocked = !SC2BuildSkirtMath.FootprintCellsAllowed(_restriction.AllowedCells, cellsWide, _buildableMapY - 1, unit.Position.x, unit.Position.z,
+            intel.FootprintSizeX, intel.FootprintSizeZ);
+
+        var anchor = SC2TerrainShell.WorldToGameGui(camera, viewportRect, new Vector3(unit.Position.x, sample(unit.Position.x, unit.Position.z), unit.Position.z));
+        if (!viewportRect.Contains(anchor)) return;
+        anchor.y += 18f;
+        SC2TerrainShell.DrawFloatingLabel(anchor, DescribeSkirtReport(report, overlaps, costsBlocked),
+            report.Buildable && !overlaps && !costsBlocked ? new Color(0.35f, 0.9f, 0.45f) : new Color(1f, 0.4f, 0.35f));
+    }
+
+    private string DescribeSkirtReport(SC2SkirtReport report, bool overlapsBuilding, bool costsBlocked)
+    {
+        string N(float value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        if (!report.InsideGrid) return "Can't build: the skirt reaches outside the map";
+        var verdict = report.Buildable && !overlapsBuilding && !costsBlocked ? "Can build" : "Can't build";
+        var text = report.Levelled
+            ? $"{verdict}: edge {N(report.MinHeight)}..{N(report.MaxHeight)}, level {N(report.Pivot)}, off by {N(report.Deviation)} (limit {N(report.Tolerance)})"
+            : $"{verdict}: skirt {N(report.MinHeight)}..{N(report.MaxHeight)}, spread {N(report.Deviation)} (limit {N(report.Tolerance)})";
+        if (overlapsBuilding) text += "; overlaps another building";
+        if (costsBlocked) text += "; " + _restriction.DescribeBlock();
+        return text;
+    }
+
+    /// <summary>A rectangle through whole vertices, laid on the ground vertex by vertex.</summary>
+    private static void DrawSkirtOutline(Camera camera, Rect viewportRect, int x0, int x1, int z0, int z1, Color color, Func<float, float, float> sample)
+    {
+        var points = new List<Vector2>();
+        void Add(int x, int z) => points.Add(SC2TerrainShell.WorldToGameGui(camera, viewportRect, new Vector3(x, sample(x, z) + 0.2f, z)));
+        for (var x = x0; x <= x1; x++) Add(x, z0);
+        for (var z = z0 + 1; z <= z1; z++) Add(x1, z);
+        for (var x = x1 - 1; x >= x0; x--) Add(x, z1);
+        for (var z = z1 - 1; z >= z0; z--) Add(x0, z);
+
+        var previousColor = GUI.color;
+        var previousMatrix = GUI.matrix;
+        GUI.color = color;
+        for (var i = 0; i < points.Count; i++)
+        {
+            var a = points[i];
+            var b = points[(i + 1) % points.Count];
+            if (!viewportRect.Contains(a) || !viewportRect.Contains(b)) continue;
+            var delta = b - a;
+            var length = delta.magnitude;
+            if (length < 0.5f) continue;
+            GUIUtility.RotateAroundPivot(Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg, a);
+            GUI.DrawTexture(new Rect(a.x, a.y - 1f, length, 2f), Texture2D.whiteTexture);
+            GUI.matrix = previousMatrix;
+        }
+        GUI.color = previousColor;
     }
 
     /// <summary>The same rotated-square "pick-dot" glyph
@@ -428,6 +581,33 @@ public sealed class SC2ReferenceUnitsShell
             unit.ShowSonar = GUILayout.Toggle(unit.ShowSonar, "Sonar", GUI.skin.button, GUILayout.MaxWidth(width));
             unit.ShowVision = GUILayout.Toggle(unit.ShowVision, "Vision", GUI.skin.button, GUILayout.MaxWidth(width));
             unit.ShowWeapons = GUILayout.Toggle(unit.ShowWeapons, "Weapons", GUI.skin.button, GUILayout.MaxWidth(width));
+            DrawBuildableToggle(unit, width);
+        }
+    }
+
+    private void DrawBuildableToggle(SC2ObjReferenceUnit unit, float width)
+    {
+        var hasSkirt = _intelCache.TryGetValue(unit.Id, out var intel) && intel.HasBuildSkirt;
+        var previousEnabled = GUI.enabled;
+        GUI.enabled = previousEnabled && hasSkirt;
+        var show = GUILayout.Toggle(unit.ShowBuildable && hasSkirt, "Buildable", GUI.skin.button, GUILayout.MaxWidth(width));
+        GUI.enabled = previousEnabled;
+        if (show != unit.ShowBuildable && (hasSkirt || !show))
+        {
+            unit.ShowBuildable = show;
+            // The map is coloured for one building at a time.
+            if (show)
+                foreach (var other in Data.ObjReferenceUnits)
+                    if (other != unit) other.ShowBuildable = false;
+            MarkDirty();
+        }
+        if (!hasSkirt) GUILayout.Label("No Footprint in the blueprint", GUI.skin.label, GUILayout.MaxWidth(width));
+        else if (unit.ShowBuildable)
+        {
+            _buildableShowCentres = GUILayout.Toggle(_buildableShowCentres, "Centres only", GUI.skin.button, GUILayout.MaxWidth(width));
+            GUILayout.Label(_buildableShowCentres
+                ? "Green: the building's centre may be here."
+                : "Green: the building can cover this ground. Red: it cannot.", GUI.skin.label, GUILayout.MaxWidth(width));
         }
     }
 
