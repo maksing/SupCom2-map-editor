@@ -123,13 +123,14 @@ public class MapDocumentSerializerTests
         {
             Id = 1, BlueprintPath = "/props/tree.bp", Position = new Vector3(1, 2, 3),
             Rotation = new Quaternion(0.1f, 0.2f, 0.3f, 0.9f), Scale = 1.5f, Flags = 7,
-            AnchorToTerrain = false, HeightOffset = 2.5f,
+            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, HeightOffset = 2.5f,
         });
         doc.Objects.Markers.Add(new SC2ObjMarker
         {
             Id = 2, Name = "Mass_01", Type = "Mass", Position = new Vector3(4, 5, 6),
             OrientationEuler = new Vector3(0, 90, 0), OrientationIsQuaternion = false,
             ColorHex = "ff00ff00", Prop = "/props/mass.bp",
+            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true,
             ExtraFields = { new SC2LuaField { Key = "amount", RawValue = "NUMBER( 100 )" } },
         });
         doc.Objects.Graphs.Add(new SC2ObjGraph
@@ -148,7 +149,7 @@ public class MapDocumentSerializerTests
         {
             Id = 5, ArmyName = "ARMY_1", Name = "unit_0", ParentIndex = -1, IsGroup = true,
             Type = "uca0104", Position = new Vector3(7, 8, 9), OrientationEuler = new Vector3(0, 45, 0),
-            AnchorToTerrain = false, HeightOffset = 1f,
+            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, HeightOffset = 1f,
         });
         doc.Objects.Zones.Add(new SC2ObjZone { Id = 6, Name = "Zone_1", X1 = -10, Z1 = -10, X2 = 10, Z2 = 10, Role = "Playable" });
         doc.Objects.Chains.Add(new SC2ObjChain { Id = 7, Name = "Chain_1", MarkerNames = { "Mass_01", "Mass_02" } });
@@ -399,7 +400,13 @@ public class MapDocumentSerializerTests
         Assert.Equal(new Quaternion(0.1f, 0.2f, 0.3f, 0.9f), restored.Objects.Props[0].Rotation);
         Assert.Equal(1.5f, restored.Objects.Props[0].Scale);
         Assert.Equal(7u, restored.Objects.Props[0].Flags);
-        Assert.False(restored.Objects.Props[0].AnchorToTerrain);
+        Assert.True(restored.Objects.Props[0].AnchorToTerrain);
+        Assert.True(restored.Objects.Props[0].AnchorToModel);
+        Assert.True(restored.Objects.Markers[0].AnchorToModel);
+        Assert.True(restored.Objects.Units[0].AnchorToModel);
+        Assert.True(restored.Objects.Props[0].OnWaterSurface);
+        Assert.True(restored.Objects.Markers[0].OnWaterSurface);
+        Assert.True(restored.Objects.Units[0].OnWaterSurface);
         Assert.Single(restored.Objects.Markers);
         Assert.Equal("Mass_01", restored.Objects.Markers[0].Name);
         Assert.False(restored.Objects.Markers[0].OrientationIsQuaternion);

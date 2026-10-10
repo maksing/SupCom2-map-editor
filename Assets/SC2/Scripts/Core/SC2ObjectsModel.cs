@@ -49,6 +49,12 @@ public class SC2ObjProp
     /// when false, Position.y is used as-is (absolute).</summary>
     public bool AnchorToTerrain = true;
     public float HeightOffset;
+    /// <summary>With <see cref="AnchorToTerrain"/>: Y follows the nearest of the surfaces under the object, imported model or runtime terrain (see SC2HeightMode.Model)
+    /// instead of the terrain heightmap. Without it, this flag is ignored.</summary>
+    public bool AnchorToModel;
+    /// <summary>With <see cref="AnchorToTerrain"/>: over water the object rests on the water surface instead of the seabed
+    /// ("above water" / "under water" placement). Ignored without the anchor and on a map without water.</summary>
+    public bool OnWaterSurface;
 }
 
 [Serializable]
@@ -72,6 +78,12 @@ public class SC2ObjMarker
     public List<SC2LuaField> ExtraFields = new();
     public bool AnchorToTerrain = true;
     public float HeightOffset;
+    /// <summary>With <see cref="AnchorToTerrain"/>: Y follows the nearest of the surfaces under the object, imported model or runtime terrain (see SC2HeightMode.Model)
+    /// instead of the terrain heightmap. Without it, this flag is ignored.</summary>
+    public bool AnchorToModel;
+    /// <summary>With <see cref="AnchorToTerrain"/>: over water the object rests on the water surface instead of the seabed
+    /// ("above water" / "under water" placement). Ignored without the anchor and on a map without water.</summary>
+    public bool OnWaterSurface;
 }
 
 [Serializable]
@@ -148,6 +160,12 @@ public class SC2ObjUnitNode
     public Vector3 OrientationEuler;
     public bool AnchorToTerrain = true;
     public float HeightOffset;
+    /// <summary>With <see cref="AnchorToTerrain"/>: Y follows the nearest of the surfaces under the object, imported model or runtime terrain (see SC2HeightMode.Model)
+    /// instead of the terrain heightmap. Without it, this flag is ignored.</summary>
+    public bool AnchorToModel;
+    /// <summary>With <see cref="AnchorToTerrain"/>: over water the object rests on the water surface instead of the seabed
+    /// ("above water" / "under water" placement). Ignored without the anchor and on a map without water.</summary>
+    public bool OnWaterSurface;
 }
 
 /// <summary>A real game unit/building placed PURELY as an in-editor visual

@@ -602,6 +602,8 @@ namespace SC2.MapEditor.Document
             o.Set("flags", SC2JsonValue.Of(p.Flags));
             o.Set("renderPriority", SC2JsonValue.Of(p.RenderPriority));
             o.Set("anchorToTerrain", SC2JsonValue.Of(p.AnchorToTerrain));
+            o.Set("anchorToModel", SC2JsonValue.Of(p.AnchorToModel));
+            o.Set("onWaterSurface", SC2JsonValue.Of(p.OnWaterSurface));
             o.Set("heightOffset", SC2JsonValue.Of(p.HeightOffset));
             return o;
         }
@@ -616,6 +618,8 @@ namespace SC2.MapEditor.Document
             Flags = (uint)o.Get("flags").AsLong(0),
             RenderPriority = (float)o.Get("renderPriority").AsDouble(1),
             AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
+            AnchorToModel = o.Get("anchorToModel").AsBool(false),
+            OnWaterSurface = o.Get("onWaterSurface").AsBool(false),
             HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
         };
 
@@ -633,6 +637,8 @@ namespace SC2.MapEditor.Document
             o.Set("prop", SC2JsonValue.Of(m.Prop));
             o.Set("extraFields", WriteLuaFields(m.ExtraFields));
             o.Set("anchorToTerrain", SC2JsonValue.Of(m.AnchorToTerrain));
+            o.Set("anchorToModel", SC2JsonValue.Of(m.AnchorToModel));
+            o.Set("onWaterSurface", SC2JsonValue.Of(m.OnWaterSurface));
             o.Set("heightOffset", SC2JsonValue.Of(m.HeightOffset));
             return o;
         }
@@ -658,6 +664,8 @@ namespace SC2.MapEditor.Document
             Prop = o.Get("prop").AsString(""),
             ExtraFields = ReadLuaFields(o.Get("extraFields")),
             AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
+            AnchorToModel = o.Get("anchorToModel").AsBool(false),
+            OnWaterSurface = o.Get("onWaterSurface").AsBool(false),
             HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
         };
 
@@ -744,6 +752,8 @@ namespace SC2.MapEditor.Document
             o.Set("position", WriteVector3(u.Position));
             o.Set("orientationEuler", WriteVector3(u.OrientationEuler));
             o.Set("anchorToTerrain", SC2JsonValue.Of(u.AnchorToTerrain));
+            o.Set("anchorToModel", SC2JsonValue.Of(u.AnchorToModel));
+            o.Set("onWaterSurface", SC2JsonValue.Of(u.OnWaterSurface));
             o.Set("heightOffset", SC2JsonValue.Of(u.HeightOffset));
             return o;
         }
@@ -759,6 +769,8 @@ namespace SC2.MapEditor.Document
             Position = ReadVector3(o.Get("position")),
             OrientationEuler = ReadVector3(o.Get("orientationEuler")),
             AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
+            AnchorToModel = o.Get("anchorToModel").AsBool(false),
+            OnWaterSurface = o.Get("onWaterSurface").AsBool(false),
             HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
         };
 
