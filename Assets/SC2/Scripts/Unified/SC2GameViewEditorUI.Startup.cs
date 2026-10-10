@@ -203,7 +203,7 @@ public sealed partial class SC2GameViewEditorUI
         {
             _startupCreditsStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = SC2UiScale.F(22),
+                fontSize = SC2UiScale.F(16),
                 fontStyle = FontStyle.Bold,
                 wordWrap = true,
                 alignment = TextAnchor.UpperLeft,
@@ -219,7 +219,7 @@ public sealed partial class SC2GameViewEditorUI
             return;
 
         var style = StartupCreditsStyle();
-        var margin = SC2UiScale.Pxf(24f);
+        var margin = SC2UiScale.Pxf(18f);
         var width = Mathf.Max(100f, Mathf.Min(screenWidth - margin * 2f, SC2UiScale.Pxf(900f)));
         var lines = new List<string>(2);
         if (!string.IsNullOrEmpty(StartupMadeByText)) lines.Add("Made by: " + StartupMadeByText);
