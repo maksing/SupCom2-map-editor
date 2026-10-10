@@ -920,7 +920,7 @@ public static class SC2TerrainExporter
         var infoModelForWater = BuildInfoModel(data, session);
         var alreadyHasWater = model.Materials.Exists(SC2HfieldProjectionService.IsWaterMaterial);
         if (infoModelForWater.WaterEnabled != 0 && !alreadyHasWater)
-            SC2WaterPlane.AppendToExportModel(model, data, infoModelForWater.WaterElevation);
+            SC2WaterPlane.AppendToExportModel(model, data, SC2WaterPlane.PlaneHeight(data, infoModelForWater.WaterElevation));
 
         // terrain.bdf always uses the reverse-engineered vanilla-candidate split (same as decals.bdf/collision2.bdf), see
         // TerrainBspBuilder.FindBestVanillaCandidateSplit for why. The old per-map single-leaf switch
@@ -3014,7 +3014,7 @@ public static class SC2TerrainExporter
         var infoModelForWater = BuildInfoModel(data, session, quiet: true);
         var alreadyHasWater = model.Materials.Exists(SC2HfieldProjectionService.IsWaterMaterial);
         if (infoModelForWater.WaterEnabled != 0 && !alreadyHasWater)
-            SC2WaterPlane.AppendToExportModel(model, data, infoModelForWater.WaterElevation);
+            SC2WaterPlane.AppendToExportModel(model, data, SC2WaterPlane.PlaneHeight(data, infoModelForWater.WaterElevation));
 
         return model;
     }

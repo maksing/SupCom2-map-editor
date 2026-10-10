@@ -35,7 +35,9 @@ namespace SC2.MapEditor.Document
                 data.WaterDepthPaintBorder,
                 data.WaterDepthImageBorderOutline,
                 data.EnvironmentTextureSourceTags,
-                data.EnvironmentTextureForceExport);
+                data.EnvironmentTextureForceExport,
+                data.WaterPlaneSyncWithEnvironment,
+                data.WaterPlaneHeight);
         }
     }
 }

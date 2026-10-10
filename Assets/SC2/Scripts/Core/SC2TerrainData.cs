@@ -274,6 +274,13 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// matches this codebase's largest confirmed real vanilla map size.</summary>
     public int WaterPlaneSize = 4096;
 
+    /// <summary>On (the default): the generated water plane lies at the Environment water elevation, as it always did. Off: the plane
+    /// lies at <see cref="WaterPlaneHeight"/> instead, and the Environment water elevation stays what the rest of the map uses.</summary>
+    public bool WaterPlaneSyncWithEnvironment = true;
+
+    /// <summary>World height of the generated water plane while <see cref="WaterPlaneSyncWithEnvironment"/> is off.</summary>
+    public float WaterPlaneHeight;
+
     /// <summary>13 texture-path slots for the from-scratch water plane's
     /// exported "Water" material (SC2WaterPlane), same TexturePaths[13]
     /// layout every other TerrainMaterial uses (Diffuse1/2, Normal1-4,

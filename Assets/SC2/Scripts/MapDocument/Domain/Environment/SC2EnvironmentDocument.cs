@@ -54,6 +54,8 @@ namespace SC2.MapEditor.Document
         /// ImportOnlyMode/BSP options had (confirmed real via a reload
         /// resetting those) — fixed here for the same reason.</summary>
         public int WaterPlaneSize = 4096;
+        public bool WaterPlaneSyncWithEnvironment = true;
+        public float WaterPlaneHeight;
         public float WaterUvScale = 1024f;
         public string[] WaterTexturePaths = System.Array.Empty<string>();
 

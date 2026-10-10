@@ -288,6 +288,8 @@ namespace SC2.MapEditor.Document
             textureExport.Set("forceExport", textureForceExport);
             o.Set("textureExport", textureExport);
             o.Set("waterPlaneSize", SC2JsonValue.Of(e.WaterPlaneSize));
+            o.Set("waterPlaneSyncWithEnvironment", SC2JsonValue.Of(e.WaterPlaneSyncWithEnvironment));
+            o.Set("waterPlaneHeight", SC2JsonValue.Of(e.WaterPlaneHeight));
             o.Set("waterUvScale", SC2JsonValue.Of(e.WaterUvScale));
             var waterTexturePaths = SC2JsonValue.NewArray();
             foreach (var p in e.WaterTexturePaths ?? Array.Empty<string>()) waterTexturePaths.Add(SC2JsonValue.Of(p));
@@ -324,6 +326,8 @@ namespace SC2.MapEditor.Document
                 ColorCorrectionCube = o.Get("colorCorrectionCube").AsString(""),
                 FogOfWarCorrectionCube = o.Get("fogOfWarCorrectionCube").AsString(""),
                 WaterPlaneSize = o.Get("waterPlaneSize").AsInt(4096),
+                WaterPlaneSyncWithEnvironment = o.Get("waterPlaneSyncWithEnvironment").AsBool(true),
+                WaterPlaneHeight = (float)o.Get("waterPlaneHeight").AsDouble(0),
                 WaterUvScale = (float)o.Get("waterUvScale").AsDouble(1024f),
                 WaterDepthAutoGenerate = o.Get("waterDepthAutoGenerate").AsBool(false),
                 WaterDepthResolution = o.Get("waterDepthResolution").AsInt(512),

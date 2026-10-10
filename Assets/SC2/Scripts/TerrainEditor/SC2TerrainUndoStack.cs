@@ -60,6 +60,8 @@ public sealed class SC2TerrainUndoStack
         // is its own separate pass.
         public bool ImportOnlyMode;
         public int WaterPlaneSize;
+        public bool WaterPlaneSyncWithEnvironment;
+        public float WaterPlaneHeight;
         public float WaterUvScale;
         public string[] WaterTexturePaths;
         public bool WaterDepthAutoGenerate;
@@ -262,6 +264,8 @@ public sealed class SC2TerrainUndoStack
             Pairs = pairs,
             ImportOnlyMode = data.ImportOnlyMode,
             WaterPlaneSize = data.WaterPlaneSize,
+            WaterPlaneSyncWithEnvironment = data.WaterPlaneSyncWithEnvironment,
+            WaterPlaneHeight = data.WaterPlaneHeight,
             WaterUvScale = data.WaterUvScale,
             WaterTexturePaths = data.WaterTexturePaths != null ? (string[])data.WaterTexturePaths.Clone() : System.Array.Empty<string>(),
             WaterDepthAutoGenerate = data.WaterDepthAutoGenerate,
@@ -313,6 +317,8 @@ public sealed class SC2TerrainUndoStack
         data.Pairs = snapshot.Pairs;
         data.ImportOnlyMode = snapshot.ImportOnlyMode;
         data.WaterPlaneSize = snapshot.WaterPlaneSize;
+        data.WaterPlaneSyncWithEnvironment = snapshot.WaterPlaneSyncWithEnvironment;
+        data.WaterPlaneHeight = snapshot.WaterPlaneHeight;
         data.WaterUvScale = snapshot.WaterUvScale;
         data.WaterTexturePaths = (string[])snapshot.WaterTexturePaths.Clone();
         data.WaterDepthAutoGenerate = snapshot.WaterDepthAutoGenerate;

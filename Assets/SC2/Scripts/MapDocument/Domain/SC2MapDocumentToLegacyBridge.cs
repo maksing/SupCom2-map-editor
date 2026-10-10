@@ -369,6 +369,8 @@ namespace SC2.MapEditor.Document
             public string FogOfWarCorrectionCube = "";
             public SC2EnvironmentTextureExport TextureExport = new();
             public int WaterPlaneSize = 4096;
+            public bool WaterPlaneSyncWithEnvironment = true;
+            public float WaterPlaneHeight;
             public float WaterUvScale = 1024f;
             public string[] WaterTexturePaths = Array.Empty<string>();
             public bool WaterDepthAutoGenerate;
@@ -397,6 +399,8 @@ namespace SC2.MapEditor.Document
                 FogOfWarCorrectionCube = doc.FogOfWarCorrectionCube ?? "",
                 TextureExport = (doc.TextureExport ?? new SC2EnvironmentTextureExport()).Clone(),
                 WaterPlaneSize = doc.WaterPlaneSize,
+                WaterPlaneSyncWithEnvironment = doc.WaterPlaneSyncWithEnvironment,
+                WaterPlaneHeight = doc.WaterPlaneHeight,
                 WaterUvScale = doc.WaterUvScale,
                 WaterTexturePaths = doc.WaterTexturePaths ?? Array.Empty<string>(),
                 WaterDepthAutoGenerate = doc.WaterDepthAutoGenerate,

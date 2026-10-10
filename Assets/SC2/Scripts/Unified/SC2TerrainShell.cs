@@ -1303,6 +1303,42 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
         DrawUnifiedNote("Colour, waves, elevation and depth falloff are set in Environment > Water; this tab covers the plane's geometry and its textures.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+
+        DrawWaterPlaneHeightSection();
+    }
+
+    /// <summary>The last block of the Water tab: whether the generated plane lies at the Environment water elevation (the default) or
+    /// at a height of its own.</summary>
+    private void DrawWaterPlaneHeightSection()
+    {
+        DrawUnifiedSectionLabel("Plane height");
+        var sync = EditorGUILayout.ToggleLeft(" Sync with environment water elevation", _data.WaterPlaneSyncWithEnvironment);
+        if (sync != _data.WaterPlaneSyncWithEnvironment)
+        {
+            RecordUndoCheckpoint("Toggle Water Plane Height Sync");
+            // Switching the sync off starts the plane where the elevation is now, so nothing jumps.
+            if (!sync) _data.WaterPlaneHeight = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true).WaterElevation;
+            _data.WaterPlaneSyncWithEnvironment = sync;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+
+        if (_data.WaterPlaneSyncWithEnvironment)
+        {
+            DrawUnifiedNote("The plane lies at the water elevation set in Environment > Water.");
+            return;
+        }
+
+        var height = DrawCompactSlider("Plane height", _data.WaterPlaneHeight, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight,
+            onValueChangeStart: () => RecordUndoCheckpoint("Change Water Plane Height"));
+        if (!Mathf.Approximately(height, _data.WaterPlaneHeight))
+        {
+            _data.WaterPlaneHeight = height;
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote("World height of the generated plane. The water elevation in Environment > Water is unchanged and still drives the rest of the map.");
     }
 
     private bool _waterDepthExpanded = true;

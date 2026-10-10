@@ -36,7 +36,9 @@ namespace SC2.MapEditor.Document
             bool waterDepthPaintBorder = true,
             bool waterDepthImageBorderOutline = false,
             string[] textureSourceTags = null,
-            bool[] textureForceExport = null)
+            bool[] textureForceExport = null,
+            bool waterPlaneSyncWithEnvironment = true,
+            float waterPlaneHeight = 0f)
         {
             if (environmentHeader == null) throw new ArgumentNullException(nameof(environmentHeader));
             if (environmentHeader.Length != SC2EnvironmentDocument.HeaderSize)
@@ -65,6 +67,8 @@ namespace SC2.MapEditor.Document
                 ColorCorrectionCube = colorCorrectionCube ?? "",
                 FogOfWarCorrectionCube = fogOfWarCorrectionCube ?? "",
                 WaterPlaneSize = waterPlaneSize,
+                WaterPlaneSyncWithEnvironment = waterPlaneSyncWithEnvironment,
+                WaterPlaneHeight = waterPlaneHeight,
                 WaterUvScale = waterUvScale,
                 WaterTexturePaths = waterTexturePaths ?? Array.Empty<string>(),
                 WaterDepthAutoGenerate = waterDepthAutoGenerate,

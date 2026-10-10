@@ -36,6 +36,11 @@ public static class SC2WaterPlane
     /// so it has no reason to share this subdivision.</summary>
     public const int GridResolution = 32;
 
+    /// <summary>The height the generated plane lies at: the Environment water elevation while the plane is synced with it (the
+    /// default), otherwise the plane's own height. Only the plane follows this; the elevation the rest of the map uses is unchanged.</summary>
+    public static float PlaneHeight(SC2TerrainData data, float environmentElevation) =>
+        data != null && !data.WaterPlaneSyncWithEnvironment ? data.WaterPlaneHeight : environmentElevation;
+
     /// <summary>One corner/vertex of the GridResolution x GridResolution
     /// subdivided plane, in world space — gx/gz range 0..GridResolution
     /// inclusive (GridResolution+1 verts per axis). Centered on the map's
@@ -316,6 +321,9 @@ public static class SC2WaterPreview
         }
 
         var info = SC2TerrainExporter.BuildInfoModel(data, session, quiet: true);
+        // The preview model is a private copy, so the plane's own height can stand in for the elevation here: the plane, its water
+        // material and the water render controller all follow it, and the header snapshot below notices a change of it.
+        info.WaterElevation = SC2WaterPlane.PlaneHeight(data, info.WaterElevation);
         // Mirrors SC2TerrainExporter's own export-time auto-fill exactly (see its
         // "auto-fill it here rather than leaving WaterDepthOriginX/Y/BoundsSizeX/Y..."
         // comment) — without this, a REAL/vanilla map's own authored WaterDepthOriginX/Y/

@@ -130,6 +130,8 @@ namespace SC2.MapEditor.Document
             data.EnvironmentTextureSourceTags = (string[])env.TextureExport.SourceTags.Clone();
             data.EnvironmentTextureForceExport = (bool[])env.TextureExport.ForceExport.Clone();
             data.WaterPlaneSize = env.WaterPlaneSize;
+            data.WaterPlaneSyncWithEnvironment = env.WaterPlaneSyncWithEnvironment;
+            data.WaterPlaneHeight = env.WaterPlaneHeight;
             data.WaterUvScale = env.WaterUvScale;
             data.WaterTexturePaths = env.WaterTexturePaths;
             data.WaterDepthAutoGenerate = env.WaterDepthAutoGenerate;
