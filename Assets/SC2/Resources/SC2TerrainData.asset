@@ -66168,6 +66168,8 @@ MonoBehaviour:
   Collision2HidePreview: 0
   Collision2Wireframe: 0
   WaterPlaneSize: 4096
+  WaterPlaneSyncWithEnvironment: 1
+  WaterPlaneHeight: 0
   WaterTexturePaths:
   - /textures/Terrain/Water/foam_001.dds
   - /textures/Terrain/Water/foam_002.dds
