@@ -81,6 +81,7 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2HeightMode.cs" Link="Source\SC2HeightMode.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2AxisMove.cs" Link="Source\SC2AxisMove.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PropFacing.cs" Link="Source\SC2PropFacing.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2ImportedPivot.cs" Link="Source\SC2ImportedPivot.cs" />
     <Compile Include="$(SC2Root)\Scripts\TerrainEditor\SC2HfieldProjectionService.cs" Link="Source\SC2HfieldProjectionService.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ShaderFlag.cs" Link="Source\SC2ShaderFlag.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2EnvironmentDefaults.cs" Link="Source\SC2EnvironmentDefaults.cs" />

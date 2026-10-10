@@ -1067,6 +1067,7 @@ namespace SC2.MapEditor.Document
             o.Set("originalBdf", WriteBlobRef(e.OriginalBdf));
             o.Set("position", WriteFloatArray(e.Position)); o.Set("eulerAngles", WriteFloatArray(e.EulerAngles));
             o.Set("scale", WriteFloatArray(e.Scale)); o.Set("recomputeNormals", SC2JsonValue.Of(e.RecomputeNormals));
+            o.Set("pivotAtOrigin", SC2JsonValue.Of(e.PivotAtOrigin));
             var overrides = SC2JsonValue.NewArray();
             foreach (var m in e.MaterialOverrides) overrides.Add(WriteImportedTerrainMaterialOverride(m));
             o.Set("materialOverrides", overrides);
@@ -1082,6 +1083,7 @@ namespace SC2.MapEditor.Document
                 Position = ReadFloatArray(o.Get("position"), 3, new[] { 0f, 0f, 0f }),
                 EulerAngles = ReadFloatArray(o.Get("eulerAngles"), 3, new[] { 0f, 0f, 0f }),
                 Scale = ReadFloatArray(o.Get("scale"), 3, new[] { 1f, 1f, 1f }),
+                PivotAtOrigin = o.Get("pivotAtOrigin").AsBool(false),
                 RecomputeNormals = o.Get("recomputeNormals").AsBool(true),
             };
             foreach (var v in o.Get("materialOverrides").Items()) e.MaterialOverrides.Add(ReadImportedTerrainMaterialOverride(v));

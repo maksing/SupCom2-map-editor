@@ -583,6 +583,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 Position = new[] { t.position.x, t.position.y, t.position.z },
                 EulerAngles = new[] { t.eulerAngles.x, t.eulerAngles.y, t.eulerAngles.z },
                 Scale = new[] { t.localScale.x, t.localScale.y, t.localScale.z },
+                PivotAtOrigin = true,
             };
 
             if (entry.OriginalMaterials != null)
@@ -700,9 +701,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             }
 
             var t = result.Root.transform;
-            t.position = new Vector3(doc.Position[0], doc.Position[1], doc.Position[2]);
-            t.eulerAngles = new Vector3(doc.EulerAngles[0], doc.EulerAngles[1], doc.EulerAngles[2]);
-            t.localScale = new Vector3(doc.Scale[0], doc.Scale[1], doc.Scale[2]);
+            var savedPosition = new Vector3(doc.Position[0], doc.Position[1], doc.Position[2]);
+            var savedEuler = new Vector3(doc.EulerAngles[0], doc.EulerAngles[1], doc.EulerAngles[2]);
+            var savedScale = new Vector3(doc.Scale[0], doc.Scale[1], doc.Scale[2]);
+            // A map saved before objects turned about their own origin placed the object relative to (0, 0, 0): the same placement
+            // relative to the object's origin is another position.
+            if (!doc.PivotAtOrigin && result.Root.GetComponent<SC2ImportedTerrainPivot>() is { } restoredPivot)
+                savedPosition = SC2ImportedPivot.ConvertLegacyPosition(savedPosition, Quaternion.Euler(savedEuler), savedScale, restoredPivot.Value);
+            t.position = savedPosition;
+            t.eulerAngles = savedEuler;
+            t.localScale = savedScale;
 
             var meshRenderer = result.Root.GetComponent<MeshRenderer>();
             var originalMaterials = meshRenderer != null ? meshRenderer.sharedMaterials : System.Array.Empty<Material>();
@@ -5640,6 +5648,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 Id = entry.Id,
                 Model = entry.Model,
                 Transform = entry.Root.transform,
+                Pivot = entry.Root.GetComponent<SC2ImportedTerrainPivot>() is { } pivotHolder ? pivotHolder.Value : Vector3.zero,
                 Name = entry.DisplayName,
                 AuthoredEnableRnm = entry.OriginalEnableRnm,
                 TexturePathOverrides = entry.TexturePathOverrides,
@@ -5893,6 +5902,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var newMesh = scratch.GetComponent<MeshFilter>().sharedMesh;
         var newMaterials = scratch.GetComponent<MeshRenderer>().sharedMaterials;
         UnityEngine.Object.DestroyImmediate(scratch);
+        // The object keeps the origin it was imported with, whatever layers are left in the model.
+        if (entry.Root.GetComponent<SC2ImportedTerrainPivot>() is { } objectPivot) SC2TerrainBdfImporter.ShiftMesh(newMesh, objectPivot.Value);
 
         var meshFilter = entry.Root.GetComponent<MeshFilter>();
         var oldMesh = meshFilter != null ? meshFilter.sharedMesh : null;

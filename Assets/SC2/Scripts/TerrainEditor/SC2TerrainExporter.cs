@@ -1947,7 +1947,7 @@ public static class SC2TerrainExporter
         for (var vi = 0; vi < source.Vertices.Count; vi++)
         {
             var v = source.Vertices[vi];
-            var pos = t != null ? t.TransformPoint(new Vector3(v.PosX, v.PosY, v.PosZ)) : new Vector3(v.PosX, v.PosY, v.PosZ);
+            var pos = t != null ? t.TransformPoint(new Vector3(v.PosX, v.PosY, v.PosZ) - imported.Pivot) : new Vector3(v.PosX, v.PosY, v.PosZ);
             // Tangent/Binormal must be carried across the same way the Normal
             // already was — they are real per-vertex data in terrain.bdf's
             // packed [+24]/[+28] words, not something the game recomputes (see

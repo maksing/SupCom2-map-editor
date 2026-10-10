@@ -18,6 +18,10 @@ public sealed class SC2ImportedTerrainExportData
     /// <summary>Current position/rotation/scale (as edited in the Imported panel) — baked into vertex positions/normals at merge time.</summary>
     public Transform Transform;
 
+    /// <summary>The object's origin in the model's own coordinates (SC2ImportedPivot): the transform sits on it, so a model vertex is
+    /// placed at <c>Transform.TransformPoint(vertex - Pivot)</c>.</summary>
+    public Vector3 Pivot;
+
     public string Name;
 
     /// <summary>The imported entry's stable id (the same one the Lighting Bake panel lists it under); names the object in the

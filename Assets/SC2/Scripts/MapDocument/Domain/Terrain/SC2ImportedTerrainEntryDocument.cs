@@ -63,6 +63,9 @@ namespace SC2.MapEditor.Document
         public float[] Position = { 0f, 0f, 0f };
         public float[] EulerAngles = { 0f, 0f, 0f };
         public float[] Scale = { 1f, 1f, 1f };
+        /// <summary>True when Position / EulerAngles / Scale are relative to the object's own origin (the file's layer headers), which
+        /// is how objects turn and scale now; a map saved before has them relative to (0, 0, 0) and reads false here.</summary>
+        public bool PivotAtOrigin;
         /// <summary>DEAD — kept so saved maps keep reading and writing the same file. The export always recomputes the tangent frame,
         /// whatever a save holds here.</summary>
         public bool RecomputeNormals = true;
@@ -82,6 +85,7 @@ namespace SC2.MapEditor.Document
                 Position = (float[])Position.Clone(),
                 EulerAngles = (float[])EulerAngles.Clone(),
                 Scale = (float[])Scale.Clone(),
+                PivotAtOrigin = PivotAtOrigin,
                 RecomputeNormals = RecomputeNormals,
             };
             foreach (var m in MaterialOverrides)

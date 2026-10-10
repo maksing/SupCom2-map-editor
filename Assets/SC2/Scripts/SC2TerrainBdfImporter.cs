@@ -143,8 +143,35 @@ public static class SC2TerrainBdfImporter
         if (go.GetComponent<SC2DecalProjectionSurface>() == null)
             go.AddComponent<SC2DecalProjectionSurface>();
 
+        // The object's origin from the file's layer headers: the mesh is kept relative to it and the transform sits on it, so the
+        // object moves, turns and scales about its own origin instead of the editor's (0, 0, 0). Where the file records no origin
+        // this is (0, 0, 0) and nothing changes.
+        var pivot = SC2ImportedPivot.FromLayerCenters(model.Layers.Select(layer => layer.MapCenter));
+        ApplyPivot(go, pivot);
+
         go.name = displayName;
         return new ImportResult { Root = go, TextureAttempts = attempts, Model = model, RawBytes = rawBytes };
+    }
+
+    /// <summary>Moves the origin of an imported object's mesh to <paramref name="pivot"/> (file coordinates): the vertices become
+    /// relative to it, the transform is put on it (so every vertex stays where it was) and the pivot is remembered on the object.</summary>
+    public static void ApplyPivot(GameObject go, Vector3 pivot)
+    {
+        var meshFilter = go.GetComponent<MeshFilter>();
+        if (meshFilter != null && meshFilter.sharedMesh != null) ShiftMesh(meshFilter.sharedMesh, pivot);
+        var holder = go.GetComponent<SC2ImportedTerrainPivot>() ?? go.AddComponent<SC2ImportedTerrainPivot>();
+        holder.Value = pivot;
+        go.transform.position = pivot;
+    }
+
+    /// <summary>Makes a mesh built from file coordinates relative to <paramref name="pivot"/>.</summary>
+    public static void ShiftMesh(Mesh mesh, Vector3 pivot)
+    {
+        if (pivot == Vector3.zero) return;
+        var vertices = mesh.vertices;
+        for (var i = 0; i < vertices.Length; i++) vertices[i] -= pivot;
+        mesh.vertices = vertices;
+        mesh.RecalculateBounds();
     }
 
     private static void EnsureTexturesAvailable(TerrainModel model, string bdfPath, ISC2SourceContainerReader archiveReader = null)
