@@ -601,6 +601,7 @@ namespace SC2.MapEditor.Document
             o.Set("scale", SC2JsonValue.Of(p.Scale));
             o.Set("flags", SC2JsonValue.Of(p.Flags));
             o.Set("renderPriority", SC2JsonValue.Of(p.RenderPriority));
+            o.Set("includeInHeightmap", SC2JsonValue.Of(p.IncludeInHeightmap));
             o.Set("anchorToTerrain", SC2JsonValue.Of(p.AnchorToTerrain));
             o.Set("anchorToModel", SC2JsonValue.Of(p.AnchorToModel));
             o.Set("onWaterSurface", SC2JsonValue.Of(p.OnWaterSurface));
@@ -617,6 +618,7 @@ namespace SC2.MapEditor.Document
             Scale = (float)o.Get("scale").AsDouble(1),
             Flags = (uint)o.Get("flags").AsLong(0),
             RenderPriority = (float)o.Get("renderPriority").AsDouble(1),
+            IncludeInHeightmap = o.Get("includeInHeightmap").AsBool(false),
             AnchorToTerrain = o.Get("anchorToTerrain").AsBool(true),
             AnchorToModel = o.Get("anchorToModel").AsBool(false),
             OnWaterSurface = o.Get("onWaterSurface").AsBool(false),

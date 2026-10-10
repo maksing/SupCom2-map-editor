@@ -47,7 +47,34 @@ public sealed class SC2ObjectsShell
     /// so a future audit of "is every gap covered" is a single grep for
     /// MarkObjectsDirty rather than needing to re-derive the right flag at
     /// each call site.</summary>
-    private void MarkObjectsDirty() => Session?.MarkDirty(SC2DirtyFlags.Objects);
+    private void MarkObjectsDirty()
+    {
+        Session?.MarkDirty(SC2DirtyFlags.Objects);
+        RefreshHeightmapPropsSignature();
+    }
+
+    private int _heightmapPropsSignature;
+
+    /// <summary>The props included in the heightmap are part of the live height grid (Costs generation, placement), so the grid is
+    /// rebuilt when one is added, removed, moved, turned, scaled or has its blueprint changed - and not for any other object edit.</summary>
+    private void RefreshHeightmapPropsSignature()
+    {
+        var data = Data;
+        if (data == null) return;
+        var hash = 17;
+        foreach (var p in data.ObjProps)
+        {
+            if (!p.IncludeInHeightmap) continue;
+            hash = hash * 31 + p.Id;
+            hash = hash * 31 + p.Position.GetHashCode();
+            hash = hash * 31 + p.Rotation.GetHashCode();
+            hash = hash * 31 + p.Scale.GetHashCode();
+            hash = hash * 31 + (p.BlueprintPath?.GetHashCode() ?? 0);
+        }
+        if (hash == _heightmapPropsSignature) return;
+        _heightmapPropsSignature = hash;
+        _terrainShell?.InvalidateLiveHeightGrid();
+    }
 
     public Action RepaintHost;
     public Action<string> ReportStatus;
@@ -348,6 +375,8 @@ public sealed class SC2ObjectsShell
     public SC2ObjectsShell(SC2TerrainShell terrainShell)
     {
         _terrainShell = terrainShell;
+        // The export projects the geometry of the props that are included in the heightmap; it finds their meshes through this index.
+        SC2PropHeightmapGeometry.AssetResolver = path => _assetBrowser.FindPropAsset(path);
     }
 
     /// <summary>Pure, non-drawing equivalent of the Groups tree's width-
@@ -1321,6 +1350,7 @@ public sealed class SC2ObjectsShell
             if (sibling == null) continue;
             sibling.CastsShadow = edited.CastsShadow;
             sibling.RenderPriority = edited.RenderPriority;
+            sibling.IncludeInHeightmap = edited.IncludeInHeightmap;
         }
     }
 
@@ -1555,7 +1585,7 @@ public sealed class SC2ObjectsShell
                     Id = Data.AllocateObjectId(), BlueprintPath = canonical.BlueprintPath, Position = slots[slot],
                     Rotation = canonical.Rotation, Scale = canonical.Scale, Flags = canonical.Flags,
                     RenderPriority = canonical.RenderPriority,
-                    AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, HeightOffset = canonical.HeightOffset
+                    AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, IncludeInHeightmap = canonical.IncludeInHeightmap, HeightOffset = canonical.HeightOffset
                 };
                 Data.ObjProps.Add(member);
                 onMemberCreated?.Invoke(member);
@@ -2129,7 +2159,7 @@ public sealed class SC2ObjectsShell
                 Scale = src.Scale,
                 Flags = src.Flags,
                 RenderPriority = src.RenderPriority,
-                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface, IncludeInHeightmap = src.IncludeInHeightmap,
                 HeightOffset = src.HeightOffset
             });
             MarkObjectsDirty();
@@ -2158,7 +2188,7 @@ public sealed class SC2ObjectsShell
                 Scale = p.Scale,
                 Flags = p.Flags,
                 RenderPriority = p.RenderPriority,
-                AnchorToTerrain = p.AnchorToTerrain, AnchorToModel = p.AnchorToModel, OnWaterSurface = p.OnWaterSurface,
+                AnchorToTerrain = p.AnchorToTerrain, AnchorToModel = p.AnchorToModel, OnWaterSurface = p.OnWaterSurface, IncludeInHeightmap = p.IncludeInHeightmap,
                 HeightOffset = p.HeightOffset
             });
         foreach (var m in Data.ObjMarkers.Where(x => _selMarkers.Contains(x.Id)))
@@ -2243,7 +2273,7 @@ public sealed class SC2ObjectsShell
                 Scale = src.Scale,
                 Flags = src.Flags,
                 RenderPriority = src.RenderPriority,
-                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface, IncludeInHeightmap = src.IncludeInHeightmap,
                 HeightOffset = src.HeightOffset
             };
             if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, AnchoredHeight(pos.x, pos.z, clone.AnchorToModel, pos.y, clone.HeightOffset, clone.OnWaterSurface), pos.z);
@@ -3415,6 +3445,16 @@ public sealed class SC2ObjectsShell
         }
         GUILayout.EndHorizontal();
 
+        var inHeightmap = selected.Count(p => p.IncludeInHeightmap);
+        GUILayout.Label(inHeightmap == 0 ? "In heightmap: off" : inHeightmap == count ? "In heightmap: on"
+            : $"In heightmap: mixed ({inHeightmap} of {count} on)");
+        GUILayout.BeginHorizontal();
+        if (SC2EnvFieldGui.Button("In heightmap on", GUILayout.Width(SC2UiScale.Pxf(110f))))
+            ApplyRenderAttributes(selected, p => p.IncludeInHeightmap = true);
+        if (SC2EnvFieldGui.Button("In heightmap off", GUILayout.Width(SC2UiScale.Pxf(110f))))
+            ApplyRenderAttributes(selected, p => p.IncludeInHeightmap = false);
+        GUILayout.EndHorizontal();
+
         GUILayout.Label(_selectedPriorityMixed ? "Render priority: (mixed)" : $"Render priority: {selected[0].RenderPriority:0.###}");
         GUILayout.BeginHorizontal();
         _bulkPriorityInput = SC2EnvFieldGui.TextField("", _bulkPriorityInput, "bulk_priority");
@@ -3493,9 +3533,11 @@ public sealed class SC2ObjectsShell
         if (p.Scale != prevScale) PropagateSymmetryRotationScale(p, p.Rotation);
         var prevShadow = p.CastsShadow;
         var prevPriority = p.RenderPriority;
+        var prevInHeightmap = p.IncludeInHeightmap;
         p.CastsShadow = SC2EnvFieldGui.Toggle("Casts shadow on terrain", p.CastsShadow);
+        p.IncludeInHeightmap = SC2EnvFieldGui.Toggle("Include in heightmap (hfield)", p.IncludeInHeightmap);
         p.RenderPriority = Mathf.Clamp01(SC2EnvFieldGui.Slider("Render priority (0–1)", p.RenderPriority, 0f, 1f, "propi_priority"));
-        if (p.CastsShadow != prevShadow || p.RenderPriority != prevPriority)
+        if (p.CastsShadow != prevShadow || p.RenderPriority != prevPriority || p.IncludeInHeightmap != prevInHeightmap)
         {
             PropagateRenderAttributes(p);
             MarkObjectsDirty();
@@ -7107,6 +7149,7 @@ public sealed class SC2ObjectsShell
     /// "one drag = one undo step" behavior.</summary>
     private void CommitDragPositions()
     {
+        RefreshHeightmapPropsSignature();
         if (Session?.Document == null) return;
 
         var doc = Session.Document.Objects;

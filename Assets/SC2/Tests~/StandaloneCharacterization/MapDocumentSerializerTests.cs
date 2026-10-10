@@ -123,7 +123,7 @@ public class MapDocumentSerializerTests
         {
             Id = 1, BlueprintPath = "/props/tree.bp", Position = new Vector3(1, 2, 3),
             Rotation = new Quaternion(0.1f, 0.2f, 0.3f, 0.9f), Scale = 1.5f, Flags = 7,
-            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, HeightOffset = 2.5f,
+            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, IncludeInHeightmap = true, HeightOffset = 2.5f,
         });
         doc.Objects.Markers.Add(new SC2ObjMarker
         {
@@ -405,6 +405,7 @@ public class MapDocumentSerializerTests
         Assert.True(restored.Objects.Markers[0].AnchorToModel);
         Assert.True(restored.Objects.Units[0].AnchorToModel);
         Assert.True(restored.Objects.Props[0].OnWaterSurface);
+        Assert.True(restored.Objects.Props[0].IncludeInHeightmap);
         Assert.True(restored.Objects.Markers[0].OnWaterSurface);
         Assert.True(restored.Objects.Units[0].OnWaterSurface);
         Assert.Single(restored.Objects.Markers);

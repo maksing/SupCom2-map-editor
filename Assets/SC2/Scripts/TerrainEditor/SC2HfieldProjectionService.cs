@@ -64,6 +64,8 @@ public static class SC2HfieldProjectionService
     /// projections deliberately call Project without it, since excluding a
     /// material from Collision2's own mesh must not also remove it from
     /// hfield.bdf or Costs.</param>
+    /// <param name="extraSolids">Extra geometry rasterized into the same heightmap without being part of <paramref name="model"/>
+    /// (and so never written to terrain.bdf); SC2PropHeightmapGeometry builds it from the props that are included in the heightmap.</param>
     /// <param name="bakeWaterElevation">Collision2-only: when set, floods
     /// every cell that has no real ground data at all (a true hole under
     /// excluded water geometry, e.g. an imported ocean with no separate
@@ -88,12 +90,42 @@ public static class SC2HfieldProjectionService
         int mapX = DefaultMapX,
         int mapY = DefaultMapY,
         System.Collections.Generic.ICollection<string> excludedMaterialNames = null,
-        float? bakeWaterElevation = null)
+        float? bakeWaterElevation = null,
+        System.Collections.Generic.IEnumerable<TerrainModel> extraSolids = null)
     {
         var heights = new float[mapX * mapY];
         var written = new bool[mapX * mapY];
         RasterizeModel(model, heights, written, mapX, mapY, excludedMaterialNames);
+        // Geometry that is part of the ground without being part of terrain.bdf (props marked "include in heightmap"): a cell takes the
+        // higher of it and the terrain, as with any two layers.
+        if (extraSolids != null)
+            foreach (var solid in extraSolids)
+                if (solid != null) RasterizeModel(solid, heights, written, mapX, mapY, null);
         return Finish(heights, written, existingTerrainTypes, mapX, mapY, bakeWaterElevation);
+    }
+
+    /// <summary>Raises <paramref name="hfield"/>, a heightmap that is already built, to the geometry of <paramref name="solids"/> where
+    /// they stand higher (a cell keeps the higher of the two) - for a heightmap that came from somewhere other than a terrain model,
+    /// like the live height grid, which props marked "include in heightmap" must be part of too.</summary>
+    public static void MergeSolids(HfieldModel hfield, System.Collections.Generic.IEnumerable<TerrainModel> solids)
+    {
+        if (hfield == null || hfield.Heightmap == null || solids == null) return;
+        var mapX = (int)hfield.MapX;
+        var mapY = (int)hfield.MapY;
+        if (mapX <= 0 || mapY <= 0 || hfield.Heightmap.Length != mapX * mapY) return;
+        foreach (var solid in solids)
+        {
+            if (solid == null) continue;
+            var heights = new float[mapX * mapY];
+            var written = new bool[mapX * mapY];
+            RasterizeModel(solid, heights, written, mapX, mapY, null);
+            for (var i = 0; i < heights.Length; i++)
+            {
+                if (!written[i]) continue;
+                var encoded = (ushort)Mathf.Clamp(Mathf.RoundToInt(heights[i] * 128f), 0, 65535);
+                if (encoded > hfield.Heightmap[i]) hfield.Heightmap[i] = encoded;
+            }
+        }
     }
 
     /// <summary>The topmost surface of several models at once (a cell takes the highest of them), with the same water exclusion
@@ -145,6 +177,27 @@ public static class SC2HfieldProjectionService
             }
             if (!anyFilled) break;
         }
+    }
+
+    /// <summary>The mesh (vertex positions as x, y, z triples, triangle indices) placed at <paramref name="position"/> with
+    /// <paramref name="rotation"/> and a uniform <paramref name="scale"/>, as a one-layer terrain model.</summary>
+    public static TerrainModel BuildSolid(System.Collections.Generic.IReadOnlyList<float> positions, System.Collections.Generic.IReadOnlyList<ushort> indices, Vector3 position, Quaternion rotation, float scale)
+    {
+        var model = new TerrainModel();
+        model.Materials.Add(new TerrainMaterial { Name = "prop_heightmap" });
+        model.Layers.Add(new BdfIO.Formats.Terrain.TerrainLayer { CumulativeVertices = 0, CumulativeIndices = 0 });
+        var vertexCount = positions.Count / 3;
+        for (var i = 0; i < vertexCount; i++)
+        {
+            var world = position + rotation * (new Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]) * scale);
+            model.Vertices.Add(new TerrainVertex { PosX = world.x, PosY = world.y, PosZ = world.z });
+        }
+        for (var t = 0; t + 2 < indices.Count; t += 3)
+        {
+            if (indices[t] >= vertexCount || indices[t + 1] >= vertexCount || indices[t + 2] >= vertexCount) continue;
+            model.Triangles.Add(new TerrainTriangle { V0 = indices[t], V1 = indices[t + 1], V2 = indices[t + 2] });
+        }
+        return model;
     }
 
     private static void RasterizeModel(TerrainModel model, float[] heights, bool[] written, int mapX, int mapY,

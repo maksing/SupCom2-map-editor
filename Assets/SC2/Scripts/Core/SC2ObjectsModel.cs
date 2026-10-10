@@ -38,6 +38,10 @@ public class SC2ObjProp
     /// <summary>Bit 0 of <see cref="Flags"/> is set when the prop does NOT cast a shadow onto the terrain
     /// (Flags 0 = shadow, 1 = no shadow; 92% of vanilla props are 0). The other bits are left as they are.</summary>
     public const uint NoShadowFlag = 1u;
+    /// <summary>The prop's own geometry is rasterized into the heightmap that hfield.bdf (and so the pathing, costs and collision
+    /// built from it) is made of, so a building a unit must climb or walk around is part of the ground it stands on.
+    /// Off by default: a prop is only a decoration.</summary>
+    public bool IncludeInHeightmap;
     public bool CastsShadow
     {
         get => (Flags & NoShadowFlag) == 0;

@@ -996,7 +996,9 @@ public static class SC2TerrainExporter
         // material's real height; only Collision2's own separate
         // projection (built further below in BuildCollision2Model) skips
         // materials in data.Collision2ExcludedMaterialNames.
-        var hfieldModel = SC2HfieldProjectionService.Project(model, existingTerrainTypes, hfieldMapX, hfieldMapY);
+        // Props marked "include in heightmap" are ground here too (never written to terrain.bdf).
+        var propSolids = SC2PropHeightmapGeometry.BuildSolids(data);
+        var hfieldModel = SC2HfieldProjectionService.Project(model, existingTerrainTypes, hfieldMapX, hfieldMapY, extraSolids: propSolids);
         var hfieldContainer = HfieldBdf.Create(hfieldModel, platform);
         var hfieldBytes = hfieldContainer.Write(HfieldBdf.Padding);
         SC2Log.Log($"[SC2Exporter] hfield.bdf projected from final exported mesh: " +
@@ -2683,7 +2685,8 @@ public static class SC2TerrainExporter
         // fixes both: it always runs, and it never disagrees with the real
         // terrain it's extending.
         var bakeWater = waterTopElevation.HasValue && data != null;
-        var collisionHfield = SC2HfieldProjectionService.Project(model, existingTerrainTypes, mapX, mapY, data?.Collision2ExcludedMaterialNames, bakeWater ? waterTopElevation : null);
+        var collisionHfield = SC2HfieldProjectionService.Project(model, existingTerrainTypes, mapX, mapY, data?.Collision2ExcludedMaterialNames, bakeWater ? waterTopElevation : null,
+            extraSolids: SC2PropHeightmapGeometry.BuildSolids(data));
 
         var meshMapX = (int)collisionHfield.MapX;
         var meshMapY = (int)collisionHfield.MapY;
@@ -3030,7 +3033,8 @@ public static class SC2TerrainExporter
         // the returned Hfield must see every material's real height; only
         // Collision2's own separate projection inside BuildCollision2Model
         // respects data.Collision2ExcludedMaterialNames.
-        var hfieldModel = SC2HfieldProjectionService.Project(geomModel, existingTerrainTypes, data.CostsGridSize + 1, data.CostsGridSize + 1);
+        var hfieldModel = SC2HfieldProjectionService.Project(geomModel, existingTerrainTypes, data.CostsGridSize + 1, data.CostsGridSize + 1,
+            extraSolids: SC2PropHeightmapGeometry.BuildSolids(data));
 
         // Read via BuildInfoModel(data, session), not data.EnvironmentHeader
         // directly - see BuildPreviewGeometryModel's own follow-up
