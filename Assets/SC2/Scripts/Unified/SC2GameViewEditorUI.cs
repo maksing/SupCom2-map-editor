@@ -238,6 +238,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // is used to sample it. Session-only, not saved into SC2TerrainData.
     private Texture2D _referenceOverlayTex;
     private bool _showReferenceOverlay;
+    // The world size (X, Z) the picture covers, around the map centre; (0, 0) = the whole map. A picture drawn for a smaller map than
+    // the one being edited (e.g. for a 700 x 700 map, however many pixels it has) is set to that size.
+    private Vector2 _referenceCover;
 
     private const string ReferenceOpacityPrefKey = "SC2.GameView.ReferenceOpacity";
     private float _referenceOpacity = -1f; // -1 = not loaded from PlayerPrefs yet
@@ -260,6 +263,31 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             PlayerPrefs.Save();
             ApplyReferenceOverlayState();
         }
+    }
+
+    private Vector2 ReferenceMapWorldSize()
+    {
+        var data = _terrainShell?.Data;
+        return data != null
+            ? new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize))
+            : new Vector2(1024f, 1024f);
+    }
+
+    /// <summary>The picture is scaled about the map centre: these are the world sizes it covers, so a picture drawn for a 700 x 700 map is
+    /// fitted by entering 700, and a picture that is not square gets each side set on its own. Equal to the map's size (the default)
+    /// it spans the whole map; outside the picture the map shows through.</summary>
+    private void DrawReferenceCoverageField(float contentWidth)
+    {
+        var map = ReferenceMapWorldSize();
+        var cover = new Vector2(_referenceCover.x > 0f ? _referenceCover.x : map.x, _referenceCover.y > 0f ? _referenceCover.y : map.y);
+        // The label goes on its own wrapped line: this column is narrow, and a long label next to the box would widen the whole panel.
+        SC2EnvFieldGui.WrapLabel("Image covers (world units)", contentWidth);
+        var width = Mathf.Max(1f, SC2EnvFieldGui.FloatField("Width", cover.x, "ReferenceImageCoverageX"));
+        var height = Mathf.Max(1f, SC2EnvFieldGui.FloatField("Height", cover.y, "ReferenceImageCoverageZ"));
+
+        if (Mathf.Approximately(width, cover.x) && Mathf.Approximately(height, cover.y)) return;
+        _referenceCover = Mathf.Approximately(width, map.x) && Mathf.Approximately(height, map.y) ? Vector2.zero : new Vector2(width, height);
+        ApplyReferenceOverlayState();
     }
 
     // Percent slider shared by the View menu and the right panel.
@@ -3106,6 +3134,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 ApplyReferenceOverlayState();
             }
             DrawReferenceOpacitySlider("ReferenceOpacityPanel");
+            if (_referenceOverlayTex != null) DrawReferenceCoverageField(contentWidth);
 
             GUILayout.Space(6);
             SC2EditorStylesDivider_Horizontal();
@@ -5038,6 +5067,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_referenceOverlayTex != null) UnityEngine.Object.Destroy(_referenceOverlayTex);
         _referenceOverlayTex = tex;
         _showReferenceOverlay = true;
+        _referenceCover = Vector2.zero;
         ApplyReferenceOverlayState();
         SetStatus("Reference image loaded: " + System.IO.Path.GetFileName(path));
     }
@@ -5053,11 +5083,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         var runtime = _terrainShell?.Runtime;
         if (runtime == null) return;
-        var data = _terrainShell.Data;
-        var worldSize = data != null
-            ? new Vector2(Mathf.Max(1f, data.GridWidth * data.CellSize), Mathf.Max(1f, data.GridHeight * data.CellSize))
-            : new Vector2(1024f, 1024f);
-        runtime.SetReferenceOverlay(_referenceOverlayTex, _showReferenceOverlay, worldSize, ReferenceOpacity);
+        var worldSize = ReferenceMapWorldSize();
+        var zoom = new Vector2(_referenceCover.x > 0f ? worldSize.x / _referenceCover.x : 1f, _referenceCover.y > 0f ? worldSize.y / _referenceCover.y : 1f);
+        runtime.SetReferenceOverlay(_referenceOverlayTex, _showReferenceOverlay, worldSize, ReferenceOpacity, zoom);
     }
 
 #if !UNITY_EDITOR

@@ -76,6 +76,9 @@ Shader "Hidden/SC2/TerrainView"
         _ReferenceOverlayEnabled ("Reference Overlay Enabled", Int) = 0
         // 1 = the reference fully replaces the preview; lower values blend it over the selected mode.
         _ReferenceOverlayOpacity ("Reference Overlay Opacity", Range(0, 1)) = 1
+        // Per axis (x = X, y = Z): map size / the world size the picture covers, around the map centre. 1 = the picture spans the
+        // whole map on that axis, 2 = it spans the middle half. Outside the picture the preview shows through.
+        _ReferenceOverlayZoom ("Reference Overlay Zoom (X, Z)", Vector) = (1, 1, 0, 0)
     }
 
     SubShader
@@ -124,12 +127,14 @@ Shader "Hidden/SC2/TerrainView"
             sampler2D _ReferenceOverlayTex;
             int _ReferenceOverlayEnabled;
             float _ReferenceOverlayOpacity;
+            float4 _ReferenceOverlayZoom;
 
-            // Blends the reference picture over a mode's finished colour (opacity < 1 only).
+            // Blends the reference picture over a mode's finished colour (opacity < 1 only). refCol.a is 1 where the picture
+            // is, 0 outside it.
             float4 ApplyReference(float4 sceneColor, float4 refCol)
             {
                 if (_ReferenceOverlayEnabled == 0) return sceneColor;
-                return float4(lerp(sceneColor.rgb, refCol.rgb, _ReferenceOverlayOpacity), sceneColor.a);
+                return float4(lerp(sceneColor.rgb, refCol.rgb, _ReferenceOverlayOpacity * refCol.a), sceneColor.a);
             }
 
             struct a2v
@@ -542,12 +547,17 @@ Shader "Hidden/SC2/TerrainView"
                 // other sampling/lighting, so it overrides every other preview mode; below that it is
                 // blended over each mode's own result (ApplyReference). See this property's own
                 // Properties-block comment for why uv1 is safe to use directly here.
-                float4 refCol = float4(0, 0, 0, 1);
+                float4 refCol = float4(0, 0, 0, 0);
                 if (_ReferenceOverlayEnabled != 0)
                 {
-                    refCol = tex2D(_ReferenceOverlayTex, saturate(i.uv1));
-                    if (_ReferenceOverlayOpacity >= 0.999)
-                        return refCol;
+                    float2 refUv = (i.uv1 - 0.5) * _ReferenceOverlayZoom.xy + 0.5;
+                    if (all(refUv >= 0.0) && all(refUv <= 1.0))
+                    {
+                        float4 refSample = tex2D(_ReferenceOverlayTex, refUv);
+                        refCol = float4(refSample.rgb, 1);
+                        if (_ReferenceOverlayOpacity >= 0.999)
+                            return refSample;
+                    }
                 }
 
                 if (_PreviewMode == 3)

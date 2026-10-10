@@ -166,6 +166,9 @@ Shader "SC2/Terrain"
         // 1 = the reference fully replaces the render (see above); lower values blend it over the
         // selected view mode, so that mode shows through.
         _ReferenceOverlayOpacity ("Reference Overlay Opacity", Range(0, 1)) = 1
+        // Per axis (x = X, y = Z): map size / the world size the picture covers, around the map centre (1 = the whole map); outside
+        // it the render shows through.
+        _ReferenceOverlayZoom ("Reference Overlay Zoom (X, Z)", Vector) = (1, 1, 0, 0)
     }
 
     SubShader
@@ -231,6 +234,7 @@ Shader "SC2/Terrain"
             float   _ReferenceOverlayEnabled;
             float4  _ReferenceOverlaySize;
             float   _ReferenceOverlayOpacity;
+            float4  _ReferenceOverlayZoom;
 
             // RNM базис: azimuth 0/120/240 deg, elevation 35.26 deg
             static const float3 RNM_BASIS_0 = float3( 0.8165,  0.0000,  0.5774);
@@ -636,12 +640,15 @@ Shader "SC2/Terrain"
                 // instead of i.uv2.
                 if (_ReferenceOverlayEnabled > 0.5)
                 {
-                    float2 refUv = saturate(i.worldPos.xz / max(_ReferenceOverlaySize.xy, 1.0));
-                    fixed4 refCol = tex2D(_ReferenceOverlayTex, refUv);
-                    if (_ReferenceOverlayOpacity >= 0.999)
-                        return refCol;
-                    fixed4 scene = fragScene(i);
-                    return fixed4(lerp(scene.rgb, refCol.rgb, _ReferenceOverlayOpacity), scene.a);
+                    float2 refUv = (i.worldPos.xz / max(_ReferenceOverlaySize.xy, 1.0) - 0.5) * _ReferenceOverlayZoom.xy + 0.5;
+                    if (all(refUv >= 0.0) && all(refUv <= 1.0))
+                    {
+                        fixed4 refCol = tex2D(_ReferenceOverlayTex, refUv);
+                        if (_ReferenceOverlayOpacity >= 0.999)
+                            return refCol;
+                        fixed4 scene = fragScene(i);
+                        return fixed4(lerp(scene.rgb, refCol.rgb, _ReferenceOverlayOpacity), scene.a);
+                    }
                 }
                 return fragScene(i);
             }
