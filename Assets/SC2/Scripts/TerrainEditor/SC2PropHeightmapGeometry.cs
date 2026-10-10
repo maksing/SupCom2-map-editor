@@ -33,7 +33,25 @@ public static class SC2PropHeightmapGeometry
     }
 
     /// <summary>Forgets the meshes read so far (the game data root changed).</summary>
-    public static void ClearCache() => MeshCache.Clear();
+    public static void ClearCache() { MeshCache.Clear(); FacingCache.Clear(); }
+
+    private static readonly Dictionary<string, float> FacingCache = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The yaw (degrees) of the side a prop model leans towards (see SC2PropFacing), 0 for a centred model or while the
+    /// blueprint index / game archives are not available (then not kept, so the next call tries again).</summary>
+    public static float FacingYaw(string blueprintPath)
+    {
+        if (string.IsNullOrEmpty(blueprintPath)) return 0f;
+        if (FacingCache.TryGetValue(blueprintPath, out var cached)) return cached;
+        if (AssetResolver == null || !SC2GameArchiveRegistry.TryGetReader(out var reader) || reader == null) return 0f;
+        var asset = AssetResolver(blueprintPath);
+        if (asset == null) return 0f;
+        if (!MeshCache.TryGetValue(blueprintPath, out var mesh))
+            MeshCache[blueprintPath] = mesh = TryReadMesh(asset, reader);
+        var yaw = mesh.HasValue ? SC2PropFacing.FromPositions(mesh.Value.Positions) : 0f;
+        FacingCache[blueprintPath] = yaw;
+        return yaw;
+    }
 
     /// <summary>One solid for every included prop, or an empty list when none is marked or the game archives are not available.
     /// Props whose blueprint or SCM cannot be found are skipped.</summary>

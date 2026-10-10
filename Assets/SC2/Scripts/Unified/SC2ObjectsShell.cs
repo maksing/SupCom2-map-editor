@@ -1510,8 +1510,9 @@ public sealed class SC2ObjectsShell
         if (selected.Count == 0) return;
         var canonical = selected[0];
         var isArmy = ArmyPositionRe.IsMatch(canonical.Name);
-        var slots = GetUniqueSnappedMarkerSymmetryPositions(canonical.Position);
-        if (slots.Count <= 1)
+        var slots = Data.GetSymmetricPositions(canonical.Position).Select(SnapXZ).ToList();
+        var copySlots = SymmetryCopySlots(canonical.Position, snapped: true);
+        if (copySlots.Count == 0)
         {
             _lastActionSummary = "Symmetry produced no distinct marker position; no duplicate was created.";
             return;
@@ -1519,9 +1520,10 @@ public sealed class SC2ObjectsShell
         var group = new SC2ObjSymmetryGroup { Id = Data.AllocateObjectId(), Kind = "Marker" };
         group.Members.Add(new SC2ObjSymmetryMember { ObjectId = canonical.Id, SlotIndex = 0 });
 
-        for (var slot = 1; slot < slots.Count; slot++)
+        for (var copy = 0; copy < copySlots.Count; copy++)
         {
-            SC2ObjMarker member = slot - 1 < selected.Count - 1 ? selected[slot] : null;
+            var slot = copySlots[copy];
+            SC2ObjMarker member = copy < selected.Count - 1 ? selected[copy + 1] : null;
             if (member == null)
             {
                 var probe = new SC2ObjMarker { Type = canonical.Type, Prop = canonical.Prop, Position = slots[slot] };
@@ -1535,7 +1537,7 @@ public sealed class SC2ObjectsShell
                     // Army start positions always get a clean "ARMY_N" name,
                     // never "<name>_sym<slot>" — see NextArmyName's own comment.
                     Id = Data.AllocateObjectId(), Name = isArmy ? NextArmyName() : MakeUniqueMarkerName(canonical.Name + "_sym" + slot), Type = canonical.Type,
-                    Position = slots[slot], OrientationEuler = canonical.OrientationEuler,
+                    Position = slots[slot], OrientationEuler = SlotEuler(canonical.OrientationEuler, slot),
                     OrientationIsQuaternion = canonical.OrientationIsQuaternion, ColorHex = canonical.ColorHex,
                     Prop = canonical.Prop, ExtraFields = new List<SC2LuaField>(canonical.ExtraFields),
                     AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, HeightOffset = canonical.HeightOffset
@@ -1567,7 +1569,8 @@ public sealed class SC2ObjectsShell
         if (selected.Count == 0) return;
         var canonical = selected[0];
         var slots = Data.GetSymmetricPositions(canonical.Position);
-        if (slots.Count <= 1)
+        var copySlots = SymmetryCopySlots(canonical.Position, snapped: false);
+        if (copySlots.Count == 0)
         {
             _lastActionSummary = "Symmetry produced no distinct prop position; no duplicate was created.";
             return;
@@ -1575,15 +1578,16 @@ public sealed class SC2ObjectsShell
         var group = new SC2ObjSymmetryGroup { Id = Data.AllocateObjectId(), Kind = "Prop" };
         group.Members.Add(new SC2ObjSymmetryMember { ObjectId = canonical.Id, SlotIndex = 0 });
 
-        for (var slot = 1; slot < slots.Count; slot++)
+        for (var copy = 0; copy < copySlots.Count; copy++)
         {
-            SC2ObjProp member = slot - 1 < selected.Count - 1 ? selected[slot] : null;
+            var slot = copySlots[copy];
+            SC2ObjProp member = copy < selected.Count - 1 ? selected[copy + 1] : null;
             if (member == null)
             {
                 member = new SC2ObjProp
                 {
                     Id = Data.AllocateObjectId(), BlueprintPath = canonical.BlueprintPath, Position = slots[slot],
-                    Rotation = canonical.Rotation, Scale = canonical.Scale, Flags = canonical.Flags,
+                    Rotation = SlotRotation(canonical.Rotation, slot, canonical.BlueprintPath), Scale = canonical.Scale, Flags = canonical.Flags,
                     RenderPriority = canonical.RenderPriority,
                     AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, IncludeInHeightmap = canonical.IncludeInHeightmap, HeightOffset = canonical.HeightOffset
                 };
@@ -1614,12 +1618,14 @@ public sealed class SC2ObjectsShell
         if (selected.Count == 0) return;
         var canonical = selected[0];
         var slots = Data.GetSymmetricPositions(canonical.Position);
+        var copySlots = SymmetryCopySlots(canonical.Position, snapped: true);
         var group = new SC2ObjSymmetryGroup { Id = Data.AllocateObjectId(), Kind = "Unit" };
         group.Members.Add(new SC2ObjSymmetryMember { ObjectId = canonical.Id, SlotIndex = 0 });
 
-        for (var slot = 1; slot < slots.Count; slot++)
+        for (var copy = 0; copy < copySlots.Count; copy++)
         {
-            SC2ObjUnitNode member = slot - 1 < selected.Count - 1 ? selected[slot] : null;
+            var slot = copySlots[copy];
+            SC2ObjUnitNode member = copy < selected.Count - 1 ? selected[copy + 1] : null;
             if (member == null)
             {
                 member = new SC2ObjUnitNode
@@ -1630,7 +1636,7 @@ public sealed class SC2ObjectsShell
                     // in the same group as the unit it duplicates, never
                     // bare at the army root.
                     Name = MakeUniqueUnitName(canonical.Name + "_sym" + slot), ParentIndex = canonical.ParentIndex, IsGroup = false,
-                    Type = canonical.Type, Position = SnapXZ(slots[slot]), OrientationEuler = canonical.OrientationEuler,
+                    Type = canonical.Type, Position = SnapXZ(slots[slot]), OrientationEuler = SlotEuler(canonical.OrientationEuler, slot),
                     AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, HeightOffset = canonical.HeightOffset
                 };
                 Data.ObjUnits.Add(member);
@@ -2116,11 +2122,53 @@ public sealed class SC2ObjectsShell
         }
     }
 
+    /// <summary>The orientation of the copy in symmetry <paramref name="slot"/> of an object that is oriented as given (the facing is
+    /// carried to the slot like the position: mirrored across a mirror, turned with a rotation).</summary>
+    private Quaternion SlotRotation(Quaternion rotation, int slot, string blueprintPath = null)
+    {
+        var forward = rotation * Vector3.forward;
+        if (new Vector2(forward.x, forward.z).sqrMagnitude < 1e-6f) return rotation; // looking straight up or down: no yaw to carry
+        var yaw = Mathf.Atan2(forward.x, forward.z) * Mathf.Rad2Deg;
+        // What has to be carried across a mirror is the side the model leans towards (a building's ramp), not its +Z: the copy's yaw
+        // is the one that puts that side where the mirror puts it. A rotation needs no such side and the offset cancels out.
+        var facing = SC2PropHeightmapGeometry.FacingYaw(blueprintPath);
+        var slotYaw = SC2SymmetryMath.GetSlotYaw(Data.Symmetry, Data.RadialCount, slot, yaw + facing) - facing;
+        return Quaternion.AngleAxis(slotYaw - yaw, Vector3.up) * rotation;
+    }
+
+    private Vector3 SlotEuler(Vector3 euler, int slot) =>
+        new Vector3(euler.x, SC2SymmetryMath.GetSlotYaw(Data.Symmetry, Data.RadialCount, slot, euler.y), euler.z);
+
+    /// <summary>The symmetry slots (indices into GetSymmetricPositions) that get a copy of an object standing at
+    /// <paramref name="position"/>. A slot that lands on the object itself gets none (an object on a mirror line is its own mirror
+    /// image), and when two slots land on the same point (on a diagonal, a mirror and the half turn both reach the opposite side) one
+    /// copy is made, the rotated one: a rotation turns the object whatever its model looks like, a mirror cannot say how an
+    /// asymmetric model faces, and two copies there stacked up with different facings.</summary>
+    private List<int> SymmetryCopySlots(Vector3 position, bool snapped)
+    {
+        var all = Data.GetSymmetricPositions(position);
+        Vector3 Place(Vector3 v) => snapped ? SnapXZ(v) : v;
+        bool Same(Vector3 a, Vector3 b) => (a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) < 1e-4f;
+        var chosen = new List<int>();
+        if (all.Count <= 1) return chosen;
+        var origin = Place(all[0]);
+        for (var slot = 1; slot < all.Count; slot++)
+        {
+            var at = Place(all[slot]);
+            if (Same(at, origin)) continue;
+            var existing = chosen.FindIndex(c => Same(Place(all[c]), at));
+            if (existing < 0) { chosen.Add(slot); continue; }
+            if (SC2SymmetryMath.SlotReflects(Data.Symmetry, chosen[existing]) && !SC2SymmetryMath.SlotReflects(Data.Symmetry, slot))
+                chosen[existing] = slot;
+        }
+        return chosen;
+    }
+
     private void DuplicateMarkerWithSymmetry(SC2ObjMarker src)
     {
         var isArmy = ArmyPositionRe.IsMatch(src.Name);
-        var copies = GetUniqueSnappedMarkerSymmetryPositions(src.Position);
-        for (var i = 1; i < copies.Count; i++)
+        var copies = Data.GetSymmetricPositions(src.Position).Select(SnapXZ).ToList();
+        foreach (var i in SymmetryCopySlots(src.Position, snapped: true))
         {
             var clone = new SC2ObjMarker
             {
@@ -2130,7 +2178,7 @@ public sealed class SC2ObjectsShell
                 Name = isArmy ? NextArmyName() : MakeUniqueMarkerName(src.Name + "_sym" + i),
                 Type = src.Type,
                 Position = copies[i],
-                OrientationEuler = src.OrientationEuler,
+                OrientationEuler = SlotEuler(src.OrientationEuler, i),
                 OrientationIsQuaternion = src.OrientationIsQuaternion,
                 ColorHex = src.ColorHex,
                 Prop = src.Prop,
@@ -2148,14 +2196,14 @@ public sealed class SC2ObjectsShell
     private void DuplicatePropWithSymmetry(SC2ObjProp src)
     {
         var copies = Data.GetSymmetricPositions(src.Position);
-        for (var i = 1; i < copies.Count; i++)
+        foreach (var i in SymmetryCopySlots(src.Position, snapped: false))
         {
             Data.ObjProps.Add(new SC2ObjProp
             {
                 Id = Data.AllocateObjectId(),
                 BlueprintPath = src.BlueprintPath,
                 Position = copies[i],
-                Rotation = src.Rotation,
+                Rotation = SlotRotation(src.Rotation, i, src.BlueprintPath),
                 Scale = src.Scale,
                 Flags = src.Flags,
                 RenderPriority = src.RenderPriority,
