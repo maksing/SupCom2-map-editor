@@ -5177,7 +5177,7 @@ public class SC2TerrainShell : ScriptableObject
     internal void ApplyPreviewModeToChunks() => ApplyPreviewModeToChunksFor(_runtime, _data);
 
     /// <summary>Temporarily forces pure RNM terrain display, with the Grid/Wireframe/Hfield
-    /// overlays off and decals forced visible, for the duration of <paramref name="render"/>
+    /// overlays off and decals and water forced visible, for the duration of <paramref name="render"/>
     /// (SC2MapPreviewCapture's minimap/preview captures) — regardless of whatever preview mode
     /// (Mats/Pairs/Slope/Height/plain Textured) or overlay the user actually has active right now
     /// — then restores exactly what the interactive viewport was showing. All of this is shared
@@ -5193,6 +5193,7 @@ public class SC2TerrainShell : ScriptableObject
         var previousWireframe = _wireframeOverlayVisible;
         var previousForceHfield = _forceHfieldOverlay;
         var previousDecalsVisible = GetDecalsOverlayVisible?.Invoke();
+        var previousWaterVisible = _waterOverlayVisible;
 
         void Apply()
         {
@@ -5200,12 +5201,17 @@ public class SC2TerrainShell : ScriptableObject
             if (_bgRuntime != null) ApplyPreviewModeToChunksFor(_bgRuntime, _data?.BackgroundTerrainData);
             PushHeightGridOverlay();
             PushWireframeOverlay();
+            // The water preview exists only while the Visibility > Water checkbox is on (a hidden one is destroyed, an imported
+            // map's own water is clipped away), and it is refreshed only from Update(): a capture runs before that, so the water is
+            // put in or taken out here. The minimap always has water, whatever the view shows.
+            SC2WaterPreview.Ensure(_data, Session, _waterOverlayVisible, GetImportedTerrainsForExport?.Invoke());
         }
 
         _prev = PreviewMode.TexturedRNM;
         _heightGridOverlayVisible = false;
         _wireframeOverlayVisible = false;
         _forceHfieldOverlay = false;
+        _waterOverlayVisible = true;
         Apply();
         SetDecalsOverlayVisible?.Invoke(true);
         try { render(); }
@@ -5215,6 +5221,7 @@ public class SC2TerrainShell : ScriptableObject
             _heightGridOverlayVisible = previousGrid;
             _wireframeOverlayVisible = previousWireframe;
             _forceHfieldOverlay = previousForceHfield;
+            _waterOverlayVisible = previousWaterVisible;
             Apply();
             if (previousDecalsVisible.HasValue) SetDecalsOverlayVisible?.Invoke(previousDecalsVisible.Value);
         }
