@@ -838,13 +838,13 @@ public class SC2PairsMode
         foreach (var flag in pair.ShaderFlags)
         {
             EditorGUILayout.BeginHorizontal();
-            var newFlagValue = EditorGUILayout.Toggle(flag.Value, GUILayout.Width(SC2UiScale.Pxf(20f)));
+            // The name is the toggle's own label, so it starts after the switch instead of running under it.
+            var newFlagValue = GUILayout.Toggle(flag.Value, flag.Key, GUILayout.ExpandWidth(true));
             if (newFlagValue != flag.Value)
             {
                 _win.RecordUndoCheckpointFor(Data, "Change Shader Flag");
                 flag.Value = newFlagValue;
             }
-            EditorGUILayout.LabelField(flag.Key);
             if (flag.Key == "ALPHA_TEST" && flag.Value)
             {
                 // Real per-material threshold (terrain.hlsl:

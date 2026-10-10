@@ -2301,9 +2301,6 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // roughly 500px, which does not fit alongside the menu buttons at small
         // window sizes.
         var showMouseCoordinates = width >= 900;
-        var showMapName = width >= 680;
-        if (showMapName)
-            GUILayout.Label(MapName, _secondaryTextStyle, GUILayout.Width(SC2UiScale.Pxf(190f)));
         if (showMouseCoordinates)
             GUILayout.Label(_mouseMapCoordinates, _coordsPillStyle, GUILayout.Width(SC2UiScale.Pxf(190f)), GUILayout.Height(SC2UiScale.Pxf(20f)));
         GUILayout.Space(SC2UiScale.Pxf(6f));
