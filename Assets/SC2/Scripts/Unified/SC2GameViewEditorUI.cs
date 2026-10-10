@@ -1751,6 +1751,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             {
                 ReleaseStuckNumericFocusOnViewportClick();
 
+                // The viewport overlays below paint after the dropdown menus, so they have to leave the menu's area alone.
+                SC2ObjectsShell.OverlayOccluder = AnyMenuOpen() && _openMenuRect.width > 0f
+                    ? new Rect(_openMenuRect.x - 2f, _openMenuRect.y - 2f, _openMenuRect.width + 4f, _openMenuRect.height + 4f)
+                    : Rect.zero;
+
                 // Same reasoning as the reset before DrawNavigationGizmo above:
                 // HandleTerrainGameViewInput below is what actually calls
                 // PaintPair/PaintBlend (Graphics.Blit into PairMapRT/BlendRT), and

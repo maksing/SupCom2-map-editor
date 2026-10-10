@@ -8309,6 +8309,27 @@ public sealed class SC2ObjectsShell
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
         if (!TryProjectAndClipSegment(camera, camera.transform.position, camera.transform.forward, viewportRect, from, to, out var a, out var b)) return;
 
+        // These lines are painted after the dropdown menus, so the part of a line that lies under an open menu is left out.
+        var hasOccluder = OverlayOccluder.width > 0f && OverlayOccluder.height > 0f;
+        if (hasOccluder)
+        {
+            var insideA = a; var insideB = b;
+            if (ClipLineToRect(OverlayOccluder, ref insideA, ref insideB))
+            {
+                DrawOverlaySegment(a, insideA, color, width);
+                DrawOverlaySegment(insideB, b, color, width);
+                return;
+            }
+        }
+        DrawOverlaySegment(a, b, color, width);
+    }
+
+    /// <summary>Screen rectangle of whatever is painted over the viewport before the overlay lines (the open dropdown menu), in GUI
+    /// pixels; empty when nothing is. Set every frame by the editor UI.</summary>
+    public static Rect OverlayOccluder;
+
+    private static void DrawOverlaySegment(Vector2 a, Vector2 b, Color color, float width)
+    {
         var delta = b - a; var length = delta.magnitude;
         if (length < .5f) return;
         var oldMatrix = GUI.matrix; var oldColor = GUI.color;
