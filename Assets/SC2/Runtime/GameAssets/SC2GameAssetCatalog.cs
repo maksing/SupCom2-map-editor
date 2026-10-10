@@ -163,6 +163,9 @@ public static class SC2GameAssetCatalog
             asset.FootprintSizeX = footprint.GetSingle("SizeX");
             asset.FootprintSizeZ = footprint.GetSingle("SizeZ");
         }
+        // `Physics = { BlockPath = false, Destructable = true }` marks a prop (a tree, mostly) that breaks when something runs over it.
+        var physics = blueprint.Table.GetTable("Physics");
+        asset.Destructable = physics != null && physics.GetBool("Destructable");
         var lods = mesh == null ? null : mesh.GetTable("LODs");
         if (lods != null)
         {
@@ -335,6 +338,9 @@ public sealed class SC2GameAsset
     /// non-structure units).</summary>
     public float FootprintSizeX;
     public float FootprintSizeZ;
+    /// <summary>The blueprint's `Physics.Destructable`: the prop breaks (a tree is knocked down) when a unit or a shot reaches it.
+    /// False when the blueprint has no Physics table or does not set it.</summary>
+    public bool Destructable;
 }
 public sealed class SC2GameAssetLod
 {

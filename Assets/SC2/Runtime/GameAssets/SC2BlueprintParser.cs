@@ -191,6 +191,7 @@ public sealed class SC2BlueprintTable
     public SC2BlueprintValue Get(string name) { SC2BlueprintValue value; return Fields.TryGetValue(name, out value) ? value : null; }
     public SC2BlueprintTable GetTable(string name) { var value = Get(name); return value != null && value.Kind == SC2BlueprintValueKind.Table ? value.TableValue : null; }
     public string GetString(string name) { var value = Get(name); return value == null ? null : value.AsString(); }
+    public bool GetBool(string name, bool fallback = false) { var value = Get(name); return value != null && value.Kind == SC2BlueprintValueKind.Boolean ? value.BooleanValue : fallback; }
     public float GetSingle(string name, float fallback = 0f) { var value = Get(name); return value != null && value.Kind == SC2BlueprintValueKind.Number ? (float)value.NumberValue : fallback; }
 }
 

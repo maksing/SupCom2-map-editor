@@ -784,6 +784,9 @@ public sealed class SC2UnitPropBrowser
         var entry = _previewedEntry;
         GUILayout.Label(entry == null ? "Hover a prop to preview it" : entry.Asset.DisplayName ?? entry.Asset.Id, CardLabelStyle, GUILayout.Height(20f));
         GUILayout.Label(entry == null ? string.Empty : GetPropFolderBreadcrumb(entry), CardLabelStyle, GUILayout.Height(18f));
+        if (entry != null)
+            GUILayout.Label(entry.Asset.Destructable ? "Destructible: breaks when hit" : "Not destructible: stays standing",
+                entry.Asset.Destructable ? CardStateIssueStyle : CardLabelStyle, GUILayout.Height(18f));
         string status = entry == null || _propPreview.HasModel ? "Drag to rotate, wheel to zoom" : "No 3D model: " + (_propPreview.Error ?? "not loaded");
         GUILayout.Label(status, entry == null || _propPreview.HasModel ? CardStateReadyStyle : CardStateIssueStyle, GUILayout.Height(18f));
         GUILayout.FlexibleSpace();
@@ -869,7 +872,7 @@ public sealed class SC2UnitPropBrowser
         string state = !entry.IsReady ? entry.Issues.First(issue => issue.IsBlocking).Kind : entry.Issues.Count == 0 ? "Ready" : "Ready (fallback)";
         GUI.Label(new Rect(rect.x + 5, rect.y + 144, rect.width - 10, 17), state, entry.IsReady ? CardStateReadyStyle : CardStateIssueStyle);
         // Before the card-sized button below, so a click on the star toggles the favorite instead of picking the prop.
-        if (_kind == AssetKind.Prop) DrawFavoriteStar(previewRect, entry);
+        if (_kind == AssetKind.Prop) { DrawDestructibleBadge(previewRect, entry.Asset.Destructable); DrawFavoriteStar(previewRect, entry); }
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Select(entry);
     }
 
@@ -924,6 +927,19 @@ public sealed class SC2UnitPropBrowser
         PlayerPrefs.Save();
         // With the Favorites filter on, the card that was just un-starred has to leave the grid.
         if (_favoritesOnly) InvalidateVisibleEntries(false);
+    }
+
+    private GUIStyle _badgeStyle;
+
+    /// <summary>Whether the prop breaks (its blueprint's Physics.Destructable): "Breaks" for a tree a unit knocks down, "Solid" for
+    /// one that stays standing.</summary>
+    private void DrawDestructibleBadge(Rect previewRect, bool destructable)
+    {
+        var rect = new Rect(previewRect.x + 3f, previewRect.y + 3f, 44f, 17f);
+        DrawRect(rect, destructable ? new Color(0.82f, 0.42f, 0.12f, 0.95f) : new Color(0.07f, 0.08f, 0.1f, 0.8f));
+        _badgeStyle ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 10, fontStyle = FontStyle.Bold, clipping = TextClipping.Clip, padding = new RectOffset(0, 0, 0, 0) };
+        _badgeStyle.normal.textColor = destructable ? Color.white : new Color(0.7f, 0.74f, 0.8f);
+        GUI.Label(rect, new GUIContent(destructable ? "Breaks" : "Solid", destructable ? "Destructible: breaks when a unit or a shot reaches it" : "Not destructible: stays standing"), _badgeStyle);
     }
 
     private void DrawFavoriteStar(Rect previewRect, SC2GameAssetDiscoveryEntry entry)
