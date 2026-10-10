@@ -44,6 +44,9 @@ public sealed class SC2UnitPropBrowser
     // the browser identifies it everywhere else (AssetIdentity), so the copy of a prop under mods/<mod>/base|shadow/ is the same favorite.
     private const string FavoritePropsPrefsKey = "SC2.PropBrowserFavorites";
     private static HashSet<string> _favoriteProps;
+    // Where the prop browser was left (the Favorites switch, the folder and the scroll position), so reopening it - in the same session
+    // or the next - lands on the same page of the grid instead of starting again at All folders.
+    private const string PropViewPrefsKey = "SC2.PropBrowserView";
     private bool _favoritesOnly;
     private GUIStyle _favoriteStarStyle;
 
@@ -157,6 +160,7 @@ public sealed class SC2UnitPropBrowser
         _selectedUnitCategories.Clear();
         _unitCategoriesExpanded = false;
         _scroll = Vector2.zero;
+        if (kind == AssetKind.Prop) RestorePropView();
         var root = GameDataRoot;
         bool rootChanged = string.IsNullOrWhiteSpace(root) || !string.Equals(_loadedRoot, root, StringComparison.OrdinalIgnoreCase);
         if ((_result == null || rootChanged) && _loadTask == null && !string.IsNullOrWhiteSpace(root)) StartLoad(false);
@@ -203,6 +207,7 @@ public sealed class SC2UnitPropBrowser
 
     public void Close()
     {
+        if (IsOpen && _kind == AssetKind.Prop) SavePropView();
         _onPick = null;
         _search = string.Empty;
         _hoveredEntry = null;
@@ -543,6 +548,7 @@ public sealed class SC2UnitPropBrowser
         _selectedPropFolder = options[next].Name;
         _scroll = Vector2.zero;
         InvalidateVisibleEntries(false);
+        SavePropView();
     }
 
     private List<PropFolderOption> GetPropFolderOptions()
@@ -867,6 +873,24 @@ public sealed class SC2UnitPropBrowser
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Select(entry);
     }
 
+    private void SavePropView()
+    {
+        PlayerPrefs.SetString(PropViewPrefsKey,
+            (_favoritesOnly ? "1" : "0") + "\n" + (_selectedPropFolder ?? AllPropFolders) + "\n" + _scroll.y.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        PlayerPrefs.Save();
+    }
+
+    /// <summary>Puts back what SavePropView stored. A folder that no longer exists falls back to All folders in DrawPropFolderFilter.</summary>
+    private void RestorePropView()
+    {
+        var parts = PlayerPrefs.GetString(PropViewPrefsKey, string.Empty).Split('\n');
+        if (parts.Length != 3) return;
+        _favoritesOnly = parts[0] == "1";
+        if (!string.IsNullOrEmpty(parts[1])) _selectedPropFolder = parts[1];
+        if (float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scrollY) && scrollY > 0f)
+            _scroll = new Vector2(0f, scrollY);
+    }
+
     /// <summary>The favorites filter, placed with the folder filter it combines with.</summary>
     private void DrawFavoritesSwitch()
     {
@@ -875,6 +899,7 @@ public sealed class SC2UnitPropBrowser
         _favoritesOnly = next;
         _scroll = Vector2.zero;
         InvalidateVisibleEntries(false);
+        SavePropView();
     }
 
     private static HashSet<string> FavoriteProps
@@ -915,6 +940,7 @@ public sealed class SC2UnitPropBrowser
 
     private void Select(SC2GameAssetDiscoveryEntry entry)
     {
+        if (_kind == AssetKind.Prop) SavePropView();
         var callback = _onPick;
         _onPick = null;
         callback?.Invoke(new SC2UnitPropBrowserSelection(entry.Asset, ToGamePath(entry.Asset.SourcePath), entry.IsReady));
