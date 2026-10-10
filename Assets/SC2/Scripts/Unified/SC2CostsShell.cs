@@ -1003,6 +1003,7 @@ public sealed class SC2CostsShell
         // found still silently painted against the live plane instead of
         // the imported surface. See SC2LiveHeightGrid's own header comment.
         var hasHit = _terrainShell.TryRaycastLiveHeightGrid(ray, out var hit);
+        if (hasHit) hit = OntoFloorPlane(ray, hit);
 
         // F interactive radius resize — checked BEFORE the raycast-miss
         // early return below (not after) so an already-active resize keeps
@@ -1011,7 +1012,7 @@ public sealed class SC2CostsShell
         // HandleInput itself only needs hasHit/hit to START a new resize,
         // not to continue one already in progress.
         if (_brushRadiusGesture.HandleInput(camera, viewportRect, mousePosition, hasHit, hit, allowInput, ref _brushRadius, 1f, 128f,
-            sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null))
+            sampleHeight: BrushSurfaceSampler()))
             return;
 
         if (!hasHit)
@@ -1042,7 +1043,7 @@ public sealed class SC2CostsShell
             brushColor = new Color(previewPreset.Color.r, previewPreset.Color.g, previewPreset.Color.b, 0.9f);
         }
         SC2TerrainShell.DrawGameViewBrush(camera, viewportRect, hit, _brushRadius, brushColor, Color.clear,
-            sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null);
+            sampleHeight: BrushSurfaceSampler());
 
         // Costs painting mirrors symmetry per-cell at paint time
         // (ToGridSymmetry/SC2Symmetry.GetSymmetricCells below), not by
@@ -1052,7 +1053,7 @@ public sealed class SC2CostsShell
         // SymmetryCenter/RadialCount config both mechanisms share.
         if (Data.Symmetry != SymmetryMode.None)
             SC2TerrainShell.DrawSymmetryPointMarkers(camera, viewportRect, hit, Data.GetSymmetricPositions(hit), brushColor,
-                sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null);
+                sampleHeight: BrushSurfaceSampler());
 
         if (e.type == EventType.MouseDown && e.button == 0)
         {
@@ -1310,8 +1311,38 @@ public sealed class SC2CostsShell
         PushOverlayTexture(overlay);
     }
 
+    /// <summary>With the Collision2 floor plane on, the overlay is drawn on the plane where the ground lies below it, and left off the ground
+    /// down there (see SC2FloorOverlayPlane).</summary>
+    private void ApplyFloorPlane(Texture overlay)
+    {
+        if (Data == null) { SC2FloorOverlayPlane.Apply(null, 0, false, 0f, 0f); return; }
+        SC2FloorOverlayPlane.Apply(overlay, Data.CostsGridSize, Data.Collision2FloorEnabled, Data.Collision2FloorHeight, Data.Collision2HeightOffset);
+    }
+
+    /// <summary>With the Collision2 floor plane on, the ground below it is shown as the plane (see SC2FloorOverlayPlane), so the brush
+    /// follows that surface too: a ray that reaches the ground below the plane stops at the plane, and the brush ring lies on the
+    /// higher of the ground and the plane.</summary>
+    private Vector3 OntoFloorPlane(Ray ray, Vector3 groundHit)
+    {
+        if (Data == null || !Data.Collision2FloorEnabled) return groundHit;
+        var floorY = Data.Collision2FloorHeight;
+        if (groundHit.y >= floorY || ray.direction.y > -1e-4f) return groundHit;
+        var t = (floorY - ray.origin.y) / ray.direction.y;
+        return t > 0f ? ray.GetPoint(t) : groundHit;
+    }
+
+    private System.Func<float, float, float> BrushSurfaceSampler()
+    {
+        if (_terrainShell == null) return null;
+        System.Func<float, float, float> ground = _terrainShell.SampleLiveHeightGrid;
+        if (Data == null || !Data.Collision2FloorEnabled) return ground;
+        var floorY = Data.Collision2FloorHeight;
+        return (x, z) => Mathf.Max(ground(x, z), floorY);
+    }
+
     private void PushOverlayTexture(Texture overlay)
     {
+        ApplyFloorPlane(overlay);
         Runtime.SetCostsOverlayTexture(overlay);
         PushOverlayToImportedTerrains(overlay);
         PushOverlayToDecalPreview?.Invoke(overlay, true, Data.CostsGridSize);
@@ -1331,6 +1362,7 @@ public sealed class SC2CostsShell
     /// don't keep showing the costs/terrainTypes tint.</summary>
     public void DisableOverlay()
     {
+        ApplyFloorPlane(null);
         Runtime?.SetCostsOverlayTexture(null);
         PushOverlayToImportedTerrains(null);
         PushOverlayToDecalPreview?.Invoke(null, false, Data.CostsGridSize);
