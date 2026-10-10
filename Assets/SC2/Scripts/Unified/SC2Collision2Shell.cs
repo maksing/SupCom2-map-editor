@@ -137,7 +137,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
 
         EditorGUILayout.Space(4);
         EditorGUI.BeginDisabledGroup(_generating);
-        if (GUILayout.Button(_generating ? "Generating..." : "Generate Collision2", GUILayout.Height(SC2UiScale.Pxf(28f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        if (SC2EnvFieldGui.PrimaryButton(_generating ? "Generating..." : "Generate Collision2", GUILayout.Height(SC2UiScale.Pxf(28f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
             Generate();
         EditorGUI.EndDisabledGroup();
 

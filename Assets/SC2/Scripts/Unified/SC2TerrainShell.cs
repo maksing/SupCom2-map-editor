@@ -1511,7 +1511,7 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUI.EndDisabledGroup();
 
         EditorGUILayout.Space(SC2UiScale.Pxf(6f));
-        if (GUILayout.Button("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(26f))))
+        if (SC2EnvFieldGui.PrimaryButton("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(26f))))
             RegenerateWaterDepthPreview();
 
         if (_waterDepthPreviewTex != null)
@@ -1676,7 +1676,7 @@ public class SC2TerrainShell : ScriptableObject
         }
 
         // The one action of the tab comes first, so it is always in reach however long the sections below grow.
-        if (GUILayout.Button("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(34f))))
+        if (SC2EnvFieldGui.PrimaryButton("Bake Lighting", GUILayout.Height(SC2UiScale.Pxf(34f))))
             BakeAllLighting();
         if (!string.IsNullOrEmpty(_bakeStatus))
             DrawUnifiedNote(_bakeStatus);
@@ -1867,7 +1867,7 @@ public class SC2TerrainShell : ScriptableObject
         if (sunShadow != _data.PointCloudSunShadow) { _data.PointCloudSunShadow = sunShadow; EditorUtility.SetDirty(_data); }
 
         EditorGUILayout.Space(4);
-        if (GUILayout.Button("Bake Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(24f))))
+        if (SC2EnvFieldGui.PrimaryButton("Bake Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
             SC2BusyOverlay.RunInBackground("Baking point cloud",
                 "Calculating the unit lighting volumes from the terrain. This can take a while.", () =>

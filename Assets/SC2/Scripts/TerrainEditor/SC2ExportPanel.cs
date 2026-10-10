@@ -218,7 +218,7 @@ public sealed class SC2ExportPanel
         var exportPending = SC2MapPreviewCapture.IsCapturePending;
         var guiEnabledBeforeExport = GUI.enabled;
         GUI.enabled = guiEnabledBeforeExport && !exportPending;
-        if (GUILayout.Button(exportPending ? "Rendering minimap..." : "Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        if (SC2EnvFieldGui.PrimaryButton(exportPending ? "Rendering minimap..." : "Export", btnStyle, GUILayout.Height(SC2UiScale.Pxf(38f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
             RunExport();
         GUI.enabled = guiEnabledBeforeExport;
 
@@ -228,7 +228,7 @@ public sealed class SC2ExportPanel
         // same data. Everything is still marked dirty here (real per-domain dirty tracking), so this button regenerates every
         // file every time too, same as Export above.
         EditorGUILayout.Space(SC2UiScale.Pxf(4f));
-        if (GUILayout.Button("Smart Export", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        if (SC2EnvFieldGui.PrimaryButton("Smart Export", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
             RunSmartExport();
         SC2TerrainShell.DrawUnifiedNote("Smart Export writes the same files and also fills the Report tab with a per-file breakdown.");
 

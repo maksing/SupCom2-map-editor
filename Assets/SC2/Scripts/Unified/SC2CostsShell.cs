@@ -520,7 +520,7 @@ public sealed class SC2CostsShell
         // Copy, or a fresh Auto-generate), not just a brand-new generation.
         // Only meaningful for the 5-block playable-water profile.
         _genThresholds.ShorelineBandMargin = Mathf.RoundToInt(SC2EnvFieldGui.Slider("Shoreline border thickness (cells)", _genThresholds.ShorelineBandMargin, 0f, 20f, "costsgen:shorelineBandMargin"));
-        if (GUILayout.Button("Auto-generate from height (block 0)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
+        if (SC2EnvFieldGui.PrimaryButton("Auto-generate from height (block 0)", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
             TryAutoGenerateBlockZero();
         var blockCount = Data.CostsBlocks.Count;
         var cascadeSupported = blockCount == 3 || blockCount == 5;

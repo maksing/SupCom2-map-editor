@@ -629,7 +629,7 @@ public sealed partial class SC2GameViewEditorUI
             onDelete();
 
         var prevBg = GUI.backgroundColor;
-        GUI.backgroundColor = new Color(0.42f, 0.78f, 0.5f);
+        GUI.backgroundColor = SC2EnvFieldGui.PrimaryActionColor;
         if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
             onOpen();
         GUI.backgroundColor = prevBg;

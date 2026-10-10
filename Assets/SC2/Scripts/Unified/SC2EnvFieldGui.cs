@@ -198,6 +198,21 @@ public static class SC2EnvFieldGui
 
     public static bool Button(string label, params GUILayoutOption[] options) => GUILayout.Button(label, options);
 
+    /// <summary>The colour of the buttons that do a tab's main work (export, bake, generate): the green of the start window's Open button.</summary>
+    public static readonly Color PrimaryActionColor = new Color(0.42f, 0.78f, 0.5f);
+
+    /// <summary>A button for one of the main actions of a tab, in <see cref="PrimaryActionColor"/> so it stands out from the rest.</summary>
+    public static bool PrimaryButton(string label, params GUILayoutOption[] options) => PrimaryButton(label, GUI.skin.button, options);
+
+    public static bool PrimaryButton(string label, GUIStyle style, params GUILayoutOption[] options)
+    {
+        var previous = GUI.backgroundColor;
+        GUI.backgroundColor = PrimaryActionColor;
+        var clicked = GUILayout.Button(label, style, options);
+        GUI.backgroundColor = previous;
+        return clicked;
+    }
+
     /// <summary>True while the numeric box for `key` holds keyboard focus.
     /// Every RawXBox* helper below skips its own "incoming value changed
     /// elsewhere, reformat the displayed text" check while focused — found
