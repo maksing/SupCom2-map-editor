@@ -449,7 +449,7 @@ public sealed class SC2ObjectsShell
         // the event before OnGameViewGUI's gesture-cancel handler ever saw
         // it. Only the first non-empty one closes per press, since
         // sub-tabs keep these independent in practice.
-        if (_placementKind == PlacementKind.None && !_propsBrushActive && _propsGestureKind == PropsGestureKind.None &&
+        if (_placementKind == PlacementKind.None && !_propsBrushActive && _propsGestureKind == PropsGestureKind.None && !_moveGestureActive &&
             Event.current != null && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
         {
             var closedSomething = true;
@@ -507,6 +507,13 @@ public sealed class SC2ObjectsShell
         {
             GUILayout.Space(6);
             SC2EnvFieldGui.WrapLabel(_lastActionSummary, w);
+        }
+
+        // The height / water switches close the panel, after everything else.
+        if (subTab == TabProps || subTab == TabUnits || subTab == TabMarkers || subTab == TabArmies)
+        {
+            GUILayout.Space(8);
+            DrawPlacementHeightMode(subTab);
         }
 
         GUILayout.EndVertical();
@@ -800,10 +807,15 @@ public sealed class SC2ObjectsShell
     {
         if (TryRaycastImportedTerrain(new Vector3(x, 100000f, z), Vector3.down, out var importedHit))
             return importedHit.y;
+        return SampleRuntimeTerrainHeight(x, z) ?? 0f;
+    }
 
-        if (Data.CellSize <= 0f || Data.GridWidth <= 0 || Data.GridHeight <= 0) return 0f;
+    /// <summary>The runtime terrain's own height at (x, z) (null when there is no terrain data), ignoring any imported model.</summary>
+    private float? SampleRuntimeTerrainHeight(float x, float z)
+    {
+        if (Data.CellSize <= 0f || Data.GridWidth <= 0 || Data.GridHeight <= 0) return null;
         var runtime = _terrainShell?.Runtime;
-        if (runtime == null && (Data.Heights == null || Data.Heights.Length == 0)) return 0f;
+        if (runtime == null && (Data.Heights == null || Data.Heights.Length == 0)) return null;
         var stride = Data.GridWidth + 1;
         var fx = Mathf.Clamp(x / Data.CellSize, 0f, Data.GridWidth);
         var fz = Mathf.Clamp(z / Data.CellSize, 0f, Data.GridHeight);
@@ -850,6 +862,26 @@ public sealed class SC2ObjectsShell
         return found;
     }
 
+    /// <summary>What the view ray sees first: the nearer of the imported 3D model and the runtime terrain. Before, the model always won,
+    /// so the runtime terrain under an imported bridge could never be clicked. The live terrain is left out of an import-only map, where
+    /// it does not ship.</summary>
+    private bool TryRaycastScene(Ray ray, out Vector3 hit)
+    {
+        var hasModel = TryRaycastImportedTerrain(ray.origin, ray.direction, out var modelHit);
+        // On an import-only map the live terrain does not ship, so an imported model takes every click it can.
+        var terrainCounts = !(Data.ImportOnlyMode && hasModel);
+        var terrainHit = default(Vector3);
+        var hasTerrain = terrainCounts && SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out terrainHit);
+        if (hasModel && hasTerrain)
+        {
+            hit = (modelHit - ray.origin).sqrMagnitude <= (terrainHit - ray.origin).sqrMagnitude ? modelHit : terrainHit;
+            return true;
+        }
+        if (hasModel) { hit = modelHit; return true; }
+        hit = terrainHit;
+        return hasTerrain;
+    }
+
     private Vector3 GetSpawnPoint()
     {
         var focus = GetCameraFocusPoint != null ? GetCameraFocusPoint() : Vector3.zero;
@@ -869,11 +901,16 @@ public sealed class SC2ObjectsShell
 
     private SC2ObjMarker BuildMarkerPlacementCandidate(Vector3 position, string markerType)
     {
+        SC2HeightModes.Apply(_placementHeightMode, out var anchorToTerrain, out var anchorToModel);
         var marker = new SC2ObjMarker
         {
             Position = SnapXZ(position),
-            OrientationEuler = new Vector3(0f, _placementRotationY, 0f)
+            OrientationEuler = new Vector3(0f, _placementRotationY, 0f),
+            AnchorToTerrain = anchorToTerrain,
+            AnchorToModel = anchorToModel,
+            OnWaterSurface = _placementAboveWater
         };
+        marker.Position = new Vector3(marker.Position.x, RaiseToWater(marker.Position.y, _placementAboveWater), marker.Position.z);
         var template = SC2MarkerTemplates.Find(markerType);
         if (template != null) ApplyMarkerTemplate(marker, template);
         else marker.Type = markerType;
@@ -887,10 +924,101 @@ public sealed class SC2ObjectsShell
         Data.ObjMarkers.Any(marker => ArmyPositionRe.IsMatch(marker.Name) &&
                                       SC2MarkerDeduplication.SamePosition(marker.Position, SnapXZ(position)));
 
-    private void ReprojectProp(SC2ObjProp p) => p.Position = new Vector3(p.Position.x, SampleHeight(p.Position.x, p.Position.z) + p.HeightOffset, p.Position.z);
+    private const int MaxModelSurfacesPerColumn = 16;
+    private readonly List<float> _modelSurfaces = new();
+
+    /// <summary>The surface under (x, z) nearest to referenceY, over every layer there is: the imported 3D model (a ray straight down is
+    /// repeated from just below each hit, so the ground under a bridge is found too) and the runtime terrain. The object stays on the
+    /// layer it is already on, which is what lets one be placed under a bridge, on the model's own ground or on the runtime terrain.</summary>
+    private float? SampleModelHeight(float x, float z, float referenceY)
+    {
+        var colliders = GetImportedTerrainColliders?.Invoke();
+        var hasModel = colliders != null && colliders.Count > 0;
+        _modelSurfaces.Clear();
+        // The live terrain is a layer too, unless this is an import-only map (where it does not ship) that has a model.
+        if (!(Data.ImportOnlyMode && hasModel))
+        {
+            var terrainHeight = SampleRuntimeTerrainHeight(x, z);
+            if (terrainHeight.HasValue) _modelSurfaces.Add(terrainHeight.Value);
+        }
+        if (!hasModel) return SC2HeightModes.NearestSurface(_modelSurfaces, referenceY);
+        foreach (var collider in colliders)
+        {
+            if (collider == null) continue;
+            var originY = 100000f;
+            for (var layer = 0; layer < MaxModelSurfacesPerColumn; layer++)
+            {
+                if (!collider.Raycast(new Ray(new Vector3(x, originY, z), Vector3.down), out var hit, 1_000_000f)) break;
+                _modelSurfaces.Add(hit.point.y);
+                originY = hit.point.y - 0.02f;
+            }
+        }
+        return SC2HeightModes.NearestSurface(_modelSurfaces, referenceY);
+    }
+
+    /// <summary>The Y of an anchored prop or marker at (x, z): the terrain height (Heightmap mode) or the 3D model's surface (Model mode,
+    /// which keeps currentY where no model is under the object), plus the height offset.</summary>
+    private float AnchoredHeight(float x, float z, bool anchorToModel, float currentY, float offset, bool aboveWater = false)
+    {
+        var floor = WaterFloor(aboveWater);
+        if (!anchorToModel)
+            return SC2HeightModes.AnchoredY(SC2HeightMode.Heightmap, null, Mathf.Max(SampleHeight(x, z), floor), currentY, offset);
+        var model = SampleModelHeight(x, z, currentY - offset);
+        return SC2HeightModes.AnchoredY(SC2HeightMode.Model, model.HasValue ? Mathf.Max(model.Value, floor) : (float?)null, 0f, currentY, offset);
+    }
+
+    private float AnchoredUnitHeight(float x, float z, string unitType, bool anchorToModel, float currentY, float offset, bool aboveWater = false)
+    {
+        var floor = WaterFloor(aboveWater);
+        if (!anchorToModel) return Mathf.Max(SampleUnitHeight(x, z, unitType), floor) + offset;
+        var model = SampleModelHeight(x, z, currentY - offset);
+        return model.HasValue ? FloatOnWater(Mathf.Max(model.Value, floor), unitType) + offset : currentY;
+    }
+
+    /// <summary>The height an "above water" object rests at over submerged ground: the water surface. Negative infinity (no floor) for
+    /// an "under water" object or on a map whose water is off, where there is no surface to rest on.</summary>
+    private float WaterFloor(bool aboveWater) => aboveWater ? (CurrentWaterSurface() ?? float.NegativeInfinity) : float.NegativeInfinity;
+
+    private int _waterSurfaceFrame = -1;
+    private float? _waterSurface;
+    private SC2TerrainData _waterSurfaceData;
+
+    /// <summary>The Y of the map's water surface, or null when its water is off - read the way the water plane itself reads it
+    /// (SC2TerrainExporter.BuildInfoModel: the document's environment, else the terrain's own, else the imported map's info.bdf), so
+    /// an imported map whose water only exists in its original info.bdf has a surface here too. Cached for the frame: it is asked
+    /// once per object when many are reprojected together.</summary>
+    private float? CurrentWaterSurface()
+    {
+        var frame = Time.frameCount;
+        if (frame == _waterSurfaceFrame && ReferenceEquals(_waterSurfaceData, Data)) return _waterSurface;
+        _waterSurfaceFrame = frame;
+        _waterSurfaceData = Data;
+        _waterSurface = null;
+        if (Data == null) return null;
+        var info = SC2TerrainExporter.BuildInfoModel(Data, Session, quiet: true);
+        if (info.WaterEnabled != 0) _waterSurface = info.WaterElevation;
+        return _waterSurface;
+    }
+
+    private float RaiseToWater(float y, bool aboveWater) => Mathf.Max(y, WaterFloor(aboveWater));
+
+    /// <summary>With "Above water" switched on, what the user starts to move comes to rest above the water: the selected props, markers
+    /// and units take the flag (an object placed or left under water before the switch would otherwise sink to the seabed again at the
+    /// first move). Switching it off does not clear the flag; the switch itself does that for the selection. Call inside a bulk lookup.</summary>
+    private void AdoptAboveWaterForSelection()
+    {
+        if (!_placementAboveWater) return;
+        var changed = false;
+        foreach (var id in _selProps) { var p = LookupProp(id); if (p != null && !p.OnWaterSurface) { p.OnWaterSurface = true; changed = true; } }
+        foreach (var id in _selMarkers) { var m = LookupMarker(id); if (m != null && !m.OnWaterSurface) { m.OnWaterSurface = true; changed = true; } }
+        foreach (var id in _selUnits) { var u = LookupUnit(id); if (u != null && !u.IsGroup && !u.OnWaterSurface) { u.OnWaterSurface = true; changed = true; } }
+        if (changed) MarkObjectsDirty();
+    }
+
+    private void ReprojectProp(SC2ObjProp p) => p.Position = new Vector3(p.Position.x, AnchoredHeight(p.Position.x, p.Position.z, p.AnchorToModel, p.Position.y, p.HeightOffset, p.OnWaterSurface), p.Position.z);
     private void ReprojectMarker(SC2ObjMarker m)
     {
-        var projected = new Vector3(m.Position.x, SampleHeight(m.Position.x, m.Position.z) + m.HeightOffset, m.Position.z);
+        var projected = new Vector3(m.Position.x, AnchoredHeight(m.Position.x, m.Position.z, m.AnchorToModel, m.Position.y, m.HeightOffset, m.OnWaterSurface), m.Position.z);
         if (!HasEquivalentPlacedMarker(new SC2ObjMarker
             {
                 Name = m.Name,
@@ -900,7 +1028,7 @@ public sealed class SC2ObjectsShell
             }, m.Id))
             m.Position = projected;
     }
-    private void ReprojectUnit(SC2ObjUnitNode u) => u.Position = new Vector3(u.Position.x, SampleUnitHeight(u.Position.x, u.Position.z, u.Type) + u.HeightOffset, u.Position.z);
+    private void ReprojectUnit(SC2ObjUnitNode u) => u.Position = new Vector3(u.Position.x, AnchoredUnitHeight(u.Position.x, u.Position.z, u.Type, u.AnchorToModel, u.Position.y, u.HeightOffset, u.OnWaterSurface), u.Position.z);
 
     /// <summary>Wired to SC2TerrainShell.HeightBrushApplied (see its own doc
     /// comment) — re-samples every anchored Prop/Marker/(non-group) Unit
@@ -988,10 +1116,14 @@ public sealed class SC2ObjectsShell
     /// instead of sinking to the submerged terrain height.</summary>
     private float SampleUnitHeight(float x, float z, string unitType)
     {
-        var terrainHeight = SampleHeight(x, z);
+        return FloatOnWater(SampleHeight(x, z), unitType);
+    }
+
+    private float FloatOnWater(float terrainHeight, string unitType)
+    {
         if (!IsAmphibiousUnitType(unitType)) return terrainHeight;
 
-        var waterElevation = SC2ObjectsExport.GetWaterElevation(Data, Session?.Document?.Environment?.WorkingHeader);
+        var waterElevation = CurrentWaterSurface() ?? SC2ObjectsExport.GetWaterElevation(Data, Session?.Document?.Environment?.WorkingHeader);
         return terrainHeight < waterElevation ? waterElevation : terrainHeight;
     }
 
@@ -1376,7 +1508,7 @@ public sealed class SC2ObjectsShell
                     Position = slots[slot], OrientationEuler = canonical.OrientationEuler,
                     OrientationIsQuaternion = canonical.OrientationIsQuaternion, ColorHex = canonical.ColorHex,
                     Prop = canonical.Prop, ExtraFields = new List<SC2LuaField>(canonical.ExtraFields),
-                    AnchorToTerrain = canonical.AnchorToTerrain, HeightOffset = canonical.HeightOffset
+                    AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, HeightOffset = canonical.HeightOffset
                 };
                 Data.ObjMarkers.Add(member);
                 if (isArmy) EnsureArmyMetadataLinked(member);
@@ -1423,7 +1555,7 @@ public sealed class SC2ObjectsShell
                     Id = Data.AllocateObjectId(), BlueprintPath = canonical.BlueprintPath, Position = slots[slot],
                     Rotation = canonical.Rotation, Scale = canonical.Scale, Flags = canonical.Flags,
                     RenderPriority = canonical.RenderPriority,
-                    AnchorToTerrain = canonical.AnchorToTerrain, HeightOffset = canonical.HeightOffset
+                    AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, HeightOffset = canonical.HeightOffset
                 };
                 Data.ObjProps.Add(member);
                 onMemberCreated?.Invoke(member);
@@ -1469,7 +1601,7 @@ public sealed class SC2ObjectsShell
                     // bare at the army root.
                     Name = MakeUniqueUnitName(canonical.Name + "_sym" + slot), ParentIndex = canonical.ParentIndex, IsGroup = false,
                     Type = canonical.Type, Position = SnapXZ(slots[slot]), OrientationEuler = canonical.OrientationEuler,
-                    AnchorToTerrain = canonical.AnchorToTerrain, HeightOffset = canonical.HeightOffset
+                    AnchorToTerrain = canonical.AnchorToTerrain, AnchorToModel = canonical.AnchorToModel, OnWaterSurface = canonical.OnWaterSurface, HeightOffset = canonical.HeightOffset
                 };
                 Data.ObjUnits.Add(member);
             }
@@ -1493,31 +1625,83 @@ public sealed class SC2ObjectsShell
         MarkObjectsDirty();
     }
 
-    /// <summary>Shared "Attach to terrain / Height offset / Absolute Y /
-    /// Reproject" block — the same model for
-    /// Props/Markers/Units instead of each having its own bespoke button.</summary>
-    /// <summary>reproject/setAbsoluteY are the ONLY two ways this block
-    /// mutates the caller's position — it never takes position by ref
-    /// itself, precisely so a caller can't accidentally re-apply a stale
-    /// snapshot captured before one of these callbacks already wrote the
-    /// real, current value (that used to happen here: the old ref-Vector3
-    /// version had the caller do `position = ...; DrawAnchorBlock(ref
-    /// position, ...); p.Position = position;`, which silently undid
-    /// "Reproject now" by overwriting it with the pre-click value).</summary>
-    private void DrawAnchorBlock(ref bool anchor, ref float offset, float currentY, Action reproject, Action<float> setAbsoluteY)
+    /// <summary>The height mode for objects placed from now on and for the ones selected on this tab: picking a mode here sets it on the
+    /// selection too (and puts those objects on the heightmap / the 3D model straight away), so the same switch serves both. An
+    /// object's own mode can still be changed in its inspector.</summary>
+    private void DrawPlacementHeightMode(int subTab)
     {
-        SC2EnvFieldGui.SectionLabel("Height anchoring");
-        anchor = SC2EnvFieldGui.Toggle("Attach to terrain", anchor);
-        if (anchor)
+        var modes = new[] { SC2HeightMode.Heightmap, SC2HeightMode.Model, SC2HeightMode.Free };
+        var labels = new[] { SC2HeightModes.Label(modes[0]), SC2HeightModes.Label(modes[1]), SC2HeightModes.Label(modes[2]) };
+        SC2EnvFieldGui.SectionLabel("Height mode");
+        var selected = modes[Mathf.Clamp(SC2TerrainShell.DrawUnifiedSegmentGrid(Array.IndexOf(modes, _placementHeightMode), labels, 3), 0, modes.Length - 1)];
+        if (selected != _placementHeightMode)
         {
-            offset = SC2EnvFieldGui.FloatField("Height offset", offset, "anchor_offset");
-            if (SC2EnvFieldGui.Button("Reproject now", GUILayout.Height(SC2UiScale.Pxf(18f)))) reproject();
+            _placementHeightMode = selected;
+            var changed = ApplyHeightModeToSelection(subTab, selected);
+            if (changed > 0) _lastActionSummary = $"Height mode '{SC2HeightModes.Label(selected)}' set on {changed} selected object(s).";
         }
-        else
+
+        SC2EnvFieldGui.SectionLabel("Water");
+        var aboveWater = SC2TerrainShell.DrawUnifiedSegmentGrid(_placementAboveWater ? 1 : 0, new[] { "Under water", "Above water" }, 2) == 1;
+        if (aboveWater != _placementAboveWater)
         {
-            var y = SC2EnvFieldGui.FloatField("Absolute Y", currentY, "anchor_absy");
-            if (!Mathf.Approximately(y, currentY)) setAbsoluteY(y);
+            _placementAboveWater = aboveWater;
+            var waterChanged = ApplyWaterToSelection(subTab, aboveWater);
+            if (waterChanged > 0) _lastActionSummary = $"{(aboveWater ? "Above" : "Under")} water set on {waterChanged} selected object(s).";
         }
+        if (_placementAboveWater && float.IsNegativeInfinity(WaterFloor(true)))
+            SC2TerrainShell.DrawUnifiedNote("Water is off on this map (Environment > Water): Above water has no effect.");
+    }
+
+    /// <summary>Puts the selected props / markers / units of the tab above or under the water (one undo step); returns how many.</summary>
+    private int ApplyWaterToSelection(int subTab, bool aboveWater)
+    {
+        var props = subTab == TabProps ? Data.ObjProps.Where(p => _selProps.Contains(p.Id)).ToList() : new List<SC2ObjProp>();
+        var markers = subTab == TabMarkers ? Data.ObjMarkers.Where(m => _selMarkers.Contains(m.Id)).ToList() : new List<SC2ObjMarker>();
+        var units = subTab == TabUnits ? Data.ObjUnits.Where(u => !u.IsGroup && _selUnits.Contains(u.Id)).ToList() : new List<SC2ObjUnitNode>();
+        var count = props.Count + markers.Count + units.Count;
+        if (count == 0) return 0;
+
+        PushUndo();
+        var floor = WaterFloor(aboveWater);
+        foreach (var p in props)
+        {
+            p.OnWaterSurface = aboveWater;
+            if (p.AnchorToTerrain) ReprojectProp(p);
+            else p.Position = new Vector3(p.Position.x, Mathf.Max(p.Position.y, floor), p.Position.z);
+        }
+        foreach (var m in markers)
+        {
+            m.OnWaterSurface = aboveWater;
+            if (m.AnchorToTerrain) ReprojectMarker(m);
+            else m.Position = new Vector3(m.Position.x, Mathf.Max(m.Position.y, floor), m.Position.z);
+        }
+        foreach (var u in units)
+        {
+            u.OnWaterSurface = aboveWater;
+            if (u.AnchorToTerrain) ReprojectUnit(u);
+            else u.Position = new Vector3(u.Position.x, Mathf.Max(u.Position.y, floor), u.Position.z);
+        }
+        MarkObjectsDirty();
+        return count;
+    }
+
+    /// <summary>Puts the selected props / markers / units of the tab on <paramref name="mode"/> (one undo step); returns how many.</summary>
+    private int ApplyHeightModeToSelection(int subTab, SC2HeightMode mode)
+    {
+        var props = subTab == TabProps ? Data.ObjProps.Where(p => _selProps.Contains(p.Id)).ToList() : new List<SC2ObjProp>();
+        var markers = subTab == TabMarkers ? Data.ObjMarkers.Where(m => _selMarkers.Contains(m.Id)).ToList() : new List<SC2ObjMarker>();
+        var units = subTab == TabUnits ? Data.ObjUnits.Where(u => !u.IsGroup && _selUnits.Contains(u.Id)).ToList() : new List<SC2ObjUnitNode>();
+        var count = props.Count + markers.Count + units.Count;
+        if (count == 0) return 0;
+
+        PushUndo();
+        SC2HeightModes.Apply(mode, out var anchorToTerrain, out var anchorToModel);
+        foreach (var p in props) { p.AnchorToTerrain = anchorToTerrain; p.AnchorToModel = anchorToModel; if (anchorToTerrain) ReprojectProp(p); }
+        foreach (var m in markers) { m.AnchorToTerrain = anchorToTerrain; m.AnchorToModel = anchorToModel; if (anchorToTerrain) ReprojectMarker(m); }
+        foreach (var u in units) { u.AnchorToTerrain = anchorToTerrain; u.AnchorToModel = anchorToModel; if (anchorToTerrain) ReprojectUnit(u); }
+        MarkObjectsDirty();
+        return count;
     }
 
     private void DrawSystemFilterRow(float w, ref SysFilter filter, bool shadowFilters = false)
@@ -1921,7 +2105,7 @@ public sealed class SC2ObjectsShell
                 ColorHex = src.ColorHex,
                 Prop = src.Prop,
                 ExtraFields = new List<SC2LuaField>(src.ExtraFields),
-                AnchorToTerrain = src.AnchorToTerrain,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
                 HeightOffset = src.HeightOffset
             };
             if (HasEquivalentPlacedMarker(clone, src.Id)) continue;
@@ -1945,7 +2129,7 @@ public sealed class SC2ObjectsShell
                 Scale = src.Scale,
                 Flags = src.Flags,
                 RenderPriority = src.RenderPriority,
-                AnchorToTerrain = src.AnchorToTerrain,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
                 HeightOffset = src.HeightOffset
             });
             MarkObjectsDirty();
@@ -1974,7 +2158,7 @@ public sealed class SC2ObjectsShell
                 Scale = p.Scale,
                 Flags = p.Flags,
                 RenderPriority = p.RenderPriority,
-                AnchorToTerrain = p.AnchorToTerrain,
+                AnchorToTerrain = p.AnchorToTerrain, AnchorToModel = p.AnchorToModel, OnWaterSurface = p.OnWaterSurface,
                 HeightOffset = p.HeightOffset
             });
         foreach (var m in Data.ObjMarkers.Where(x => _selMarkers.Contains(x.Id)))
@@ -1988,7 +2172,7 @@ public sealed class SC2ObjectsShell
                 ColorHex = m.ColorHex,
                 Prop = m.Prop,
                 ExtraFields = new List<SC2LuaField>(m.ExtraFields),
-                AnchorToTerrain = m.AnchorToTerrain,
+                AnchorToTerrain = m.AnchorToTerrain, AnchorToModel = m.AnchorToModel, OnWaterSurface = m.OnWaterSurface,
                 HeightOffset = m.HeightOffset
             });
         foreach (var u in Data.ObjUnits.Where(x => _selUnits.Contains(x.Id) && !x.IsGroup))
@@ -2001,7 +2185,7 @@ public sealed class SC2ObjectsShell
                 Type = u.Type,
                 Position = u.Position,
                 OrientationEuler = u.OrientationEuler,
-                AnchorToTerrain = u.AnchorToTerrain,
+                AnchorToTerrain = u.AnchorToTerrain, AnchorToModel = u.AnchorToModel, OnWaterSurface = u.OnWaterSurface,
                 HeightOffset = u.HeightOffset
             });
 
@@ -2059,10 +2243,10 @@ public sealed class SC2ObjectsShell
                 Scale = src.Scale,
                 Flags = src.Flags,
                 RenderPriority = src.RenderPriority,
-                AnchorToTerrain = src.AnchorToTerrain,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
                 HeightOffset = src.HeightOffset
             };
-            if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, SampleHeight(pos.x, pos.z) + clone.HeightOffset, pos.z);
+            if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, AnchoredHeight(pos.x, pos.z, clone.AnchorToModel, pos.y, clone.HeightOffset, clone.OnWaterSurface), pos.z);
             Data.ObjProps.Add(clone);
             // Ctrl+C/Ctrl+V must also create the
             // symmetric counterpart when symmetry is on. Per-object, not once for the whole pasted
@@ -2093,10 +2277,10 @@ public sealed class SC2ObjectsShell
                 ColorHex = src.ColorHex,
                 Prop = src.Prop,
                 ExtraFields = new List<SC2LuaField>(src.ExtraFields),
-                AnchorToTerrain = src.AnchorToTerrain,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
                 HeightOffset = src.HeightOffset
             };
-            if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, SampleHeight(pos.x, pos.z) + clone.HeightOffset, pos.z);
+            if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, AnchoredHeight(pos.x, pos.z, clone.AnchorToModel, pos.y, clone.HeightOffset, clone.OnWaterSurface), pos.z);
             if (HasEquivalentPlacedMarker(clone)) continue;
             Data.ObjMarkers.Add(clone);
             if (isArmy) EnsureArmyMetadataLinked(clone);
@@ -2122,10 +2306,10 @@ public sealed class SC2ObjectsShell
                 Type = src.Type,
                 Position = pos,
                 OrientationEuler = src.OrientationEuler,
-                AnchorToTerrain = src.AnchorToTerrain,
+                AnchorToTerrain = src.AnchorToTerrain, AnchorToModel = src.AnchorToModel, OnWaterSurface = src.OnWaterSurface,
                 HeightOffset = src.HeightOffset
             };
-            if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, SampleUnitHeight(pos.x, pos.z, clone.Type) + clone.HeightOffset, pos.z);
+            if (clone.AnchorToTerrain) clone.Position = new Vector3(pos.x, AnchoredUnitHeight(pos.x, pos.z, clone.Type, clone.AnchorToModel, pos.y, clone.HeightOffset, clone.OnWaterSurface), pos.z);
             Data.ObjUnits.Add(clone);
             // See the clipboardProps loop above for why this is per-object.
             if (Data.Symmetry != SymmetryMode.None)
@@ -2632,9 +2816,6 @@ public sealed class SC2ObjectsShell
         node.Type = SC2EnvFieldGui.TextField("Blueprint", node.Type, "uniti_type");
         if (SC2EnvFieldGui.Button("Choose unit blueprint", GUILayout.Height(SC2UiScale.Pxf(20f)))) OpenUnitBrowser(node);
         node.OrientationEuler = SC2EnvFieldGui.Vector3Field("Orientation", node.OrientationEuler, "uniti_rot");
-        DrawAnchorBlock(ref node.AnchorToTerrain, ref node.HeightOffset, node.Position.y,
-            () => ReprojectUnit(node),
-            y => node.Position = new Vector3(node.Position.x, y, node.Position.z));
         node.Position = SnapXZ(SC2EnvFieldGui.Vector3Field("Position", node.Position, "uniti_pos"));
 
         if (node.Name != prevName || node.Type != prevType || node.ParentIndex != prevParentIndex ||
@@ -2763,7 +2944,9 @@ public sealed class SC2ObjectsShell
     private void DrawPropsBrowser(float w)
     {
         SC2EnvFieldGui.SectionLabel($"Props ({Data.ObjProps.Count})");
-        if (SC2EnvFieldGui.Button("Browse prop blueprints", GUILayout.Height(SC2UiScale.Pxf(24f)))) OpenPropBrowser(null);
+        if (SC2EnvFieldGui.Button("Browse prop blueprints", GUILayout.Height(SC2UiScale.Pxf(24f)))) OpenPropBrowserForChoice();
+        if (!string.IsNullOrEmpty(_chosenPropBlueprint))
+            SC2EnvFieldGui.WrapLabel($"To place: {ShortBlueprint(_chosenPropBlueprint)}", w);
         _searchProps = SC2EnvFieldGui.TextField("Search (blueprint)", _searchProps, "props_search");
         DrawSystemFilterRow(w, ref _filterProps, shadowFilters: true);
 
@@ -2835,6 +3018,7 @@ public sealed class SC2ObjectsShell
         if (SC2EnvFieldGui.Button(placingSingleProp ? "Stop placing" : "Place in viewport...", GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
             if (placingSingleProp) DisarmPlacement();
+            else if (!string.IsNullOrEmpty(_chosenPropBlueprint)) ArmChosenPropPlacement();
             else OpenPropBrowserForPlacement();
         }
 
@@ -3062,7 +3246,13 @@ public sealed class SC2ObjectsShell
             // on real terrain, submerged or not, and can never end up
             // floating at the water's own rendered surface height. See
             // PlacePropAt's own comment for the fix history behind this.
-            var groundHeight = _terrainShell.SampleLiveHeightGrid(x, z);
+            // The Height mode / Water switches of the tab apply to the brush too: Heightmap rests on that ground, the 3D model mode on the
+            // surface nearest the stroke's own height, Free keeps the stroke's height; above water lifts a prop out of the seabed.
+            var groundHeight = _placementHeightMode == SC2HeightMode.Heightmap ? _terrainShell.SampleLiveHeightGrid(x, z)
+                : _placementHeightMode == SC2HeightMode.Model ? AnchoredHeight(x, z, true, center.y, 0f)
+                : center.y;
+            groundHeight = RaiseToWater(groundHeight, _placementAboveWater);
+            SC2HeightModes.Apply(_placementHeightMode, out var brushAnchorToTerrain, out var brushAnchorToModel);
 
             var scale = Mathf.Max(0.01f, UnityEngine.Random.Range(_propsBrushScaleMin, _propsBrushScaleMax)); // never a zero-size prop
             var rotY = UnityEngine.Random.Range(-_propsBrushRotationJitter, _propsBrushRotationJitter);
@@ -3075,7 +3265,9 @@ public sealed class SC2ObjectsShell
                 Scale = Mathf.Max(0.05f, scale),
                 RenderPriority = Mathf.Clamp01(UnityEngine.Random.Range(_propsBrushPriorityMin, _propsBrushPriorityMax)),
                 CastsShadow = UnityEngine.Random.value * 100f < _propsBrushShadowChance,
-                AnchorToTerrain = true
+                AnchorToTerrain = brushAnchorToTerrain,
+                AnchorToModel = brushAnchorToModel,
+                OnWaterSurface = _placementAboveWater
             };
             Data.ObjProps.Add(prop);
             _propsBrushStrokeNewProps.Add(prop);
@@ -3163,7 +3355,7 @@ public sealed class SC2ObjectsShell
         // A rotate/scale gesture edits the props without a version bump, so it recomputes every call.
         if (_selectedVisibleCache == null || !ReferenceEquals(_selectedVisibleSource, visible)
             || hash != _selectedVisibleSelectionHash || _selProps.Count != _selectedVisibleSelectionCount
-            || _selectedVisibleDataVersion != _dataVersion || _propsGestureKind != PropsGestureKind.None)
+            || _selectedVisibleDataVersion != _dataVersion || _propsGestureKind != PropsGestureKind.None || _moveGestureActive)
         {
             _selectedVisibleCache = visible.Where(x => _selProps.Contains(x.Id)).ToList();
             _selectedVisibleSource = visible;
@@ -3309,9 +3501,6 @@ public sealed class SC2ObjectsShell
             MarkObjectsDirty();
         }
 
-        DrawAnchorBlock(ref p.AnchorToTerrain, ref p.HeightOffset, p.Position.y,
-            () => SetPropPosition(p, ReprojectedProp(p)),
-            y => SetPropPosition(p, new Vector3(p.Position.x, y, p.Position.z)));
         var editedPos = SC2EnvFieldGui.Vector3Field("Position", p.Position, "propi_pos");
         if (editedPos != p.Position) SetPropPosition(p, editedPos);
         if (p.BlueprintPath != prevBlueprint || p.Scale != prevScale || p.Position != prevPos ||
@@ -3330,8 +3519,6 @@ public sealed class SC2ObjectsShell
         if (SC2EnvFieldGui.Button("Focus camera", GUILayout.Height(SC2UiScale.Pxf(20f)))) RequestCameraFocus?.Invoke(p.Position);
         if (SC2EnvFieldGui.Button("Delete", GUILayout.Height(SC2UiScale.Pxf(20f)))) { PushUndo(); DeletePropsById(new HashSet<int> { p.Id }); }
     }
-
-    private Vector3 ReprojectedProp(SC2ObjProp p) => new(p.Position.x, SampleHeight(p.Position.x, p.Position.z) + p.HeightOffset, p.Position.z);
 
     /// <summary>"Select all objects of one kind" (Props) — replaces the
     /// current selection with every prop sharing the given blueprint path,
@@ -3428,12 +3615,42 @@ public sealed class SC2ObjectsShell
     {
         _assetBrowser.Open(SC2UnitPropBrowser.AssetKind.Prop, selection =>
         {
-            ArmPlacement(PlacementKind.Prop, "");
-            _placementPropBlueprint = selection.BlueprintPath; // must be set AFTER ArmPlacement - it resets these fields
-            _placementPropAsset = selection.Asset;
-            _lastActionSummary = $"Click in the viewport to place {ShortBlueprint(selection.BlueprintPath)} — press Esc to stop.";
+            _chosenPropBlueprint = selection.BlueprintPath;
+            _chosenPropAsset = selection.Asset;
+            ArmChosenPropPlacement();
+        });
+    }
+
+    // The blueprint "Browse prop blueprints" picked, which "Place in viewport..." places without asking again.
+    private string _chosenPropBlueprint = "";
+    private SC2GameAsset _chosenPropAsset;
+
+    /// <summary>"Browse prop blueprints": picks the blueprint to place, without placing anything. A placement that is already armed
+    /// switches to the new blueprint.</summary>
+    private void OpenPropBrowserForChoice()
+    {
+        _assetBrowser.Open(SC2UnitPropBrowser.AssetKind.Prop, selection =>
+        {
+            _chosenPropBlueprint = selection.BlueprintPath;
+            _chosenPropAsset = selection.Asset;
+            if (_placementKind == PlacementKind.Prop)
+            {
+                _placementPropBlueprint = _chosenPropBlueprint;
+                _placementPropAsset = _chosenPropAsset;
+            }
+            _lastActionSummary = $"Blueprint to place: {ShortBlueprint(selection.BlueprintPath)}"
+                + (selection.IsComplete ? "." : " (some referenced resources are unavailable).");
             RepaintHost?.Invoke();
         });
+    }
+
+    private void ArmChosenPropPlacement()
+    {
+        ArmPlacement(PlacementKind.Prop, "");
+        _placementPropBlueprint = _chosenPropBlueprint; // must be set AFTER ArmPlacement - it resets these fields
+        _placementPropAsset = _chosenPropAsset;
+        _lastActionSummary = $"Click in the viewport to place {ShortBlueprint(_chosenPropBlueprint)} — press Esc to stop.";
+        RepaintHost?.Invoke();
     }
 
     /// <summary>Batch "Replace selected" — picks one blueprint and swaps it
@@ -4178,9 +4395,6 @@ public sealed class SC2ObjectsShell
 
         var prevAnchor = m.AnchorToTerrain;
         var prevOffset = m.HeightOffset;
-        DrawAnchorBlock(ref m.AnchorToTerrain, ref m.HeightOffset, m.Position.y,
-            () => { SetMarkerPosition(m, ReprojectedMarker(m)); MarkObjectsDirty(); },
-            y => { SetMarkerPosition(m, new Vector3(m.Position.x, y, m.Position.z)); MarkObjectsDirty(); });
         if (m.AnchorToTerrain != prevAnchor || m.HeightOffset != prevOffset) MarkObjectsDirty();
         var editedMarkerPos = SC2EnvFieldGui.Vector3Field("Position", m.Position, "mki_pos");
         if (editedMarkerPos != m.Position) { SetMarkerPosition(m, editedMarkerPos); MarkObjectsDirty(); }
@@ -4265,7 +4479,6 @@ public sealed class SC2ObjectsShell
         if (SC2EnvFieldGui.Button("Delete", GUILayout.Height(SC2UiScale.Pxf(20f)))) { PushUndo(); DeleteMarkersById(new HashSet<int> { m.Id }); }
     }
 
-    private Vector3 ReprojectedMarker(SC2ObjMarker m) => new(m.Position.x, SampleHeight(m.Position.x, m.Position.z) + m.HeightOffset, m.Position.z);
 
     private bool TrySetMarkerPlacementKind(SC2ObjMarker marker, string type, string prop)
     {
@@ -5312,6 +5525,12 @@ public sealed class SC2ObjectsShell
     // different click-and-drag multi-instance gesture — this PlacementKind
     // path is for a single, individually-chosen prop instead).
     private enum PlacementKind { None, Marker, Unit, Army, Prop, MarkerPreset }
+    // How objects placed from now on get their Y: "Heightmap" and "3D model" anchor them (the clicked surface decides the layer of a
+    // model), "Free" keeps the clicked height as an absolute Y. Session-only, like the other placement settings.
+    private SC2HeightMode _placementHeightMode = SC2HeightMode.Heightmap;
+    // Whether new objects over water rest on the water surface (above water) or on the seabed (under water, how placement always worked).
+    private bool _placementAboveWater;
+
     private PlacementKind _placementKind = PlacementKind.None;
     private string _placementSubtype = "";
     /// <summary>Set alongside PlacementKind.MarkerPreset (after ArmPlacement,
@@ -5402,8 +5621,7 @@ public sealed class SC2ObjectsShell
         if (!viewportRect.Contains(mousePosition)) return false;
 
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
-        if (!TryRaycastImportedTerrain(ray.origin, ray.direction, out var hit) &&
-            !SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+        if (!TryRaycastScene(ray, out var hit))
         {
             _lastActionSummary = "Placement: nothing under the cursor to place onto.";
             e.Use();
@@ -5459,8 +5677,7 @@ public sealed class SC2ObjectsShell
     {
         if (!_propsBrushActive) return;
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
-        if (!TryRaycastImportedTerrain(ray.origin, ray.direction, out var hit) &&
-            !SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+        if (!TryRaycastScene(ray, out var hit))
             return;
 
         var erasingPreview = EffectivePropsErasing();
@@ -5500,8 +5717,7 @@ public sealed class SC2ObjectsShell
     {
         if (!_propsBrushActive) return false;
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
-        var hasHit = TryRaycastImportedTerrain(ray.origin, ray.direction, out var hit) ||
-            SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit);
+        var hasHit = TryRaycastScene(ray, out var hit);
         return _propsBrushRadiusGesture.HandleInput(camera, viewportRect, mousePosition, hasHit, hit, allowInput, ref _propsBrushRadius, 1f, 60f,
             sampleHeight: _terrainShell != null ? _terrainShell.SampleLiveHeightGrid : null);
     }
@@ -5531,8 +5747,7 @@ public sealed class SC2ObjectsShell
     {
         if (_placementKind == PlacementKind.None) { SC2MarkerScenePreview.ClearGhosts(); SC2GameAssetScenePreview.ClearPropGhosts(); return; }
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
-        if (!TryRaycastImportedTerrain(ray.origin, ray.direction, out var hit) &&
-            !SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+        if (!TryRaycastScene(ray, out var hit))
         {
             SC2MarkerScenePreview.ClearGhosts();
             SC2GameAssetScenePreview.ClearPropGhosts();
@@ -5880,8 +6095,7 @@ public sealed class SC2ObjectsShell
     private void PaintPropsBrushTick(Camera camera, Rect viewportRect, Vector2 mousePosition)
     {
         var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
-        if (!TryRaycastImportedTerrain(ray.origin, ray.direction, out var hit) &&
-            !SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+        if (!TryRaycastScene(ray, out var hit))
             return;
 
         if (EffectivePropsErasing()) ErasePropsAt(hit);
@@ -5921,7 +6135,10 @@ public sealed class SC2ObjectsShell
         }
 
         position = SnapXZ(position);
-        var groundHeight = _terrainShell.SampleLiveHeightGrid(position.x, position.z);
+        // Heightmap mode rests on the ground height; the 3D model and Free modes keep the height of the clicked surface.
+        var groundHeight = _placementHeightMode == SC2HeightMode.Heightmap ? _terrainShell.SampleLiveHeightGrid(position.x, position.z) : position.y;
+        groundHeight = RaiseToWater(groundHeight, _placementAboveWater);
+        SC2HeightModes.Apply(_placementHeightMode, out var anchorToTerrain, out var anchorToModel);
         var prop = new SC2ObjProp
         {
             Id = Data.AllocateObjectId(),
@@ -5929,14 +6146,17 @@ public sealed class SC2ObjectsShell
             Position = new Vector3(position.x, groundHeight, position.z),
             Rotation = Quaternion.Euler(0f, _placementRotationY, 0f),
             Scale = 1f,
-            AnchorToTerrain = true
+            AnchorToTerrain = anchorToTerrain,
+            AnchorToModel = anchorToModel,
+            OnWaterSurface = _placementAboveWater
         };
         Data.ObjProps.Add(prop);
         if (_placementPropAsset != null)
             SC2GameAssetScenePreview.TryShowProp(prop.Id, _placementPropAsset, _assetBrowser.GameDataRoot, prop.Position, prop.Rotation, prop.Scale, out _);
         if (Data.Symmetry != SymmetryMode.None)
             LinkPropsWithSymmetry(new List<SC2ObjProp> { prop });
-        _lastActionSummary = $"Placed prop '{ShortBlueprint(prop.BlueprintPath)}'.";
+        _lastActionSummary = $"Placed prop '{ShortBlueprint(prop.BlueprintPath)}' at Y = {prop.Position.y:0.##}"
+            + (_placementAboveWater ? $" (above water; water surface {WaterFloor(true):0.##})." : " (under water).");
         MarkObjectsDirty();
     }
 
@@ -5994,11 +6214,14 @@ public sealed class SC2ObjectsShell
             ? Data.ObjUnits.FindIndex(u => u.Id == _placementTargetGroupId && u.IsGroup && u.ArmyName == armyName)
             : -1;
         parentIdx = targetIdx >= 0 ? targetIdx : ResolveDefaultUnitGroup(armyName);
+        SC2HeightModes.Apply(_placementHeightMode, out var unitAnchorToTerrain, out var unitAnchorToModel);
         var unit = new SC2ObjUnitNode
         {
             Id = Data.AllocateObjectId(), ArmyName = armyName, Name = MakeUniqueUnitName("Unit_" + (Data.ObjUnits.Count + 1)),
-            ParentIndex = parentIdx, Type = type, Position = position, OrientationEuler = new Vector3(0f, _placementRotationY, 0f)
+            ParentIndex = parentIdx, Type = type, Position = position, OrientationEuler = new Vector3(0f, _placementRotationY, 0f),
+            AnchorToTerrain = unitAnchorToTerrain, AnchorToModel = unitAnchorToModel, OnWaterSurface = _placementAboveWater
         };
+        unit.Position = new Vector3(unit.Position.x, RaiseToWater(unit.Position.y, _placementAboveWater), unit.Position.z);
         Data.ObjUnits.Add(unit);
         _lastActiveUnitId = unit.Id;
         if (Data.Symmetry != SymmetryMode.None)
@@ -6023,7 +6246,9 @@ public sealed class SC2ObjectsShell
             return;
         }
         var name = NextArmyName();
-        var marker = new SC2ObjMarker { Id = Data.AllocateObjectId(), Name = name, Type = "Blank Marker", Position = position, OrientationEuler = new Vector3(0f, _placementRotationY, 0f) };
+        SC2HeightModes.Apply(_placementHeightMode, out var armyAnchorToTerrain, out var armyAnchorToModel);
+        var marker = new SC2ObjMarker { Id = Data.AllocateObjectId(), Name = name, Type = "Blank Marker", Position = position, OrientationEuler = new Vector3(0f, _placementRotationY, 0f), AnchorToTerrain = armyAnchorToTerrain, AnchorToModel = armyAnchorToModel, OnWaterSurface = _placementAboveWater };
+        marker.Position = new Vector3(marker.Position.x, RaiseToWater(marker.Position.y, _placementAboveWater), marker.Position.z);
         Data.ObjMarkers.Add(marker);
         EnsureArmyMetadataLinked(marker);
 
@@ -6123,7 +6348,7 @@ public sealed class SC2ObjectsShell
         {
             _previewSyncSafetyNetTicks++;
             var dueForSafetyNet = _previewSyncSafetyNetTicks >= PreviewSyncSafetyNetInterval;
-            if (dueForSafetyNet || _dragActive || _propsGestureKind != PropsGestureKind.None || _dataVersion != _lastSyncedDataVersion)
+            if (dueForSafetyNet || _dragActive || _moveGestureActive || _propsGestureKind != PropsGestureKind.None || _dataVersion != _lastSyncedDataVersion)
             {
                 using var syncScope = SC2FramePerf.Measure("objects.vp.sceneSync");
                 SC2GameAssetScenePreview.SyncTransforms(Data, _hiddenUnitIds, _hiddenPropIds);
@@ -6221,6 +6446,21 @@ public sealed class SC2ObjectsShell
         // Props selection so a stray press with nothing selected does
         // nothing. Takes over the frame entirely while active, same as the
         // brush-radius-resize gesture below.
+        if (_moveGestureActive)
+        {
+            TickMoveGesture(camera, viewportRect, mousePosition);
+            return;
+        }
+        if (_propsGestureKind == PropsGestureKind.None && allowInput && !_dragActive && !_boxSelectActive &&
+            _selProps.Count + _selMarkers.Count + _selUnits.Count > 0 &&
+            Event.current != null && Event.current.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.MoveGesture", Event.current) &&
+            TryBeginMoveGesture(camera, viewportRect, mousePosition))
+        {
+            Event.current.Use();
+            RepaintHost?.Invoke();
+            return;
+        }
+
         if (_propsGestureKind == PropsGestureKind.None && allowInput && !_dragActive && !_boxSelectActive && _selProps.Count + _selMarkers.Count > 0 &&
             Event.current != null && Event.current.type == EventType.KeyDown &&
             (SC2Hotkeys.Matches("Objects.RotateGesture", Event.current) || SC2Hotkeys.Matches("Objects.ScaleGesture", Event.current)) &&
@@ -6548,13 +6788,12 @@ public sealed class SC2ObjectsShell
         }
         if (canPick && e != null && e.type == EventType.KeyDown && SC2Hotkeys.Matches("Objects.Paste", e))
         {
-            // The copies land at the cursor: the ground point under the mouse (imported terrain first, as placement does).
+            // The copies land at the cursor: the point of the scene under the mouse (the nearer of the imported model and the runtime terrain, as placement does).
             Vector3? pasteAt = null;
             if (viewportRect.Contains(mousePosition))
             {
                 var pasteRay = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
-                if (TryRaycastImportedTerrain(pasteRay.origin, pasteRay.direction, out var pasteHit) ||
-                    SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, pasteRay, out pasteHit))
+                if (TryRaycastScene(pasteRay, out var pasteHit))
                     pasteAt = pasteHit;
             }
             PasteClipboard(pasteAt);
@@ -6789,6 +7028,7 @@ public sealed class SC2ObjectsShell
                 foreach (var id in _selProps) { var p = LookupProp(id); if (p != null) _dragItems.Add((ViewportObjectKind.Prop, id, p.Position)); }
                 foreach (var id in _selMarkers) { var m = LookupMarker(id); if (m != null) _dragItems.Add((ViewportObjectKind.Marker, id, m.Position)); }
                 foreach (var id in _selUnits) { var u = LookupUnit(id); if (u != null) _dragItems.Add((ViewportObjectKind.Unit, id, u.Position)); }
+                AdoptAboveWaterForSelection();
             }
             finally { EndBulkLookup(); }
             _dragActive = _dragItems.Count > 0;
@@ -6812,21 +7052,24 @@ public sealed class SC2ObjectsShell
                         {
                             var p = LookupProp(id);
                             if (p == null) continue;
-                            if (p.AnchorToTerrain) newPos.y = SampleHeight(newPos.x, newPos.z) + p.HeightOffset;
+                            if (p.AnchorToTerrain) newPos.y = AnchoredHeight(newPos.x, newPos.z, p.AnchorToModel, newPos.y, p.HeightOffset, p.OnWaterSurface);
+                            else newPos.y = RaiseToWater(newPos.y, p.OnWaterSurface);
                             SetPropPosition(p, newPos);
                         }
                         else if (kind == ViewportObjectKind.Marker)
                         {
                             var m = LookupMarker(id);
                             if (m == null) continue;
-                            if (m.AnchorToTerrain) newPos.y = SampleHeight(newPos.x, newPos.z) + m.HeightOffset;
+                            if (m.AnchorToTerrain) newPos.y = AnchoredHeight(newPos.x, newPos.z, m.AnchorToModel, newPos.y, m.HeightOffset, m.OnWaterSurface);
+                            else newPos.y = RaiseToWater(newPos.y, m.OnWaterSurface);
                             SetMarkerPosition(m, newPos);
                         }
                         else if (kind == ViewportObjectKind.Unit)
                         {
                             var u = LookupUnit(id);
                             if (u == null) continue;
-                            if (u.AnchorToTerrain) newPos.y = SampleUnitHeight(newPos.x, newPos.z, u.Type) + u.HeightOffset;
+                            if (u.AnchorToTerrain) newPos.y = AnchoredUnitHeight(newPos.x, newPos.z, u.Type, u.AnchorToModel, newPos.y, u.HeightOffset, u.OnWaterSurface);
+                            else newPos.y = RaiseToWater(newPos.y, u.OnWaterSurface);
                             SetUnitPosition(u, newPos);
                         }
                     }
@@ -6960,9 +7203,7 @@ public sealed class SC2ObjectsShell
         // takes over where an imported mesh actually exists under the
         // cursor, otherwise falls through to the live procedural terrain
         // exactly as before.
-        if (TryRaycastImportedTerrain(ray.origin, ray.direction, out hit))
-            return true;
-        if (SC2TerrainShell.RaycastTerrainHeight(_terrainShell.Runtime, ray, out hit))
+        if (TryRaycastScene(ray, out hit))
             return true;
 
         var planeY = _dragActive || _dragItems.Count > 0 ? _dragStartWorld.y : 0f;
@@ -7073,6 +7314,255 @@ public sealed class SC2ObjectsShell
     /// selected prop's own position, or the selection's average position
     /// for 2+ (unlike TryGetSelectionCentroid above, 1 is a valid, common
     /// case here — most rotate/scale gestures act on exactly one prop).</summary>
+    // ── G move gesture ────────────────────────────────────────────────
+    // Blender's G for the selected props, markers and units: the objects follow the mouse over the ground (an anchored object keeps
+    // sitting on the heightmap / the 3D model), X / Y / Z limits the move to that world axis (again: back to free), a typed number
+    // sets the distance along the axis, click / Enter confirms and Esc cancels. Y moves vertically: an object anchored to the terrain
+    // or the model changes its Height offset, a free object its absolute Y.
+    private bool _moveGestureActive;
+    private SC2MoveAxis _moveAxis;
+    private string _moveTyped = "";
+    private Vector3 _movePivot;
+    private Vector3 _moveStartWorld;
+    private Ray _moveStartRay;
+    private float _moveStartParam;
+    private float _moveDistance;
+    private readonly List<(ViewportObjectKind kind, int id, Vector3 position, float offset)> _moveItems = new();
+    // Symmetry siblings that are not selected: where they stood (Y) and their height offset, so a vertical move reaches them too.
+    private readonly Dictionary<int, (float y, float offset)> _moveSiblingOriginals = new();
+
+    private bool TryBeginMoveGesture(Camera camera, Rect viewportRect, Vector2 mousePosition)
+    {
+        _moveItems.Clear();
+        _moveSiblingOriginals.Clear();
+        BeginBulkLookup();
+        try
+        {
+            foreach (var id in _selProps) { var p = LookupProp(id); if (p != null) _moveItems.Add((ViewportObjectKind.Prop, id, p.Position, p.HeightOffset)); }
+            foreach (var id in _selMarkers) { var m = LookupMarker(id); if (m != null) _moveItems.Add((ViewportObjectKind.Marker, id, m.Position, m.HeightOffset)); }
+            foreach (var id in _selUnits) { var u = LookupUnit(id); if (u != null && !u.IsGroup) _moveItems.Add((ViewportObjectKind.Unit, id, u.Position, u.HeightOffset)); }
+            AdoptAboveWaterForSelection();
+            var selected = new HashSet<int>(_moveItems.Select(x => x.id));
+            foreach (var item in _moveItems)
+            {
+                var group = FindSymmetryGroup(item.id);
+                if (group == null) continue;
+                foreach (var member in group.Members)
+                {
+                    if (selected.Contains(member.ObjectId) || _moveSiblingOriginals.ContainsKey(member.ObjectId)) continue;
+                    var p = LookupProp(member.ObjectId);
+                    if (p != null) { _moveSiblingOriginals[p.Id] = (p.Position.y, p.HeightOffset); continue; }
+                    var m = LookupMarker(member.ObjectId);
+                    if (m != null) { _moveSiblingOriginals[m.Id] = (m.Position.y, m.HeightOffset); continue; }
+                    var u = LookupUnit(member.ObjectId);
+                    if (u != null) _moveSiblingOriginals[u.Id] = (u.Position.y, u.HeightOffset);
+                }
+            }
+        }
+        finally { EndBulkLookup(); }
+        if (_moveItems.Count == 0) return false;
+
+        var sum = Vector3.zero;
+        foreach (var item in _moveItems) sum += item.position;
+        _movePivot = sum / _moveItems.Count;
+        _moveStartRay = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
+        if (!TryGetDragPoint(camera, viewportRect, mousePosition, out _moveStartWorld)) _moveStartWorld = _movePivot;
+        _moveAxis = SC2MoveAxis.None;
+        _moveTyped = "";
+        _moveDistance = 0f;
+        _moveStartParam = 0f;
+        // Without a real map session the legacy snapshot is the undo step; with one, the confirmed move is committed as commands
+        // (CommitDragPositions), so a snapshot here would record it twice (same reasoning as the drag).
+        if (Session?.Document == null) PushUndo();
+        _moveGestureActive = true;
+        _lastActionSummary = $"Move {_moveItems.Count} object(s): move the mouse, X / Y / Z limits it to an axis, type a distance, click/Enter to confirm, Esc to cancel.";
+        return true;
+    }
+
+    private void TickMoveGesture(Camera camera, Rect viewportRect, Vector2 mousePosition)
+    {
+        var e = Event.current;
+        if (e != null && ((e.type == EventType.MouseDown && e.button == 0) ||
+                          (e.type == EventType.KeyDown && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))))
+        {
+            var count = _moveItems.Count;
+            EndMoveGesture();
+            CommitDragPositions();
+            MarkObjectsDirty();
+            _lastActionSummary = $"Moved {count} object(s).";
+            e.Use();
+            RepaintHost?.Invoke();
+            return;
+        }
+        if (e != null && e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
+        {
+            RestoreMoveGesture();
+            EndMoveGesture();
+            _lastActionSummary = "Cancelled.";
+            e.Use();
+            RepaintHost?.Invoke();
+            return;
+        }
+
+        if (e != null && e.type == EventType.KeyDown)
+        {
+            var pressed = e.keyCode == KeyCode.X ? SC2MoveAxis.X : e.keyCode == KeyCode.Y ? SC2MoveAxis.Y : e.keyCode == KeyCode.Z ? SC2MoveAxis.Z : SC2MoveAxis.None;
+            if (pressed != SC2MoveAxis.None && !e.control && !e.alt && !e.command)
+            {
+                _moveAxis = SC2AxisMove.Press(_moveAxis, pressed);
+                _moveTyped = "";
+                // The mouse's travel since the gesture began, projected on the axis, is the distance (zero when the view runs along it).
+                _moveStartParam = 0f;
+                if (_moveAxis != SC2MoveAxis.None &&
+                    SC2AxisMove.TryParam(_movePivot, SC2AxisMove.Direction(_moveAxis), _moveStartRay.origin, _moveStartRay.direction, out var startParam))
+                    _moveStartParam = startParam;
+                e.Use();
+            }
+            else if (_moveAxis != SC2MoveAxis.None && e.keyCode == KeyCode.Backspace)
+            {
+                _moveTyped = SC2AxisRotation.DropLastTyped(_moveTyped);
+                e.Use();
+            }
+            else if (_moveAxis != SC2MoveAxis.None && e.character != ' ')
+            {
+                var next = SC2AxisRotation.AppendTyped(_moveTyped, e.character);
+                if (next != _moveTyped) { _moveTyped = next; e.Use(); }
+            }
+        }
+
+        Vector3 delta;
+        var typed = SC2AxisRotation.TryParseTyped(_moveTyped, out var typedDistance);
+        if (_moveAxis == SC2MoveAxis.None)
+        {
+            if (!TryGetDragPoint(camera, viewportRect, mousePosition, out var current)) return;
+            delta = current - _moveStartWorld;
+        }
+        else
+        {
+            var direction = SC2AxisMove.Direction(_moveAxis);
+            if (typed) _moveDistance = typedDistance;
+            else
+            {
+                var ray = SC2TerrainShell.GameGuiPointToRay(camera, viewportRect, mousePosition);
+                if (SC2AxisMove.TryParam(_movePivot, direction, ray.origin, ray.direction, out var param)) _moveDistance = param - _moveStartParam;
+            }
+            delta = direction * _moveDistance;
+        }
+
+        BeginBulkLookup();
+        try { ApplyMoveGesture(delta); }
+        finally { EndBulkLookup(); }
+        var axisText = SC2AxisMove.Describe(_moveAxis);
+        _lastActionSummary = _moveAxis == SC2MoveAxis.None
+            ? $"Move {_moveItems.Count} object(s) — X / Y / Z limits it to an axis, type a distance, click/Enter to confirm, Esc to cancel."
+            : _moveAxis == SC2MoveAxis.Y
+                ? $"Move {axisText}: {(typed ? _moveTyped : _moveDistance.ToString("0.##"))} — changes the Height offset (the absolute Y of a free object); type a distance, click/Enter to confirm, Esc to cancel."
+                : $"Move {axisText}: {(typed ? _moveTyped : _moveDistance.ToString("0.##"))} — type a distance, click/Enter to confirm, Esc to cancel.";
+        RepaintHost?.Invoke();
+    }
+
+    /// <summary>Puts every moved object at its start position plus <paramref name="delta"/>. Without an axis, an anchored object sits on
+    /// the heightmap / model at its new X / Z, as with a drag. A move along Y changes the height offset of an anchored object (its Y
+    /// then is the surface plus the offset) and the absolute Y of a free one.</summary>
+    private void ApplyMoveGesture(Vector3 delta)
+    {
+        var vertical = _moveAxis == SC2MoveAxis.Y;
+        foreach (var (kind, id, originalPos, originalOffset) in _moveItems)
+        {
+            var newPos = originalPos + delta;
+            if (kind == ViewportObjectKind.Prop)
+            {
+                var p = LookupProp(id);
+                if (p == null) continue;
+                if (vertical) { if (p.AnchorToTerrain) p.HeightOffset = originalOffset + delta.y; }
+                else if (p.AnchorToTerrain) newPos.y = AnchoredHeight(newPos.x, newPos.z, p.AnchorToModel, newPos.y, p.HeightOffset, p.OnWaterSurface);
+                else newPos.y = RaiseToWater(newPos.y, p.OnWaterSurface);
+                SetPropPosition(p, newPos);
+            }
+            else if (kind == ViewportObjectKind.Marker)
+            {
+                var m = LookupMarker(id);
+                if (m == null) continue;
+                if (vertical) { if (m.AnchorToTerrain) m.HeightOffset = originalOffset + delta.y; }
+                else if (m.AnchorToTerrain) newPos.y = AnchoredHeight(newPos.x, newPos.z, m.AnchorToModel, newPos.y, m.HeightOffset, m.OnWaterSurface);
+                else newPos.y = RaiseToWater(newPos.y, m.OnWaterSurface);
+                SetMarkerPosition(m, newPos);
+            }
+            else if (kind == ViewportObjectKind.Unit)
+            {
+                var u = LookupUnit(id);
+                if (u == null) continue;
+                if (vertical) { if (u.AnchorToTerrain) u.HeightOffset = originalOffset + delta.y; }
+                else if (u.AnchorToTerrain) newPos.y = AnchoredUnitHeight(newPos.x, newPos.z, u.Type, u.AnchorToModel, newPos.y, u.HeightOffset, u.OnWaterSurface);
+                else newPos.y = RaiseToWater(newPos.y, u.OnWaterSurface);
+                SetUnitPosition(u, newPos);
+            }
+        }
+        if (vertical) ApplyVerticalToSiblings(delta.y);
+        BumpDataVersion();
+    }
+
+    /// <summary>The symmetry siblings of the moved objects take the same vertical move (the position propagation only mirrors X / Z).</summary>
+    private void ApplyVerticalToSiblings(float deltaY)
+    {
+        foreach (var (id, original) in _moveSiblingOriginals)
+        {
+            var prop = LookupProp(id);
+            if (prop != null)
+            {
+                if (prop.AnchorToTerrain) prop.HeightOffset = original.offset + deltaY;
+                prop.Position = new Vector3(prop.Position.x, original.y + deltaY, prop.Position.z);
+                continue;
+            }
+            var marker = LookupMarker(id);
+            if (marker != null)
+            {
+                if (marker.AnchorToTerrain) marker.HeightOffset = original.offset + deltaY;
+                marker.Position = new Vector3(marker.Position.x, original.y + deltaY, marker.Position.z);
+                continue;
+            }
+            var unit = LookupUnit(id);
+            if (unit == null) continue;
+            if (unit.AnchorToTerrain) unit.HeightOffset = original.offset + deltaY;
+            unit.Position = new Vector3(unit.Position.x, original.y + deltaY, unit.Position.z);
+        }
+    }
+
+    private void RestoreMoveGesture()
+    {
+        BeginBulkLookup();
+        try
+        {
+            foreach (var (kind, id, originalPos, originalOffset) in _moveItems)
+            {
+                if (kind == ViewportObjectKind.Prop) { var p = LookupProp(id); if (p != null) { p.HeightOffset = originalOffset; SetPropPosition(p, originalPos); } }
+                else if (kind == ViewportObjectKind.Marker) { var m = LookupMarker(id); if (m != null) { m.HeightOffset = originalOffset; SetMarkerPosition(m, originalPos); } }
+                else if (kind == ViewportObjectKind.Unit) { var u = LookupUnit(id); if (u != null) { u.HeightOffset = originalOffset; SetUnitPosition(u, originalPos); } }
+            }
+            // The moved objects' symmetry siblings were mirrored from them; their own heights come back from what was recorded.
+            foreach (var (id, original) in _moveSiblingOriginals)
+            {
+                var prop = LookupProp(id);
+                if (prop != null) { prop.HeightOffset = original.offset; prop.Position = new Vector3(prop.Position.x, original.y, prop.Position.z); continue; }
+                var marker = LookupMarker(id);
+                if (marker != null) { marker.HeightOffset = original.offset; marker.Position = new Vector3(marker.Position.x, original.y, marker.Position.z); continue; }
+                var unit = LookupUnit(id);
+                if (unit != null) { unit.HeightOffset = original.offset; unit.Position = new Vector3(unit.Position.x, original.y, unit.Position.z); }
+            }
+        }
+        finally { EndBulkLookup(); }
+        BumpDataVersion();
+    }
+
+    private void EndMoveGesture()
+    {
+        _moveGestureActive = false;
+        _moveItems.Clear();
+        _moveSiblingOriginals.Clear();
+        _moveAxis = SC2MoveAxis.None;
+        _moveTyped = "";
+    }
+
     private bool TryComputeGesturePivot(out Vector3 pivot)
     {
         var sum = Vector3.zero;
