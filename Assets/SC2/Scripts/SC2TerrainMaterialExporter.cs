@@ -38,15 +38,19 @@ public static class SC2TerrainMaterialExporter
     /// <summary>Override-dictionary key (after "materialIndex:") of the Environment texture, which has no shader property.</summary>
     public const string EnvironmentKey = "_Environment";
 
-    public static void ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null, System.Func<string, Texture2D, bool, string> resolveRawResourcePath = null, System.Collections.Generic.Dictionary<string, bool> texturePathForceExport = null)
+    /// <summary>Writes the live materials' texture paths, shader setup and state back into <paramref name="materials"/>. Returns how
+    /// many (non-water) materials were skipped because the live material is missing or is not an SC2/Terrain material - those keep
+    /// what the file had.</summary>
+    public static int ApplyFromScene(System.Collections.Generic.List<TerrainMaterial> materials, Material[] sharedMaterials, float[] authoredEnableRnm = null, System.Collections.Generic.Dictionary<string, string> texturePathOverrides = null, System.Func<string, Texture2D, bool, string> resolveRawResourcePath = null, System.Collections.Generic.Dictionary<string, bool> texturePathForceExport = null)
     {
+        var skipped = 0;
         for (var i = 0; i < materials.Count && i < sharedMaterials.Length; i++)
         {
             var mat = materials[i];
             if (SC2HfieldProjectionService.IsWaterMaterial(mat)) continue;
 
             var unityMat = sharedMaterials[i];
-            if (unityMat == null || unityMat.shader == null || unityMat.shader.name != "SC2/Terrain") continue;
+            if (unityMat == null || unityMat.shader == null || unityMat.shader.name != "SC2/Terrain") { skipped++; continue; }
 
             // A "file:"/"archive:" override (the Texture Browser's own
             // internal marker syntax for a Custom/archive-sourced pick — see
@@ -132,6 +136,7 @@ public static class SC2TerrainMaterialExporter
             var authoredRnm = authoredEnableRnm != null && i < authoredEnableRnm.Length ? authoredEnableRnm[i] : (float?)null;
             SyncShaderSetupAndStateFromScene(mat, unityMat, authoredRnm);
         }
+        return skipped;
     }
 
     /// <summary>_EnableXxx property name -&gt; real ShaderSetup flag name,

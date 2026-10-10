@@ -2034,11 +2034,20 @@ public static class SC2TerrainExporter
         // source.Materials' own original ShaderSetup/State at import time,
         // so rebuilding from them is a faithful round-trip, not a
         // destructive overwrite.
-        if (t != null)
+        //
+        // The AUTHORED materials (imported.Materials), never the renderer's current ones: the Mats / Pairs / Slope / Height preview
+        // modes (and the forced Hfield / RNM overlays) swap the renderer over to synthetic debug materials, which are not
+        // SC2/Terrain, so reading renderer.sharedMaterials here silently skipped every material of the object - its edited texture
+        // paths and copied-in textures simply were not exported - whenever the view happened to be on one of those modes at export
+        // time. The renderer is only the fallback for a caller that supplies no authored list.
+        var authoredMaterials = imported.Materials != null && imported.Materials.Length > 0
+            ? imported.Materials
+            : (t != null ? t.GetComponent<MeshRenderer>()?.sharedMaterials : null);
+        if (authoredMaterials != null)
         {
-            var renderer = t.GetComponent<MeshRenderer>();
-            if (renderer != null)
-                SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, renderer.sharedMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath, imported.TexturePathForceExport);
+            var skipped = SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, authoredMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath, imported.TexturePathForceExport);
+            if (skipped > 0)
+                SC2Log.Log($"[SC2Exporter] WARNING: imported terrain '{imported.Name}': {skipped} material(s) are not SC2/Terrain materials, so their texture paths and shader setup were exported exactly as imported.");
         }
 
         foreach (var mat in source.Materials)
