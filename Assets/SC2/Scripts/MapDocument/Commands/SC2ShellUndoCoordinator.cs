@@ -40,6 +40,10 @@ namespace SC2.MapEditor.Document
             public Marker(ISC2UndoChannel channel, long timestamp) { Channel = channel; Timestamp = timestamp; }
         }
 
+        /// <summary>How many undo steps every shell and every underlying undo system keeps. One number for all of them, so a
+        /// channel never drops its oldest step before (or after) the marker that points at it.</summary>
+        public const int MaxSteps = 100;
+
         private readonly Stack<Marker> _undoMarkers = new();
         private readonly Stack<Marker> _redoMarkers = new();
 
@@ -88,7 +92,7 @@ namespace SC2.MapEditor.Document
         /// SC2TerrainUndoStack.RecordBeforeChange or SC2CommandHistory.
         /// Execute) — mirrors every existing shell's own "record, then push
         /// a marker" call order.</summary>
-        public void Record(ISC2UndoChannel channel, int maxMarkers = 0)
+        public void Record(ISC2UndoChannel channel, int maxMarkers = MaxSteps)
         {
             _undoMarkers.Push(new Marker(channel, System.Diagnostics.Stopwatch.GetTimestamp()));
             _redoMarkers.Clear();

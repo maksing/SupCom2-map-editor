@@ -23,7 +23,7 @@ using System.Collections.Generic;
 /// 512x512 quads), so Heights (~1.0MB, 513x513 floats) and
 /// TrianglePairIndex (~1.0MB, 524_288 shorts) snapshots are still small
 /// enough that plain full copies are fine — no diffing needed, and the full
-/// 40-step MaxDepth costs well under 100MB.
+/// MaxDepth-step history stays modest (a few hundred MB at the 100-step limit).
 ///
 /// Scope limitation (documented, not accidental): RNM blend-mask bytes are
 /// intentionally NOT captured. A single pair's RNM mask can be a 2048x2048
@@ -35,7 +35,7 @@ using System.Collections.Generic;
 /// </summary>
 public sealed class SC2TerrainUndoStack
 {
-    private const int MaxDepth = 40;
+    private const int MaxDepth = SC2.MapEditor.Document.SC2ShellUndoCoordinator.MaxSteps;
 
     private sealed class Snapshot
     {

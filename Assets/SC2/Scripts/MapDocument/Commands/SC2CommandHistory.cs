@@ -25,6 +25,13 @@ namespace SC2.MapEditor.Document
 
             var changeSet = command.Do(document);
             _undoStack.Push(command);
+            if (_undoStack.Count > SC2ShellUndoCoordinator.MaxSteps)
+            {
+                // Stack<T> has no way to drop its bottom entry: rebuild without the oldest one (ToArray is newest first).
+                var newestFirst = _undoStack.ToArray();
+                _undoStack.Clear();
+                for (var i = SC2ShellUndoCoordinator.MaxSteps - 1; i >= 0; i--) _undoStack.Push(newestFirst[i]);
+            }
             _redoStack.Clear();
             document.RaiseChanged(changeSet);
         }

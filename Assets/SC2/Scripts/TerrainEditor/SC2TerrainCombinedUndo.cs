@@ -82,6 +82,13 @@ public sealed class SC2TerrainCombinedUndo
             return;
 
         _rnmUndoData.Push(CaptureRnmBlend());
+        if (_rnmUndoData.Count > SC2ShellUndoCoordinator.MaxSteps)
+        {
+            // Every step keeps a copy of the mask state, so the oldest one has to go when the step limit is passed.
+            var newestFirst = _rnmUndoData.ToArray();
+            _rnmUndoData.Clear();
+            for (var i = SC2ShellUndoCoordinator.MaxSteps - 1; i >= 0; i--) _rnmUndoData.Push(newestFirst[i]);
+        }
         _rnmRedoData.Clear();
         _coordinator.Record(new SC2DelegateUndoChannel(
             tryUndo: () =>

@@ -114,4 +114,19 @@ public class CommandHistoryTests
         Assert.Equal(0, document.Revision);
         Assert.False(history.CanUndo);
     }
+
+    [Fact]
+    public void Execute_KeepsOnlyTheLatestMaxSteps()
+    {
+        var document = new SC2MapDocument();
+        var history = new SC2CommandHistory();
+        for (var i = 0; i < SC2ShellUndoCoordinator.MaxSteps + 3; i++)
+            history.Execute(document, new RenameCommand("Name " + i));
+
+        var undone = 0;
+        while (history.CanUndo) { history.Undo(document); undone++; }
+
+        Assert.Equal(SC2ShellUndoCoordinator.MaxSteps, undone);
+        Assert.Equal("Name 2", document.Identity.DisplayName);
+    }
 }

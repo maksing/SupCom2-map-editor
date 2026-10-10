@@ -410,7 +410,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // bounded by how many times this button gets clicked in one sitting, and
     // cleaned up whenever the whole terrain resets (NewTerrain/LoadFromDisk).
 
-    private const int ImportedUndoMaxSteps = 30;
+    private const int ImportedUndoMaxSteps = SC2.MapEditor.Document.SC2ShellUndoCoordinator.MaxSteps;
 
     private static readonly string[] ImportedMaterialTextureProps =
         { "_Diffuse1", "_Diffuse2", "_Normal1", "_Normal2", "_Mask1", "_Mask2", "_Ramp", "_RNMMask0", "_RNMMask1", "_RNMMask2" };
@@ -502,7 +502,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             var tmp = _importedUndoStack.ToArray();
             _importedUndoStack.Clear();
-            foreach (var s in tmp.Take(ImportedUndoMaxSteps)) _importedUndoStack.Push(s);
+            foreach (var s in tmp.Take(ImportedUndoMaxSteps).Reverse()) _importedUndoStack.Push(s);
         }
         _importedRedoStack.Clear();
     }

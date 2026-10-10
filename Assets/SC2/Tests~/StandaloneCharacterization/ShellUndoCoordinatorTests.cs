@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using SC2.MapEditor.Document;
 
 namespace SC2CharacterizationTests;
@@ -13,6 +15,23 @@ public class ShellUndoCoordinatorTests
 
         public bool TryUndo() { UndoCalls++; return UndoResult; }
         public bool TryRedo() { RedoCalls++; return RedoResult; }
+    }
+
+    [Fact]
+    public void Record_KeepsOnlyTheLatestMaxSteps()
+    {
+        var coordinator = new SC2ShellUndoCoordinator();
+        var channels = new List<FakeChannel>();
+        for (var i = 0; i < SC2ShellUndoCoordinator.MaxSteps + 5; i++)
+        {
+            channels.Add(new FakeChannel());
+            coordinator.Record(channels[i]);
+        }
+
+        Assert.Equal(SC2ShellUndoCoordinator.MaxSteps, coordinator.UndoCount);
+        while (coordinator.Undo()) { }
+        Assert.All(channels.Skip(5), channel => Assert.Equal(1, channel.UndoCalls));
+        Assert.All(channels.Take(5), channel => Assert.Equal(0, channel.UndoCalls));
     }
 
     [Fact]

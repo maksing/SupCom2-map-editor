@@ -227,7 +227,7 @@ public sealed class SC2ObjectsShell
     }
     private readonly List<string> _undoStack = new();
     private readonly List<string> _redoStack = new();
-    private const int MaxUndo = 30;
+    private const int MaxUndo = SC2.MapEditor.Document.SC2ShellUndoCoordinator.MaxSteps;
 
     /// <summary>Perf: SyncTransforms/SyncMissingAssetPreviews (called from
     /// DrawEmbeddedGUI below) used to run unconditionally on EVERY OnGUI

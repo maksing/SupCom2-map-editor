@@ -163,7 +163,7 @@ public sealed class SC2CostsShell
     }
     private readonly Stack<Snapshot> _undoStack = new();
     private readonly Stack<Snapshot> _redoStack = new();
-    private const int MaxUndoSteps = 30;
+    private const int MaxUndoSteps = SC2ShellUndoCoordinator.MaxSteps;
 
     /// <summary>TerrainTypes strokes now record
     /// a REAL ISC2DocumentCommand (SC2SetHfieldTerrainTypesCommand) through
