@@ -58,7 +58,8 @@ public static class SC2TerrainLayerBuilder
     /// background, whose ratios come from one triangle budget, SC2BackgroundTerrain.ExportSimplifyRatios).
     /// protectRingAroundUnassigned: see SC2TerrainSimplifier.FindBoundaryVertices.
     /// clusterRegion: maps a vertex position (x, z) to a region id; the simplifier never merges vertices of different regions. For
-    /// a surface with a hole, regions that are each convex and clear of the hole keep a merged vertex out of it.</summary>
+    /// a surface with a hole, regions that are each convex and clear of the hole keep a merged vertex out of it.
+    /// shoreDetail: when set, the ground near the water surface is simplified on a finer grid than the rest (see SC2ShoreDetail).</summary>
     public static SC2TerrainBuildResult Build(
         SC2TerrainData data,
         bool sortByTriangleCount,
@@ -67,7 +68,8 @@ public static class SC2TerrainLayerBuilder
         bool skipSimplification = false,
         float[] simplifyRatioPerPair = null,
         bool protectRingAroundUnassigned = true,
-        System.Func<float, float, int> clusterRegion = null)
+        System.Func<float, float, int> clusterRegion = null,
+        SC2ShoreDetail shoreDetail = null)
     {
         var result = new SC2TerrainBuildResult();
         // ImportOnlyMode: the live plane must contribute
@@ -162,7 +164,7 @@ public static class SC2TerrainLayerBuilder
             var count = pairTriCount[pi];
             progress?.Invoke($"Simplifying pair {oi + 1}/{order.Count}: {data.Pairs[pi].Name}", 0.45f + 0.45f * oi / Mathf.Max(1, order.Count));
             var mesh = SC2TerrainSimplifier.Simplify(allVerts, globalNormals, pairTris[pi], pairOrig[pi], boundary,
-                skipSimplification ? 0f : PairRatio(data, simplifyRatioPerPair, pi), clusterRegion);
+                skipSimplification ? 0f : PairRatio(data, simplifyRatioPerPair, pi), clusterRegion, shoreDetail);
             result.Layers.Add(new SC2TerrainBuiltLayer
             {
                 PairIndex = pi,

@@ -522,7 +522,7 @@ public static class SC2TerrainExporter
         {
             SC2Log.Log($"[SC2Exporter] Build stage: {stage}");
             ReportProgress(stage, Mathf.Clamp01(progress * 0.75f));
-        }, coreOuterLock);
+        }, coreOuterLock, shoreDetail: SC2ShoreDetail.For(data, session));
         SC2Log.Log($"[SC2Exporter] Build simplified export layers done in {swBuild.ElapsedMilliseconds}ms");
         SC2Log.Log($"[SC2Exporter] {build.Layers.Count} pair(s) have assigned triangles. " +
                    $"Counts: {string.Join(", ", build.PairTriangleCounts)}");
@@ -2946,7 +2946,8 @@ public static class SC2TerrainExporter
         // on its own for every case that should contribute zero live
         // geometry (not initialized, ImportOnlyMode, no pairs painted) - no
         // separate early-return needed here, the loop below just won't run.
-        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null, SC2TerrainSimplifier.FindOuterPerimeterVertices(data), skipSimplification);
+        var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null, SC2TerrainSimplifier.FindOuterPerimeterVertices(data), skipSimplification,
+            shoreDetail: skipSimplification ? null : SC2ShoreDetail.For(data, session));
         // Pre-size instead of letting List<T>.Add grow these by repeated
         // doubling — build.BuiltVertexCount/BuiltTriangleCount already give
         // the EXACT final count before a single element is added, so this

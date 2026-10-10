@@ -32,7 +32,8 @@ public static class SC2TerrainSimplifier
         int[]        origIdx,
         HashSet<int> boundary,
         float        ratio,
-        System.Func<float, float, int> clusterRegion = null)
+        System.Func<float, float, int> clusterRegion = null,
+        SC2ShoreDetail shore = null)
     {
         if (ratio <= 0f || pairTris.Length < 6)
             return Repack(allVerts, globalNormals, pairTris, origIdx);
@@ -42,7 +43,7 @@ public static class SC2TerrainSimplifier
         // heap entries grow faster than the useful collapses. Terrain export is
         // dominated by broad heightfield-like surfaces, so vertex clustering is
         // a much better default: O(V+T), deterministic, and no unbounded heap.
-        return SimplifyByComponents(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion);
+        return SimplifyByComponents(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion, shore);
 
     }
 
@@ -53,7 +54,8 @@ public static class SC2TerrainSimplifier
         int[]        origIdx,
         HashSet<int> boundary,
         float        ratio,
-        System.Func<float, float, int> clusterRegion)
+        System.Func<float, float, int> clusterRegion,
+        SC2ShoreDetail shore)
     {
         var triCount = pairTris.Length / 3;
         if (triCount < 96)
@@ -68,7 +70,7 @@ public static class SC2TerrainSimplifier
         {
             if (ShouldKeepComponentRaw(allVerts, pairTris, boundary))
                 return WithComponentStats(Repack(allVerts, globalNormals, pairTris, origIdx), 1, 1, 0);
-            var large = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion);
+            var large = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion, shore);
             large.ComponentCount = 1;
             return large;
         }
@@ -78,7 +80,7 @@ public static class SC2TerrainSimplifier
         {
             if (ShouldKeepComponentRaw(allVerts, pairTris, boundary))
                 return WithComponentStats(Repack(allVerts, globalNormals, pairTris, origIdx), 1, 1, 0);
-            var one = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion);
+            var one = SimplifyByVertexClustering(allVerts, globalNormals, pairTris, origIdx, boundary, ratio, clusterRegion, shore);
             one.ComponentCount = 1;
             return one;
         }
@@ -108,7 +110,7 @@ public static class SC2TerrainSimplifier
             if (keepRaw) skipped++;
             var mesh = keepRaw
                 ? Repack(allVerts, globalNormals, compTris, compOrig)
-                : SimplifyByVertexClustering(allVerts, globalNormals, compTris, compOrig, boundary, ratio, clusterRegion);
+                : SimplifyByVertexClustering(allVerts, globalNormals, compTris, compOrig, boundary, ratio, clusterRegion, shore);
 
             if (mesh.Triangles == null || mesh.Triangles.Length == 0)
                 continue;
@@ -276,7 +278,8 @@ public static class SC2TerrainSimplifier
         int[]        origIdx,
         HashSet<int> boundary,
         float        ratio,
-        System.Func<float, float, int> clusterRegion)
+        System.Func<float, float, int> clusterRegion,
+        SC2ShoreDetail shore)
     {
         var (lv, lt, _, l2g) = BuildLocal(allVerts, pairTris);
         var triCount = lt.Length / 3;
@@ -291,7 +294,7 @@ public static class SC2TerrainSimplifier
         for (var attempt = 0; attempt < 4; attempt++)
         {
             var effectiveTarget = Mathf.Max(2, Mathf.RoundToInt(targetT * (1f - attempt * 0.18f)));
-            var candidate = ClusterOnce(lv, globalNormals, lt, l2g, origIdx, boundary, effectiveTarget, clusterRegion);
+            var candidate = ClusterOnce(lv, globalNormals, lt, l2g, origIdx, boundary, effectiveTarget, clusterRegion, shore);
             var candidateCount = candidate.Triangles.Length / 3;
 
             if (candidateCount > 0 && candidateCount < bestCount)
@@ -315,7 +318,8 @@ public static class SC2TerrainSimplifier
         int[]        origIdx,
         HashSet<int> boundary,
         int          targetT,
-        System.Func<float, float, int> clusterRegion)
+        System.Func<float, float, int> clusterRegion,
+        SC2ShoreDetail shore)
     {
         var minX = float.PositiveInfinity; var maxX = float.NegativeInfinity;
         var minZ = float.PositiveInfinity; var maxZ = float.NegativeInfinity;
@@ -359,9 +363,13 @@ public static class SC2TerrainSimplifier
             }
             else
             {
-                var ix = Mathf.Clamp(Mathf.RoundToInt((lv[i].x - minX) * invX), 0, cellsX);
-                var iz = Mathf.Clamp(Mathf.RoundToInt((lv[i].z - minZ) * invZ), 0, cellsZ);
+                // The junction with water keeps more of its shape: its vertices merge on a finer grid and only with each other.
+                var nearWater = shore != null && shore.IsShore(lv[i].y);
+                var refine = nearWater ? shore.Refine : 1;
+                var ix = Mathf.Clamp(Mathf.RoundToInt((lv[i].x - minX) * invX * refine), 0, cellsX * refine);
+                var iz = Mathf.Clamp(Mathf.RoundToInt((lv[i].z - minZ) * invZ * refine), 0, cellsZ * refine);
                 key = ((long)ix << 32) | (uint)iz;
+                if (nearWater) key ^= 1L << 62;
                 // Vertices of different regions never merge, even in the same grid cell (see Build's clusterRegion).
                 if (clusterRegion != null) key ^= (long)clusterRegion(lv[i].x, lv[i].z) << 56;
             }

@@ -151,8 +151,9 @@ public sealed class SC2SimplifiedPreviewMode
         // comment) — this preview exists specifically to show what the
         // simplified, export-shaped mesh looks like, so it must protect the
         // map's own edge from simplification the same way export does.
+        var shore = SC2ShoreDetail.For(Data, _win.Session);
         SC2TerrainBuildResult BuildCore() => SC2TerrainLayerBuilder.Build(Data, sortByTriangleCount: false, null,
-            SC2TerrainSimplifier.FindOuterPerimeterVertices(Data));
+            SC2TerrainSimplifier.FindOuterPerimeterVertices(Data), shoreDetail: shore);
 
         var background = _win.ProceduralBackgroundData;
         if (background == null)

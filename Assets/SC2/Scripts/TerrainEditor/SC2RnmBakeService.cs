@@ -808,7 +808,7 @@ public static class SC2RnmBakeService
         // or the lighting bake would be computed against a different (and
         // possibly edge-truncated) mesh than the one that ships.
         var build = SC2TerrainLayerBuilder.Build(data, sortByTriangleCount: true, null,
-            SC2TerrainSimplifier.FindOuterPerimeterVertices(data));
+            SC2TerrainSimplifier.FindOuterPerimeterVertices(data), shoreDetail: SC2ShoreDetail.For(data, null));
         // Same per-axis unwrap as the real exporter (SC2TerrainUv1Unwrap) —
         // built once for the whole core terrain, sampled per pair below with
         // that pair's own tiling scale. Keeping the bake's own UV1 in sync
