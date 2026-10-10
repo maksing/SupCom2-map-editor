@@ -270,15 +270,17 @@ public sealed class SC2LiveHeightGrid
             if (data == null) return;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var importedTerrains = getImportedTerrains?.Invoke();
+            var propSolids0 = SC2PropHeightmapGeometry.BuildSolids(data);
             if (TryBuildDirectFromHeights(data, importedTerrains, out var directModel0))
             {
+                SC2HfieldProjectionService.MergeSolids(directModel0, propSolids0);
                 _model = directModel0;
                 SC2Log.Log($"[SC2LiveHeightGrid] Cold-start build (blocking, direct resample) took {sw.ElapsedMilliseconds}ms.");
                 return;
             }
             var mapSize0 = Mathf.Max(1, data.CostsGridSize) + 1;
             var geomModel0 = SC2TerrainExporter.BuildPreviewGeometryModel(data, importedTerrains, skipSimplification: true);
-            _model = SC2HfieldProjectionService.Project(geomModel0, null, mapSize0, mapSize0);
+            _model = SC2HfieldProjectionService.Project(geomModel0, null, mapSize0, mapSize0, extraSolids: propSolids0);
             SC2Log.Log($"[SC2LiveHeightGrid] Cold-start build (blocking, slow TerrainModel path — imported terrain or ImportOnlyMode in play) took {sw.ElapsedMilliseconds}ms.");
             return;
         }
@@ -300,6 +302,7 @@ public sealed class SC2LiveHeightGrid
         // Collision2ExcludedMaterialNames only applies to Collision2's own
         // separate projection, see SC2TerrainExporter.BuildCollision2Model).
         var importedTerrainsForRebuild = getImportedTerrains?.Invoke(); // main thread, before Task.Run — see this method's own doc comment
+        var propSolidsForRebuild = SC2PropHeightmapGeometry.BuildSolids(data); // reads the game archives: main thread too
         _rebuildStopwatch = System.Diagnostics.Stopwatch.StartNew();
         _gcCountsBeforeRebuild = (System.GC.CollectionCount(0), System.GC.CollectionCount(1), System.GC.CollectionCount(2));
         _rebuildTask = Task.Run(() =>
@@ -308,11 +311,12 @@ public sealed class SC2LiveHeightGrid
             if (TryBuildDirectFromHeights(data, importedTerrains, out var directModel))
             {
                 _lastRebuildUsedDirectPath = true;
+                SC2HfieldProjectionService.MergeSolids(directModel, propSolidsForRebuild);
                 return directModel;
             }
             _lastRebuildUsedDirectPath = false;
             var geomModel = SC2TerrainExporter.BuildPreviewGeometryModel(data, importedTerrains, skipSimplification: true);
-            return SC2HfieldProjectionService.Project(geomModel, null, mapSize, mapSize);
+            return SC2HfieldProjectionService.Project(geomModel, null, mapSize, mapSize, extraSolids: propSolidsForRebuild);
         });
     }
 
@@ -343,12 +347,14 @@ public sealed class SC2LiveHeightGrid
         if (data == null) return;
         _rebuildTask = null;
         var importedTerrains = getImportedTerrains?.Invoke();
+        var propSolids = SC2PropHeightmapGeometry.BuildSolids(data);
         if (!TryBuildDirectFromHeights(data, importedTerrains, out var model))
         {
             var mapSize = Mathf.Max(1, data.CostsGridSize) + 1;
             var geomModel = SC2TerrainExporter.BuildPreviewGeometryModel(data, importedTerrains, skipSimplification: true);
-            model = SC2HfieldProjectionService.Project(geomModel, null, mapSize, mapSize);
+            model = SC2HfieldProjectionService.Project(geomModel, null, mapSize, mapSize, extraSolids: propSolids);
         }
+        else SC2HfieldProjectionService.MergeSolids(model, propSolids);
         _model = model;
         _dirty = false;
         _rebuildDeadline = Time.realtimeSinceStartupAsDouble + DebounceSeconds;
