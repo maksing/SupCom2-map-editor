@@ -1158,6 +1158,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (_activeInstance == this)
             _activeInstance = null;
 
+        SC2SelectionOutline.Clear();
         Camera.onPreRender -= ApplyTopViewMirrorPreRender;
         Camera.onPostRender -= ApplyTopViewMirrorPostRender;
         GL.invertCulling = false;
@@ -4102,49 +4103,33 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         e.Use();
     }
 
-    /// <summary>A frame around the imported terrain object selected in the Imported tab (the one being moved, rotated or scaled while a
-    /// gesture runs): its world bounds as a wire box, so it is visible in the viewport which object the panel is editing.</summary>
+    /// <summary>An outline along the silhouette of the imported terrain object selected in the Imported tab (the one being moved,
+    /// rotated or scaled while a gesture runs), as Blender outlines a selected object, so it is visible in the viewport which object
+    /// the panel is editing. A hidden object has nothing to outline.</summary>
     private void DrawSelectedImportedTerrainFrame()
     {
-        var e = Event.current;
-        if (e == null || e.type != EventType.Repaint) return;
         var importedTabActive = _mainTab == 0 && _subTab >= 0 && _subTab < SC2EditorTabs.TerrainTabs.Length
             && SC2EditorTabs.TerrainTabs[_subTab] == "Imported";
-        if (!importedTabActive) return;
-
         SC2ImportedTerrainEntry entry = null;
-        if (_importedGestureKind != ImportedGestureKind.None) entry = _importedGestureEntry;
-        else if (_selectedImportedTerrain >= 0 && _selectedImportedTerrain < _importedTerrains.Count) entry = _importedTerrains[_selectedImportedTerrain];
-        var bounds = ImportedEntryBounds(entry);
-        if (!bounds.HasValue) return;
-        var camera = ResolveCamera();
-        if (camera == null) return;
-
-        var min = bounds.Value.min;
-        var max = bounds.Value.max;
-        var corners = new Vector3[8];
-        for (var i = 0; i < 8; i++)
+        if (importedTabActive)
         {
-            // Bit 0 picks x, bit 1 y, bit 2 z; every edge joins two corners that differ in one bit.
-            corners[i] = SC2TopViewMirror.WorldToGui(camera, new Vector3((i & 1) == 0 ? min.x : max.x, (i & 2) == 0 ? min.y : max.y, (i & 4) == 0 ? min.z : max.z));
+            if (_importedGestureKind != ImportedGestureKind.None) entry = _importedGestureEntry;
+            else if (_selectedImportedTerrain >= 0 && _selectedImportedTerrain < _importedTerrains.Count) entry = _importedTerrains[_selectedImportedTerrain];
         }
-        // Dark under-stroke first so the frame reads on any terrain colour.
-        var under = new Color(0f, 0f, 0f, 0.7f);
-        var frame = new Color(1f, 0.85f, 0.1f, 1f);
-        for (var pass = 0; pass < 2; pass++)
-            for (var i = 0; i < 8; i++)
-                for (var bit = 1; bit <= 4; bit <<= 1)
-                {
-                    var j = i | bit;
-                    if (j == i) continue;
-                    var a = corners[i];
-                    var b = corners[j];
-                    // A corner behind the camera projects to a mirrored point, so the edge is skipped instead of clipped (see DrawMapFrameOverlay).
-                    if (a.z <= 0f || b.z <= 0f) continue;
-                    if (SC2TerrainShell.ClipSegmentToViewport(_viewportRect, a, b, out var clippedA, out var clippedB))
-                        SC2TerrainShell.DrawGuiLineSegment(clippedA, clippedB, pass == 0 ? under : frame, pass == 0 ? 5f : 2.5f);
-                }
+        if (entry?.Root == null || entry.Hidden || !entry.Root.activeInHierarchy)
+        {
+            SC2SelectionOutline.Clear();
+            return;
+        }
+        var camera = ResolveCamera();
+        if (camera == null) { SC2SelectionOutline.Clear(); return; }
+        _importedOutlineRenderers.Clear();
+        foreach (var renderer in entry.Root.GetComponentsInChildren<Renderer>(false))
+            if (renderer != null && renderer.enabled) _importedOutlineRenderers.Add(renderer);
+        SC2SelectionOutline.Set(camera, _importedOutlineRenderers);
     }
+
+    private readonly List<Renderer> _importedOutlineRenderers = new List<Renderer>();
 
     private bool TryGetImportedGestureGroundPoint(Camera camera, Vector2 mousePosition, float planeY, out Vector3 hit)
     {
