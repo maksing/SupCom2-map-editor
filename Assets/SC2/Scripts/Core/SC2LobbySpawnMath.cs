@@ -98,6 +98,23 @@ public static class SC2SymmetryMath
         }
     }
 
+    /// <summary>The yaw (degrees, Unity's: forward = (sin, cos) in X / Z) of the object standing in <paramref name="slot"/> when the
+    /// object in slot 0 has <paramref name="yawDegrees"/> - the direction it faces is carried to the slot the way its position is:
+    /// reflected across the mirror (X: yaw -> -yaw, a diagonal swaps the axes), or turned with the rotation (a rotated copy's yaw
+    /// goes the opposite way round to the angle its position turns by, since a yaw is measured from +Z towards +X).</summary>
+    public static float GetSlotYaw(SymmetryMode mode, int radialCount, int slot, float yawDegrees)
+    {
+        if (slot <= 0) return yawDegrees;
+        if (GetSlotMirror(mode, slot, out var flip, out var swapAxes))
+        {
+            var radians = yawDegrees * Mathf.Deg2Rad;
+            float x = Mathf.Sin(radians), z = Mathf.Cos(radians);
+            if (swapAxes) { var t = x; x = z; z = t; }
+            return Mathf.Atan2(x * flip.x, z * flip.y) * Mathf.Rad2Deg;
+        }
+        return yawDegrees - GetSlotRotationDegrees(mode, radialCount, slot);
+    }
+
     public static List<Vector3> GetSlots(SymmetryMode mode, Vector3 center, int radialCount, Vector3 pos)
     {
         var c = center; var rel = pos - c;
