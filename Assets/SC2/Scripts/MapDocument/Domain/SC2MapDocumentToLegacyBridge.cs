@@ -323,6 +323,7 @@ namespace SC2.MapEditor.Document
         {
             public List<SC2CostsBlockData> Blocks = new();
             public bool PlayableWater;
+            public byte[] ShoreHintOverrideMask = Array.Empty<byte>();
         }
 
         public static CostsResult ReconstructCosts(SC2CostsDocument doc, ISC2BlobStore blobStore)
@@ -332,7 +333,13 @@ namespace SC2.MapEditor.Document
 
             var result = new CostsResult();
             foreach (var layer in doc.Layers)
-                result.Blocks.Add(new SC2CostsBlockData { Name = layer.FieldName, Navmesh = ReadBytes(blobStore, layer.FinalGrid) });
+                result.Blocks.Add(new SC2CostsBlockData
+                {
+                    Name = layer.FieldName,
+                    Navmesh = ReadBytes(blobStore, layer.FinalGrid),
+                    OutlineOpenMask = ReadBytes(blobStore, layer.OutlineOpenMask),
+                });
+            result.ShoreHintOverrideMask = ReadBytes(blobStore, doc.ShoreHintOverrideMask);
             // Reported bug: after a save/reload, SC2TerrainData.PlayableWater
             // silently reset to false even though the reloaded map's Costs
             // blocks were correctly the 5-block "playable water" set — the

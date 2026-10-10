@@ -56,6 +56,11 @@ namespace SC2.MapEditor.Document
         public SC2BlobReference FinalGrid;
 
         public SC2IslandValidationResult Islands = new();
+
+        /// <summary>Blocks 1+ only: the cells of this block's automatic outline the user marked as unneeded with the Outline brush
+        /// (SC2CostsBlockData.OutlineOpenMask, 1 = marked). Live-editing bookkeeping, never exported. Empty when no cell is marked,
+        /// and in a document written before this field existed.</summary>
+        public SC2BlobReference OutlineOpenMask;
     }
 
     /// <summary>
@@ -80,6 +85,11 @@ namespace SC2.MapEditor.Document
         /// the (lossy — Islandmap/LongInts aren't round-tripped) per-layer
         /// Navmesh grids.</summary>
         public SC2BlobReference OriginalBdf;
+
+        /// <summary>The cells of the shore-hint block the user painted by hand (SC2TerrainData.CostsShoreHintOverrideMask, 1 = pinned),
+        /// which the automatic resync of the Costs blocks must leave alone. Live-editing bookkeeping, never exported. Empty when no
+        /// cell is pinned, and in a document written before this field existed.</summary>
+        public SC2BlobReference ShoreHintOverrideMask;
 
         public SC2CostsLayerDocument Find(string id)
         {

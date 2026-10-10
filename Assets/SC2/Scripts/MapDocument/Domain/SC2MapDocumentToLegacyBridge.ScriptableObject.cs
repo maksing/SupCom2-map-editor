@@ -74,6 +74,7 @@ namespace SC2.MapEditor.Document
             var costs = ReconstructCosts(document.Costs, blobStore);
             data.CostsBlocks = costs.Blocks;
             data.PlayableWater = costs.PlayableWater;
+            data.CostsShoreHintOverrideMask = costs.ShoreHintOverrideMask;
 
             data.Collision2HeightOffset = ReconstructCollision2HeightOffset(document.Collision2);
             data.Collision2PolygonBudget = ReconstructCollision2PolygonBudget(document.Collision2);

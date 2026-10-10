@@ -37,7 +37,8 @@ namespace SC2.MapEditor.Document
         private static readonly HashSet<string> LandOnlyNames = new(StringComparer.Ordinal)
             { "Land_Small", "Land_Medium", "Land_Large" };
 
-        public static SC2CostsDocument BuildFromLegacy(IReadOnlyList<SC2CostsBlockData> costsBlocks, ISC2BlobStore blobStore)
+        public static SC2CostsDocument BuildFromLegacy(IReadOnlyList<SC2CostsBlockData> costsBlocks, ISC2BlobStore blobStore,
+            byte[] shoreHintOverrideMask = null)
         {
             if (costsBlocks == null) throw new ArgumentNullException(nameof(costsBlocks));
             if (blobStore == null) throw new ArgumentNullException(nameof(blobStore));
@@ -63,10 +64,23 @@ namespace SC2.MapEditor.Document
                     FieldName = block.Name,
                     DisplayName = block.Name,
                     FinalGrid = blobStore.Put(new MemoryStream(block.Navmesh ?? Array.Empty<byte>())),
+                    OutlineOpenMask = PutMask(blobStore, block.OutlineOpenMask),
                 });
             }
 
+            doc.ShoreHintOverrideMask = PutMask(blobStore, shoreHintOverrideMask);
             return doc;
+        }
+
+        /// <summary>A mask is only stored when a cell is set: the common case, no cell marked, is a megabyte of zeros per block that
+        /// the load side re-creates (SC2TerrainData.EnsureCostsAndTerrainTypes) anyway.</summary>
+        private static SC2BlobReference PutMask(ISC2BlobStore blobStore, byte[] mask)
+        {
+            if (mask == null) return SC2BlobReference.Empty;
+            var any = false;
+            foreach (var cell in mask)
+                if (cell != 0) { any = true; break; }
+            return any ? blobStore.Put(new MemoryStream(mask)) : SC2BlobReference.Empty;
         }
 
         /// <summary>Internal, not private — SC2MapDocumentToLegacyBridge's

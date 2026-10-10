@@ -173,4 +173,86 @@ public class CostsDocumentBridgeTests
             Directory.Delete(root, true);
         }
     }
+
+    // ---- Editing masks: which cells the user marked or pinned by hand ----
+
+    private static List<SC2CostsBlockData> BlocksWithMasks()
+    {
+        var blocks = PlayableWaterBlocks();
+        blocks[1].OutlineOpenMask = new byte[] { 0, 1, 0 };
+        blocks[3].OutlineOpenMask = new byte[] { 1, 0, 1 };
+        return blocks;
+    }
+
+    private static SC2CostsDocument ThroughTheManifest(SC2CostsDocument costs, Func<string, string> edit = null)
+    {
+        var json = SC2MapDocumentSerializer.Serialize(new SC2MapDocument { Costs = costs });
+        if (edit != null) json = edit(json);
+        return SC2MapDocumentSerializer.Deserialize(json).Costs;
+    }
+
+    [Fact]
+    public void Masks_SurviveTheDocumentAndTheManifest()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var shore = new byte[] { 0, 1, 1 };
+            var doc = ThroughTheManifest(SC2CostsLegacyBridge.BuildFromLegacy(BlocksWithMasks(), store, shore));
+
+            var costs = SC2MapDocumentToLegacyBridge.ReconstructCosts(doc, store);
+
+            Assert.Equal(shore, costs.ShoreHintOverrideMask);
+            Assert.Equal(new byte[] { 0, 1, 0 }, costs.Blocks[1].OutlineOpenMask);
+            Assert.Equal(new byte[] { 1, 0, 1 }, costs.Blocks[3].OutlineOpenMask);
+            Assert.Empty(costs.Blocks[0].OutlineOpenMask);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Masks_WithNoCellSet_AreNotStored()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var blocks = PlayableWaterBlocks();
+            blocks[2].OutlineOpenMask = new byte[3];
+
+            var doc = SC2CostsLegacyBridge.BuildFromLegacy(blocks, store, new byte[3]);
+
+            Assert.True(doc.ShoreHintOverrideMask.IsEmpty);
+            foreach (var layer in doc.Layers) Assert.True(layer.OutlineOpenMask.IsEmpty);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Masks_OfAnOlderManifest_ReadAsEmpty()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var built = SC2CostsLegacyBridge.BuildFromLegacy(BlocksWithMasks(), store, new byte[] { 0, 1, 1 });
+
+            var older = ThroughTheManifest(built, json => json
+                .Replace("\"shoreHintOverrideMask\"", "\"unknownA\"")
+                .Replace("\"outlineOpenMask\"", "\"unknownB\""));
+
+            var costs = SC2MapDocumentToLegacyBridge.ReconstructCosts(older, store);
+            Assert.Empty(costs.ShoreHintOverrideMask);
+            Assert.All(costs.Blocks, block => Assert.Empty(block.OutlineOpenMask));
+            Assert.Equal(new byte[] { 1, 5, 1 }, costs.Blocks[1].Navmesh);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
 }

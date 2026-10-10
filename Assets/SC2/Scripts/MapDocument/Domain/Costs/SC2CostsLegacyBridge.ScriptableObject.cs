@@ -14,7 +14,7 @@ namespace SC2.MapEditor.Document
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             data.EnsureCostsAndTerrainTypes();
-            return BuildFromLegacy(data.CostsBlocks, blobStore);
+            return BuildFromLegacy(data.CostsBlocks, blobStore, data.CostsShoreHintOverrideMask);
         }
     }
 }

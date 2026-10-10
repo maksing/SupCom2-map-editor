@@ -433,6 +433,7 @@ namespace SC2.MapEditor.Document
             o.Set("layers", layers);
             o.Set("sourceHfieldRevision", SC2JsonValue.Of(c.SourceHfieldRevision));
             o.Set("state", SC2JsonValue.Of(c.State.ToString()));
+            o.Set("shoreHintOverrideMask", WriteBlobRef(c.ShoreHintOverrideMask));
             return o;
         }
 
@@ -443,6 +444,7 @@ namespace SC2.MapEditor.Document
                 Profile = ParseEnum(o.Get("profile"), SC2CostsProfile.LandOnly),
                 SourceHfieldRevision = o.Get("sourceHfieldRevision").AsLong(0),
                 State = ParseEnum(o.Get("state"), SC2DerivedState.Original),
+                ShoreHintOverrideMask = ReadBlobRef(o.Get("shoreHintOverrideMask")),
             };
             foreach (var lo in o.Get("layers").Items())
                 c.Layers.Add(ReadCostsLayer(lo));
@@ -458,6 +460,7 @@ namespace SC2.MapEditor.Document
             o.Set("baseGeneratedGrid", WriteBlobRef(l.BaseGeneratedGrid));
             o.Set("paintOverrides", WriteBlobRef(l.PaintOverrides));
             o.Set("finalGrid", WriteBlobRef(l.FinalGrid));
+            o.Set("outlineOpenMask", WriteBlobRef(l.OutlineOpenMask));
             var islands = SC2JsonValue.NewObject();
             islands.Set("checked", SC2JsonValue.Of(l.Islands.Checked));
             islands.Set("hasUnreachableIslands", SC2JsonValue.Of(l.Islands.HasUnreachableIslands));
@@ -477,6 +480,7 @@ namespace SC2.MapEditor.Document
                 BaseGeneratedGrid = ReadBlobRef(o.Get("baseGeneratedGrid")),
                 PaintOverrides = ReadBlobRef(o.Get("paintOverrides")),
                 FinalGrid = ReadBlobRef(o.Get("finalGrid")),
+                OutlineOpenMask = ReadBlobRef(o.Get("outlineOpenMask")),
                 Islands = new SC2IslandValidationResult
                 {
                     Checked = islands.Get("checked").AsBool(false),
