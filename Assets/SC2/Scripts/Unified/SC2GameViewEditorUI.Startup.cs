@@ -127,12 +127,12 @@ public sealed partial class SC2GameViewEditorUI
         GUI.enabled = enabledBefore && reveal >= 0.99f;
         GUI.color = new Color(1f, 1f, 1f, reveal);
 
-        GUI.Box(rect, GUIContent.none);
-        var innerRect = new Rect(rect.x + 14f, rect.y + 12f, rect.width - 28f, rect.height - 24f);
+        SC2StartupUi.EnsureStyles();
+        GUI.Box(rect, GUIContent.none, SC2StartupUi.Panel);
+        var innerRect = new Rect(rect.x + 24f, rect.y + 18f, rect.width - 48f, rect.height - 36f);
         GUILayout.BeginArea(innerRect);
 
-        GUILayout.Label("SC2 Map Editor", StartupTitleStyle());
-        GUILayout.Space(8);
+        GUILayout.Label("SupCom2 Map Editor", SC2StartupUi.Title);
 
         // An unwanted horizontal scrollbar can show up across the whole
         // panel if none of this screen's Labels (the game-install path in
@@ -203,7 +203,7 @@ public sealed partial class SC2GameViewEditorUI
         {
             _startupCreditsStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = SC2UiScale.F(16),
+                fontSize = SC2UiScale.FRaw(16),
                 fontStyle = FontStyle.Bold,
                 wordWrap = true,
                 alignment = TextAnchor.UpperLeft,
@@ -219,8 +219,8 @@ public sealed partial class SC2GameViewEditorUI
             return;
 
         var style = StartupCreditsStyle();
-        var margin = SC2UiScale.Pxf(18f);
-        var width = Mathf.Max(100f, Mathf.Min(screenWidth - margin * 2f, SC2UiScale.Pxf(900f)));
+        var margin = SC2UiScale.PxfRaw(18f);
+        var width = Mathf.Max(100f, Mathf.Min(screenWidth - margin * 2f, SC2UiScale.PxfRaw(900f)));
         var lines = new List<string>(2);
         if (!string.IsNullOrEmpty(StartupMadeByText)) lines.Add("Made by: " + StartupMadeByText);
         if (!string.IsNullOrEmpty(StartupThanksToText)) lines.Add("Thanks to: " + StartupThanksToText);
@@ -267,7 +267,7 @@ public sealed partial class SC2GameViewEditorUI
     private static GUIStyle StartupTitleStyle()
     {
         if (_startupTitleStyle == null)
-            _startupTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2UiScale.F(18), fontStyle = FontStyle.Bold };
+            _startupTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2UiScale.FRaw(18), fontStyle = FontStyle.Bold };
         return _startupTitleStyle;
     }
 
@@ -279,21 +279,20 @@ public sealed partial class SC2GameViewEditorUI
     private static GUIStyle StartupDimLabelStyle()
     {
         if (_startupDimLabelStyle == null)
-        {
             _startupDimLabelStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
-            _startupDimLabelStyle.normal.textColor = new Color(0.62f, 0.62f, 0.66f);
-        }
+        _startupDimLabelStyle.normal.textColor = SC2Theme.TextSecondary;
         return _startupDimLabelStyle;
     }
 
     private void DrawStartupRootPicker()
     {
         GUILayout.Label("Point this at your SupCom2 game installation folder (containing maps.scd, " +
-                        "lua.scd, textures.scd, etc. — or an already-extracted copy of them).", StartupWrapLabelStyle());
-        GUILayout.Space(6);
+                        "lua.scd, textures.scd, etc. — or an already-extracted copy of them).", SC2StartupUi.Body);
+        GUILayout.Space(8);
         GUILayout.BeginHorizontal();
-        _startupRootPathInput = GUILayout.TextField(_startupRootPathInput ?? "", GUILayout.ExpandWidth(true));
-        if (GUILayout.Button("Browse...", GUILayout.Width(SC2UiScale.Pxf(90f))))
+        _startupRootPathInput = SC2StartupUi.TextField(_startupRootPathInput, "Game installation folder",
+            GUILayout.ExpandWidth(true), GUILayout.Height(SC2StartupUi.ButtonHeight));
+        if (SC2StartupUi.PlainButton("Browse...", 100))
         {
 #if UNITY_EDITOR
             var picked = EditorUtility.OpenFolderPanel("Select game installation folder", "", "");
@@ -312,14 +311,18 @@ public sealed partial class SC2GameViewEditorUI
             GUI.contentColor = prevContentColor;
         }
 
-        GUILayout.Space(6);
-        GUI.enabled = !string.IsNullOrWhiteSpace(_startupRootPathInput);
-        if (GUILayout.Button("Continue", GUILayout.Height(SC2UiScale.Pxf(28f))))
+        GUILayout.Space(8);
+        var enabledBefore = GUI.enabled;
+        GUI.enabled = enabledBefore && !string.IsNullOrWhiteSpace(_startupRootPathInput);
+        GUILayout.BeginHorizontal();
+        if (SC2StartupUi.PrimaryButton("Continue", 160))
             ApplyStartupRootPath();
-        GUI.enabled = true;
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
+        GUI.enabled = enabledBefore;
 
         GUILayout.Space(10);
-        if (GUILayout.Button("Skip for now — create a new map without a game install configured", "label"))
+        if (GUILayout.Button("Skip for now — create a new map without a game install configured", SC2StartupUi.Link))
             StartupComplete = true;
     }
 
@@ -339,15 +342,18 @@ public sealed partial class SC2GameViewEditorUI
 
     private void DrawStartupMapPicker()
     {
-        GUILayout.Label("Game install: " + SC2GameInstallSettings.RootPath, StartupDimLabelStyle());
-        if (GUILayout.Button("Change game path...", GUILayout.Width(SC2UiScale.Pxf(160f))))
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Game install: " + SC2GameInstallSettings.RootPath, SC2StartupUi.DimMiddle, GUILayout.ExpandWidth(true), GUILayout.Height(SC2StartupUi.ButtonHeight));
+        var changePath = SC2StartupUi.PlainButton("Change game path...", 170);
+        GUILayout.EndHorizontal();
+        if (changePath)
         {
             _startupRootPathInput = SC2GameInstallSettings.RootPath;
             SC2GameInstallSettings.RootPath = "";
             SC2GameArchiveRegistry.Close();
             return;
         }
-        GUILayout.Space(10);
+        GUILayout.Space(4);
 
         _startupScroll = GUILayout.BeginScrollView(_startupScroll);
 
@@ -358,7 +364,7 @@ public sealed partial class SC2GameViewEditorUI
             ScanStartupArchiveCandidates();
         DrawArchiveOpenFailures();
 
-        SC2EnvFieldGui.SectionLabel("Your custom maps");
+        SC2StartupUi.SectionHeading("Your custom maps");
         DrawMapSortModeSelector();
 #if UNITY_EDITOR
         var customAssets = new List<SC2TerrainData>();
@@ -370,22 +376,16 @@ public sealed partial class SC2GameViewEditorUI
         SortCustomMaps(customAssets, a => CustomMapDisplayName(a), a => AssetDatabase.GetAssetPath(a));
         if (customAssets.Count == 0)
         {
-            GUILayout.Label("No saved maps found in this project yet.");
+            GUILayout.Label("No saved maps found in this project yet.", SC2StartupUi.Body);
         }
         else
         {
             foreach (var asset in customAssets)
             {
-                GUILayout.BeginHorizontal(GUI.skin.box);
-                GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-                GUILayout.Label(CustomMapDisplayName(asset), GUILayout.ExpandWidth(true));
-                DrawMapDatesLabel(AssetDatabase.GetAssetPath(asset));
-                GUILayout.EndVertical();
-                DrawMapRowActionButtons(
+                DrawStartupMapRow(CustomMapDisplayName(asset), StartupDatesText(AssetDatabase.GetAssetPath(asset)),
                     () => OpenExistingTerrainAsset(asset),
                     () => RequestDuplicateTerrainAsset(asset),
                     () => RequestDeleteTerrainAsset(asset));
-                GUILayout.EndHorizontal();
             }
         }
 #else
@@ -393,35 +393,29 @@ public sealed partial class SC2GameViewEditorUI
         SortCustomMaps(saved, name => name, name => SC2RuntimeTerrainPersistence.GetSavePath(name));
         if (saved.Count == 0)
         {
-            GUILayout.Label("No saved maps found yet.");
+            GUILayout.Label("No saved maps found yet.", SC2StartupUi.Body);
         }
         else
         {
             foreach (var mapName in saved)
             {
-                GUILayout.BeginHorizontal(GUI.skin.box);
-                GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-                GUILayout.Label(mapName, GUILayout.ExpandWidth(true));
-                DrawMapDatesLabel(SC2RuntimeTerrainPersistence.GetSavePath(mapName));
-                GUILayout.EndVertical();
-                DrawMapRowActionButtons(
+                DrawStartupMapRow(mapName, StartupDatesText(SC2RuntimeTerrainPersistence.GetSavePath(mapName)),
                     () => OpenSavedTerrainByName(mapName),
                     () => RequestDuplicateTerrainName(mapName),
                     () => RequestDeleteTerrainName(mapName));
-                GUILayout.EndHorizontal();
             }
         }
 #endif
 
-        GUILayout.Space(14);
+        GUILayout.Space(10);
         var archiveCount = _startupArchiveCandidates?.Count(c => c.CanImport) ?? 0;
         var archiveLabel = "Vanilla / archive maps" + (archiveCount > 0 ? $" ({archiveCount})" : "");
-        if (SC2EnvFieldGui.Foldout(ref _startupArchiveMapsExpanded, archiveLabel))
+        if (SC2StartupUi.Foldout(ref _startupArchiveMapsExpanded, archiveLabel))
         {
             GUILayout.Space(4);
             if (archiveCount == 0)
             {
-                GUILayout.Label("No maps found in the configured game install.");
+                GUILayout.Label("No maps found in the configured game install.", SC2StartupUi.Body);
             }
             else
             {
@@ -430,24 +424,45 @@ public sealed partial class SC2GameViewEditorUI
                     .OrderBy(c => c.DisplayName ?? c.BdfStem ?? "", StringComparer.OrdinalIgnoreCase);
                 foreach (var candidate in sorted)
                 {
-                    GUILayout.BeginVertical(GUI.skin.box);
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", GUILayout.ExpandWidth(true));
-                    if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-                        OpenArchiveMap(candidate);
-                    GUILayout.EndHorizontal();
+                    GUILayout.BeginHorizontal(SC2StartupUi.Row);
+                    SC2StartupUi.CenteredLabel(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", SC2StartupUi.RowName);
+                    GUILayout.FlexibleSpace();
                     if (!string.IsNullOrEmpty(candidate.SourceArchivePath))
-                        GUILayout.Label("from: " + Path.GetFileName(candidate.SourceArchivePath.TrimEnd('\\', '/')), StartupDimLabelStyle());
-                    GUILayout.EndVertical();
+                        SC2StartupUi.CenteredLabel("from: " + Path.GetFileName(candidate.SourceArchivePath.TrimEnd('\\', '/')), SC2StartupUi.DimRight, false);
+                    SC2StartupUi.BeginRowActions();
+                    if (SC2StartupUi.PlainButton("Open", 66))
+                        OpenArchiveMap(candidate);
+                    SC2StartupUi.EndRowActions();
+                    GUILayout.EndHorizontal();
                 }
             }
         }
 
-        GUILayout.Space(14);
-        if (GUILayout.Button("Browse .scd file/folder...", GUILayout.Height(SC2UiScale.Pxf(26f))))
+        GUILayout.Space(10);
+        GUILayout.BeginHorizontal();
+        if (SC2StartupUi.PlainButton("Browse .scd file/folder...", 210))
             BeginBrowseArbitraryMap();
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
 
         GUILayout.EndScrollView();
+    }
+
+    /// <summary>One saved map: its name and dates on the left, Duplicate / Delete / Open on the right.</summary>
+    private static void DrawStartupMapRow(string name, string dates, Action onOpen, Action onDuplicate, Action onDelete)
+    {
+        GUILayout.BeginHorizontal(SC2StartupUi.Row);
+        GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
+        GUILayout.Label(name, SC2StartupUi.RowName);
+        if (!string.IsNullOrEmpty(dates)) GUILayout.Label(dates, SC2StartupUi.Dim);
+        GUILayout.EndVertical();
+        GUILayout.FlexibleSpace();
+        SC2StartupUi.BeginRowActions();
+        if (SC2StartupUi.PlainButton("Duplicate", 84)) onDuplicate();
+        if (SC2StartupUi.PlainButton("Delete", 66)) onDelete();
+        if (SC2StartupUi.PrimaryButton("Open", 66)) onOpen();
+        SC2StartupUi.EndRowActions();
+        GUILayout.EndHorizontal();
     }
 
     /// <summary>Drawn right after "Last opened" (see DrawStartupMapPicker) —
@@ -456,20 +471,20 @@ public sealed partial class SC2GameViewEditorUI
     /// map lists rather than at the very bottom of the scroll view.</summary>
     private void DrawCreateNewMapSection()
     {
-        SC2EnvFieldGui.SectionLabel("Create new map");
+        SC2StartupUi.SectionHeading("Create new map");
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Name", GUILayout.Width(SC2UiScale.Pxf(50f)));
-        var newMapName = GUILayout.TextField(_startupNewMapName ?? "New Map", GUILayout.ExpandWidth(true));
+        var newMapName = SC2StartupUi.TextField(_startupNewMapName, "Map name", GUILayout.MinWidth(SC2UiScale.PxfRaw(150f)), GUILayout.ExpandWidth(true),
+            GUILayout.Height(SC2StartupUi.ButtonHeight));
         if (newMapName != _startupNewMapName) _startupNewMapNameError = null;
         _startupNewMapName = newMapName;
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("Size", GUILayout.Width(SC2UiScale.Pxf(50f)));
+        GUILayout.Space(8);
         StartupSizeButton(512);
         StartupSizeButton(1024);
         StartupSizeButton(2048);
+        GUILayout.Space(8);
+        var create = SC2StartupUi.PrimaryButton("Create New Map", 170);
         GUILayout.EndHorizontal();
-        if (GUILayout.Button("Create New Map", GUILayout.Height(SC2UiScale.Pxf(28f))))
+        if (create)
         {
             if (MapNameAlreadyExists(_startupNewMapName))
                 _startupNewMapNameError = $"A map named '{_startupNewMapName.Trim()}' already exists — choose a different name.";
@@ -486,7 +501,7 @@ public sealed partial class SC2GameViewEditorUI
             GUILayout.Label(_startupNewMapNameError, StartupWrapLabelStyle());
             GUI.contentColor = prevContentColor;
         }
-        GUILayout.Space(14);
+        GUILayout.Space(4);
     }
 
     /// <summary>Checked against the same "Your custom maps" list this screen already shows
@@ -589,23 +604,26 @@ public sealed partial class SC2GameViewEditorUI
         if (string.IsNullOrEmpty(path)) return;
         var asset = AssetDatabase.LoadAssetAtPath<SC2TerrainData>(path);
         if (asset == null) return; // moved/deleted since last time
-        SC2EnvFieldGui.SectionLabel("Last opened");
-        GUILayout.BeginHorizontal(GUI.skin.box);
-        GUILayout.Label(CustomMapDisplayName(asset), GUILayout.ExpandWidth(true));
-        if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-            OpenExistingTerrainAsset(asset);
-        GUILayout.EndHorizontal();
+        DrawLastOpenedRow(CustomMapDisplayName(asset), path, () => OpenExistingTerrainAsset(asset));
 #else
         var name = PlayerPrefs.GetString(LastOpenedMapNameKey, "");
         if (string.IsNullOrEmpty(name) || !SC2TerrainShell.ListSavedTerrains().Contains(name)) return;
-        SC2EnvFieldGui.SectionLabel("Last opened");
-        GUILayout.BeginHorizontal(GUI.skin.box);
-        GUILayout.Label(name, GUILayout.ExpandWidth(true));
-        if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-            OpenSavedTerrainByName(name);
-        GUILayout.EndHorizontal();
+        DrawLastOpenedRow(name, SC2RuntimeTerrainPersistence.GetSavePath(name), () => OpenSavedTerrainByName(name));
 #endif
-        GUILayout.Space(14);
+    }
+
+    private static void DrawLastOpenedRow(string name, string path, Action onOpen)
+    {
+        SC2StartupUi.SectionHeading("Last opened");
+        GUILayout.BeginHorizontal(SC2StartupUi.Row);
+        SC2StartupUi.CenteredLabel(name, SC2StartupUi.RowName);
+        GUILayout.FlexibleSpace();
+        var modified = GetFileTimeSafe(path, created: false);
+        if (modified != DateTime.MinValue) SC2StartupUi.CenteredLabel($"Modified {modified:yyyy-MM-dd}", SC2StartupUi.DimRight, false);
+        SC2StartupUi.BeginRowActions();
+        if (SC2StartupUi.PrimaryButton("Open", 66)) onOpen();
+        SC2StartupUi.EndRowActions();
+        GUILayout.EndHorizontal();
     }
 
     private void DrawArchiveOpenFailures()
@@ -622,31 +640,29 @@ public sealed partial class SC2GameViewEditorUI
 
     private void StartupSizeButton(float wu)
     {
-        var active = Mathf.Approximately(_startupNewMapSizeWu, wu);
-        var c = GUI.color;
-        if (active) GUI.color = new Color(0.6f, 1f, 0.7f);
-        if (GUILayout.Button($"{wu:F0}", GUILayout.Height(SC2UiScale.Pxf(24f)))) _startupNewMapSizeWu = wu;
-        GUI.color = c;
+        var selected = Mathf.Approximately(_startupNewMapSizeWu, wu);
+        if (GUILayout.Button($"{wu:F0}", selected ? SC2StartupUi.SizeButtonSelected : SC2StartupUi.SizeButton,
+                GUILayout.Width(SC2UiScale.PxfRaw(60f)), GUILayout.Height(SC2StartupUi.ButtonHeight)))
+            _startupNewMapSizeWu = wu;
     }
 
     private void DrawMapSortModeSelector()
     {
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Sort by", GUILayout.Width(SC2UiScale.Pxf(50f)));
+        GUILayout.Label("Sort by", SC2StartupUi.DimMiddle, GUILayout.Width(SC2UiScale.PxfRaw(52f)), GUILayout.Height(SC2UiScale.PxfRaw(26f)));
         MapSortModeButton(MapSortMode.Name, "Name");
         MapSortModeButton(MapSortMode.DateCreated, "Date Created");
         MapSortModeButton(MapSortMode.DateModified, "Date Modified");
+        GUILayout.FlexibleSpace();
         GUILayout.EndHorizontal();
-        GUILayout.Space(4);
+        GUILayout.Space(2);
     }
 
     private void MapSortModeButton(MapSortMode mode, string label)
     {
-        var active = _customMapSortMode == mode;
-        var c = GUI.color;
-        if (active) GUI.color = new Color(0.6f, 1f, 0.7f);
-        if (GUILayout.Button(label, GUILayout.Height(SC2UiScale.Pxf(20f)))) _customMapSortMode = mode;
-        GUI.color = c;
+        var selected = _customMapSortMode == mode;
+        if (GUILayout.Button(label, selected ? SC2StartupUi.PillSelected_ : SC2StartupUi.Pill, GUILayout.ExpandWidth(false), GUILayout.Height(SC2UiScale.PxfRaw(26f))))
+            _customMapSortMode = mode;
     }
 
     /// <summary>Shared by both the Editor (SC2TerrainData asset) and Build
@@ -685,27 +701,13 @@ public sealed partial class SC2GameViewEditorUI
 
     /// <summary>Same underlying OS timestamps the sort-by-date modes already read (see
     /// SortCustomMaps's own doc comment) — the .asset file in the Editor, the
-    /// .sc2terrain.json save file in a Build.</summary>
-    private static void DrawMapDatesLabel(string path)
+    /// .sc2terrain.json save file in a Build. Null when the file has no usable time.</summary>
+    private static string StartupDatesText(string path)
     {
         var created = GetFileTimeSafe(path, created: true);
         var modified = GetFileTimeSafe(path, created: false);
-        if (created == DateTime.MinValue && modified == DateTime.MinValue) return;
-        GUILayout.Label($"Created {created:yyyy-MM-dd}    Modified {modified:yyyy-MM-dd}", StartupDimLabelStyle());
-    }
-
-    private static void DrawMapRowActionButtons(Action onOpen, Action onDuplicate, Action onDelete)
-    {
-        if (GUILayout.Button("Duplicate", GUILayout.Width(SC2UiScale.Pxf(80f))))
-            onDuplicate();
-        if (GUILayout.Button("Delete", GUILayout.Width(SC2UiScale.Pxf(70f))))
-            onDelete();
-
-        var prevBg = GUI.backgroundColor;
-        GUI.backgroundColor = SC2EnvFieldGui.PrimaryActionColor;
-        if (GUILayout.Button("Open", GUILayout.Width(SC2UiScale.Pxf(70f))))
-            onOpen();
-        GUI.backgroundColor = prevBg;
+        if (created == DateTime.MinValue && modified == DateTime.MinValue) return null;
+        return $"Created {created:yyyy-MM-dd}    Modified {modified:yyyy-MM-dd}";
     }
 
     private void ScanStartupArchiveCandidates()

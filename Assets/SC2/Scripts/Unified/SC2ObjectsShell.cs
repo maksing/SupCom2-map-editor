@@ -1758,7 +1758,7 @@ public sealed class SC2ObjectsShell
     private void DrawFilterButton(float w, string label, SysFilter value, ref SysFilter current)
     {
         var isActive = current == value;
-        if (SC2EnvFieldGui.Button((isActive ? "● " : "") + label, GUILayout.Width(w / 4f - 2f), GUILayout.Height(SC2UiScale.Pxf(18f))))
+        if (GUILayout.Button((isActive ? "● " : "") + label, SC2UnifiedSkin.SmallButtonStyle, GUILayout.Width(w / 4f - 2f), GUILayout.Height(SC2UiScale.Pxf(20f))))
             current = value;
     }
 
@@ -2169,7 +2169,7 @@ public sealed class SC2ObjectsShell
         {
             GUILayout.BeginHorizontal();
             var armyLabel = string.IsNullOrEmpty(a.Name) ? $"Army {a.Id}" : a.Name;
-            var sel = GUILayout.Toggle(_selectedArmyId == a.Id, TruncateForLabel(armyLabel, w * 0.7f), GUILayout.Width(w * 0.7f));
+            var sel = GUILayout.Toggle(_selectedArmyId == a.Id, TruncateForLabel(armyLabel, w * 0.7f), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f));
             if (sel) _selectedArmyId = a.Id; else if (_selectedArmyId == a.Id) _selectedArmyId = 0;
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
@@ -2691,9 +2691,8 @@ public sealed class SC2ObjectsShell
             if (collapsed) _unitArmyCollapsed.Remove(armyName); else _unitArmyCollapsed.Add(armyName);
         }
         var armyArrowRect = GUILayoutUtility.GetLastRect();
-        SC2EnvFieldGui.SectionLabel(armyName);
-        GUILayout.FlexibleSpace();
-        GUILayout.Label($"{counts.Groups} groups, {counts.Units} units");
+        // The name and the counts share one heading rect: separate expanding items in this row left the name no width at all.
+        SC2ForgeUi.Section(armyName, $"{counts.Groups} groups, {counts.Units} units");
         GUILayout.EndHorizontal();
 
         if (!collapsed)
@@ -4336,7 +4335,7 @@ public sealed class SC2ObjectsShell
     private static GUIStyle _markerCategoryLabelStyle;
     private static GUIStyle MarkerCategoryLabelStyle => _markerCategoryLabelStyle ??= new GUIStyle(GUI.skin.label)
     {
-        alignment = TextAnchor.MiddleCenter, fontSize = 9, wordWrap = false
+        alignment = TextAnchor.MiddleCenter, fontSize = SC2Type.Micro, wordWrap = false
     };
 
     private string _markerCategoryOpen = "";
@@ -4401,7 +4400,20 @@ public sealed class SC2ObjectsShell
     }
 
     private static GUIStyle _markerTileButtonStyle;
-    private static GUIStyle MarkerTileButtonStyle => _markerTileButtonStyle ??= new GUIStyle(GUI.skin.button) { padding = new RectOffset(0, 0, 0, 0) };
+    private static GUISkin _markerTileButtonSkin;
+    private static GUIStyle MarkerTileButtonStyle
+    {
+        get
+        {
+            // Copied from the skin's button, so it follows the skin when the palette changes and the skin is rebuilt.
+            if (_markerTileButtonStyle == null || _markerTileButtonSkin != GUI.skin)
+            {
+                _markerTileButtonSkin = GUI.skin;
+                _markerTileButtonStyle = new GUIStyle(GUI.skin.button) { padding = new RectOffset(0, 0, 0, 0) };
+            }
+            return _markerTileButtonStyle;
+        }
+    }
 
     /// <summary>The icon should fill the tile
     /// button's full clickable area instead of sitting shrunk inside the
@@ -4907,7 +4919,7 @@ public sealed class SC2ObjectsShell
             hasExtra |= !isRequired;
             GUILayout.BeginHorizontal();
             var rowWidth = isRequired ? w - 8f : w * 0.7f;
-            var sel = GUILayout.Toggle(_selectedGraphId == g.Id, TruncateForLabel($"{g.Name} [{g.GraphKind}]", rowWidth), GUILayout.Width(rowWidth));
+            var sel = GUILayout.Toggle(_selectedGraphId == g.Id, TruncateForLabel($"{g.Name} [{g.GraphKind}]", rowWidth), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(rowWidth));
             if (sel) _selectedGraphId = g.Id;
             // The required set (exactly 2 or 4, one per kind) is structural,
             // not a user-managed list — no delete for those rows. Only
@@ -5315,7 +5327,7 @@ public sealed class SC2ObjectsShell
         foreach (var z in visible)
         {
             GUILayout.BeginHorizontal();
-            var sel = GUILayout.Toggle(_selectedZoneId == z.Id, TruncateForLabel($"{z.Name} [{z.Role}]", w * 0.7f), GUILayout.Width(w * 0.7f));
+            var sel = GUILayout.Toggle(_selectedZoneId == z.Id, TruncateForLabel($"{z.Name} [{z.Role}]", w * 0.7f), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f));
             if (sel) _selectedZoneId = z.Id; else if (_selectedZoneId == z.Id) _selectedZoneId = 0;
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
@@ -5508,7 +5520,7 @@ public sealed class SC2ObjectsShell
         foreach (var c in visible)
         {
             GUILayout.BeginHorizontal();
-            var sel = GUILayout.Toggle(_selectedChainId == c.Id, TruncateForLabel(c.Name, w * 0.7f), GUILayout.Width(w * 0.7f));
+            var sel = GUILayout.Toggle(_selectedChainId == c.Id, TruncateForLabel(c.Name, w * 0.7f), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f));
             if (sel) _selectedChainId = c.Id; else if (_selectedChainId == c.Id) _selectedChainId = 0;
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {

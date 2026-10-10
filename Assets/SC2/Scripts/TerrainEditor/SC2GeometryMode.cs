@@ -167,8 +167,10 @@ public class SC2GeometryMode
 
     public void DrawPanel()
     {
-        // Each group of controls gets its own heading and a gap above it, so the grids and sliders do not run together.
-        SC2TerrainShell.DrawUnifiedSectionLabel("Brush tool");
+        // Each group of controls is its own card with a heading, as in the reference.
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        SC2ForgeUi.Section("Brush tool");
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
         var toolLabels = new[] { "Raise", "Lower", "Smooth", "Flatten", "Set H", "Noise" };
         var toolValues = new[] { Tool.Raise, Tool.Lower, Tool.Smooth, Tool.Flatten, Tool.SetHeight, Tool.Noise };
         var selected = System.Array.IndexOf(toolValues, _tool);
@@ -189,22 +191,25 @@ public class SC2GeometryMode
             _win.RecordUndoCheckpointFor(Data, "Change Brush Tool");
             _tool = newTool;
         }
-
-        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
-        SC2TerrainShell.DrawUnifiedSectionLabel("Brush settings");
+        SC2TerrainShell.EndUnifiedPanelBox();
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        SC2ForgeUi.Section("Brush settings");
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
         _radius   = SC2TerrainShell.DrawCompactSlider("Radius",   _radius,   1f, 1000f,
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Radius"));
         _strength = SC2TerrainShell.DrawCompactSlider("Strength", _strength, 0.01f, 1f,
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Strength"));
-        var newScalesWithRadius = EditorGUILayout.ToggleLeft(" Scale strength with radius (Raise/Lower/Smooth)", _strengthScalesWithRadius);
+        _hardness = SC2TerrainShell.DrawCompactSlider("Hardness", _hardness, 0f, 1f,
+            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Hardness"));
+        var newScalesWithRadius = EditorGUILayout.ToggleLeft("Scale strength with radius", _strengthScalesWithRadius);
         if (newScalesWithRadius != _strengthScalesWithRadius)
         {
             _win.RecordUndoCheckpointFor(Data, "Toggle Strength Scales With Radius");
             _strengthScalesWithRadius = newScalesWithRadius;
         }
-        _hardness = SC2TerrainShell.DrawCompactSlider("Hardness", _hardness, 0f, 1f,
-            onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change Brush Hardness"));
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
         SC2TerrainShell.DrawBrushHint();
+        SC2TerrainShell.EndUnifiedPanelBox();
 
         // Irregular stamp brushes (World
         // Machine/Gaea-style grayscale masks) for sculpting, mirroring
@@ -213,8 +218,9 @@ public class SC2GeometryMode
         // SculptSetHeight's brushMask params for where this actually applies.
         // Always the CORE's own _win.Data (not the dynamic Data property) —
         // see this class' own header comment for why.
-        EditorGUILayout.Space(SC2UiScale.Pxf(10f));
-        SC2TerrainShell.DrawUnifiedSectionLabel("Brush shape");
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        SC2ForgeUi.Section("Brush shape");
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
         var brushShapeLabels = new[] { "Round", "Custom" };
         var nextCustomBrush = SC2TerrainShell.DrawUnifiedSegmentGrid(_win.Data.UseCustomGeometryBrush ? 1 : 0, brushShapeLabels, 2) == 1;
         if (nextCustomBrush != _win.Data.UseCustomGeometryBrush)
@@ -247,6 +253,7 @@ public class SC2GeometryMode
                 }
             }
         }
+        SC2TerrainShell.EndUnifiedPanelBox();
 
         if (_tool == Tool.Flatten)
         {
@@ -272,71 +279,54 @@ public class SC2GeometryMode
             EditorGUILayout.EndHorizontal();
         }
 
-        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
-        SC2TerrainShell.DrawUnifiedSectionLabel("Height Adjustments");
-        // Whole-map operations, distinct from the brush tools above (which
-        // only ever touch the area under the cursor) - each rewrites every
-        // vertex in Data.Heights in one shot via SC2TerrainRuntime.
-        // UploadHeightsCPU (the same bulk-write primitive ImportHeightmap
-        // already uses), then syncs Data.Heights back from the runtime the
-        // same way every other mutation here does. Applies to whichever
-        // surface is currently active, same as the brush tools above.
-        _heightScaleFactor = SC2TerrainShell.DrawCompactSlider("Scale Factor", _heightScaleFactor, 0.1f, 5f);
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        SC2ForgeUi.Section("Height adjustments");
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
+        // Whole-map operations, distinct from the brush tools above (which only ever touch the area under the cursor) - each
+        // rewrites every vertex in Data.Heights in one shot via SC2TerrainRuntime.UploadHeightsCPU (the same bulk-write primitive
+        // ImportHeightmap already uses), then syncs Data.Heights back from the runtime the same way every other mutation here does.
+        // Applies to whichever surface is currently active, same as the brush tools above.
+        _heightScaleFactor = SC2TerrainShell.DrawCompactSlider("Scale factor", _heightScaleFactor, 0.1f, 5f);
         EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
-        if (GUILayout.Button("Apply Height Scale"))
+        if (GUILayout.Button("Apply height scale"))
             ApplyHeightTransform(h => h * _heightScaleFactor, "Scale Terrain Height");
         EditorGUI.EndDisabledGroup();
 
         EditorGUILayout.Space(SC2UiScale.Pxf(6f));
-        _heightRaiseOffset = SC2TerrainShell.DrawCompactSlider("Raise/Lower Amount", _heightRaiseOffset, -SC2TerrainData.MaxHeight, SC2TerrainData.MaxHeight);
+        _heightRaiseOffset = SC2TerrainShell.DrawCompactSlider("Raise / lower amount", _heightRaiseOffset, -SC2TerrainData.MaxHeight, SC2TerrainData.MaxHeight);
         EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
-        if (GUILayout.Button("Apply Raise/Lower"))
+        if (SC2EnvFieldGui.PrimaryButton("Apply raise / lower"))
             ApplyHeightTransform(h => h + _heightRaiseOffset, "Raise/Lower Terrain");
         EditorGUI.EndDisabledGroup();
+        SC2TerrainShell.EndUnifiedPanelBox();
 
-        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
-        SC2TerrainShell.DrawUnifiedSectionLabel("Import Heightmap");
-        // Wider range than SC2TerrainData.MaxHeight on purpose: the final
-        // per-vertex height is still clamped to [MinHeight, MaxHeight] by
-        // ImportHeightmap (via SC2TerrainData.ClampHeight), so this slider
-        // isn't a hard height cap — it's a contrast/steepness multiplier
-        // applied to the source image's 0..1 grayscale BEFORE that clamp.
-        // A user asked for this after finding the old MaxHeight-capped range
-        // (512) too narrow to push mid-gray pixels close to full height.
-        _importScale = SC2TerrainShell.DrawCompactSlider("Height Scale", _importScale, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight * 8f);
-        // Free choice of file to import,
-        // not restricted to an already-imported Texture2D project asset —
-        // one shared button/dialog for Editor and Build & Run alike, since
-        // SC2HeightmapExporter.ImportHeights reads the PNG bytes directly
-        // (its own general grayscale decoder, 8- or 16-bit, full precision)
-        // and never touches Unity's Texture2D/AssetDatabase import pipeline
-        // at all — the thing that was silently downgrading precision when
-        // this used to go through a real Texture2D asset.
+        SC2TerrainShell.BeginUnifiedPanelBox();
+        SC2ForgeUi.Section("Heightmap");
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
+        // Wider range than SC2TerrainData.MaxHeight on purpose: the final per-vertex height is still clamped to [MinHeight, MaxHeight]
+        // by ImportHeightmap (via SC2TerrainData.ClampHeight), so this slider isn't a hard height cap - it's a contrast/steepness
+        // multiplier applied to the source image's 0..1 grayscale BEFORE that clamp. A user asked for this after finding the old
+        // MaxHeight-capped range (512) too narrow to push mid-gray pixels close to full height.
+        _importScale = SC2TerrainShell.DrawCompactSlider("Import height scale", _importScale, SC2TerrainData.MinHeight, SC2TerrainData.MaxHeight * 8f);
+        // Free choice of file to import, not restricted to an already-imported Texture2D project asset - one shared button/dialog
+        // for Editor and Build & Run alike, since SC2HeightmapExporter.ImportHeights reads the PNG bytes directly (its own general
+        // grayscale decoder, 8- or 16-bit, full precision) and never touches Unity's Texture2D/AssetDatabase import pipeline at all.
+        // Export is the "read-back" direction: a 16-bit grayscale PNG, one pixel per height GRID VERTEX (see SC2HeightmapExporter's
+        // own doc comment for the exact round-trip contract with Import). It is always the CORE's own map - there is no equivalent
+        // "canonical costs-grid heightmap" for the background.
+        GUILayout.BeginHorizontal();
         EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
-        if (GUILayout.Button("Import Heightmap from file..."))
+        if (GUILayout.Button("Import...", GUILayout.ExpandWidth(true)))
             ImportHeightmapFromFile();
         EditorGUI.EndDisabledGroup();
-        if (!string.IsNullOrEmpty(_lastImportError))
-            SC2TerrainShell.DrawUnifiedNote(_lastImportError);
-
-        EditorGUILayout.Space(SC2UiScale.Pxf(14f));
-        SC2TerrainShell.DrawUnifiedSectionLabel("Export Heightmap");
-        // Same "read-back" direction as Import's "Height Scale" above: a
-        // 16-bit grayscale PNG, one pixel per height GRID VERTEX, intensity
-        // = height normalized across [MinHeight, MaxHeight] — see
-        // SC2HeightmapExporter's own doc comment for the exact round-trip
-        // contract with Import. Works identically in the Editor and a
-        // Build & Run player (plain File.WriteAllBytes, only the save-
-        // location picker differs) so this is one shared button — free
-        // choice of destination folder, same as Import's free choice of
-        // source file. Always the CORE's own map — there is no equivalent
-        // "canonical costs-grid heightmap" for the background (see
-        // ExportHeightmap's own use of TryGetLiveHeightGridSnapshot, which
-        // is core-only), unlike every other control on this panel.
         EditorGUI.BeginDisabledGroup(_win.Data == null || !_win.Data.IsInitialized);
-        if (GUILayout.Button("Export Heightmap..."))
+        if (GUILayout.Button("Export...", GUILayout.ExpandWidth(true)))
             ExportHeightmap();
         EditorGUI.EndDisabledGroup();
+        GUILayout.EndHorizontal();
+        SC2TerrainShell.EndUnifiedPanelBox();
+        if (!string.IsNullOrEmpty(_lastImportError))
+            SC2TerrainShell.DrawUnifiedNote(_lastImportError);
         if (!string.IsNullOrEmpty(_lastExportError))
             SC2TerrainShell.DrawUnifiedNote(_lastExportError);
     }

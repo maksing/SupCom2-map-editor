@@ -559,7 +559,7 @@ public sealed class SC2ReferenceUnitsShell
             GUILayout.BeginHorizontal(GUILayout.MaxWidth(width));
             var selected = unit.Id == _selectedId;
             var label = string.IsNullOrEmpty(unit.DisplayName) ? unit.BlueprintId : unit.DisplayName;
-            if (GUILayout.Toggle(selected, label, GUI.skin.toggle, GUILayout.MaxWidth(nameMaxWidth)))
+            if (GUILayout.Toggle(selected, label, SC2UnifiedSkin.SelectRowStyle, GUILayout.MaxWidth(nameMaxWidth)))
             {
                 if (!selected) _selectedId = unit.Id;
             }

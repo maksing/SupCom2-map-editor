@@ -47,8 +47,8 @@ public static class SC2HotkeysPanel
         var width = Mathf.Clamp(Screen.width - 96f, 520f, 760f);
         var height = Mathf.Clamp(Screen.height - 96f, 420f, 720f);
         var window = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
-        DrawRect(window, new Color(0.075f, 0.082f, 0.098f, 1f));
-        DrawBorder(window, new Color(0.25f, 0.28f, 0.34f, 1f));
+        DrawRect(window, SC2Theme.Bg2);
+        DrawBorder(window, SC2Theme.LineStrong);
 
         const float headerHeight = 40f;
         const float footerHeight = 46f;
@@ -80,14 +80,14 @@ public static class SC2HotkeysPanel
 
     private static void DrawHeader(Rect rect)
     {
-        DrawRect(rect, new Color(0.105f, 0.115f, 0.135f, 1f));
+        DrawRect(rect, SC2Theme.Bg1);
         GUI.Label(new Rect(rect.x + 14f, rect.y + 9f, 220f, 22f), "Edit Hotkeys", Bold());
         if (GUI.Button(new Rect(rect.xMax - 82f, rect.y + 7f, 68f, 26f), "Close")) _open = false;
     }
 
     private static void DrawList(Rect rect)
     {
-        DrawRect(rect, new Color(0.065f, 0.07f, 0.083f, 1f));
+        DrawRect(rect, SC2Theme.Bg0);
         const float rowHeight = 30f;
         const float headerRowHeight = 24f;
 
@@ -268,7 +268,7 @@ public static class SC2HotkeysPanel
 
     private static void DrawFooter(Rect rect)
     {
-        DrawRect(rect, new Color(0.105f, 0.115f, 0.135f, 1f));
+        DrawRect(rect, SC2Theme.Bg1);
 
         if (!_confirmResetAll)
         {
@@ -304,13 +304,13 @@ public static class SC2HotkeysPanel
     {
         if (_styleSkin == GUI.skin && _boldStyle != null) return;
         _styleSkin = GUI.skin;
-        _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 14 };
-        _boldStyle.normal.textColor = Color.white;
-        _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 10 };
-        _miniBoldStyle.normal.textColor = new Color(.62f, .68f, .78f);
-        _rowLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = 12, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
-        _rowLabelStyle.normal.textColor = new Color(.88f, .9f, .94f);
-        _flatButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = 11, alignment = TextAnchor.MiddleCenter };
+        _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Nav };
+        _boldStyle.normal.textColor = SC2Theme.TextBright;
+        _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Caption };
+        _miniBoldStyle.normal.textColor = SC2Theme.TextSecondary;
+        _rowLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
+        _rowLabelStyle.normal.textColor = SC2Theme.TextPrimary;
+        _flatButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleCenter };
         _activeButtonStyle = new GUIStyle(_flatButtonStyle);
         _activeButtonStyle.normal.textColor = Color.white;
         _activeButtonStyle.hover.textColor = Color.white;

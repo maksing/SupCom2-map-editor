@@ -225,7 +225,7 @@ public static class SC2BusyOverlay
         if (_titleStyle != null && Mathf.Approximately(_stylesAtScale, SC2UiScale.Scale)) return;
         _titleStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = SC2UiScale.F(16),
+            fontSize = SC2Type.Title,
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter,
             wordWrap = true,
@@ -233,7 +233,7 @@ public static class SC2BusyOverlay
         _titleStyle.normal.textColor = SC2UnifiedSkin.TextPrimary;
         _detailStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = SC2UiScale.F(12),
+            fontSize = SC2Type.Body,
             alignment = TextAnchor.UpperCenter,
             wordWrap = true,
         };

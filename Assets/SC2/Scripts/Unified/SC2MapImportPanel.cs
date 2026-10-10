@@ -324,7 +324,7 @@ public sealed class SC2MapImportPanel
 
             GUILayout.BeginHorizontal();
             var wasSelected = _selectedCandidate == i;
-            var isSelected = GUILayout.Toggle(wasSelected, "", GUILayout.Width(SC2UiScale.Pxf(20f)));
+            var isSelected = GUILayout.Toggle(wasSelected, "", SC2UnifiedSkin.RadioStyle);
             if (isSelected && !wasSelected) _selectedCandidate = i;
             else if (!isSelected && wasSelected) _selectedCandidate = -1;
             GUILayout.Label($"{c.DisplayName ?? c.BdfStem ?? "(unnamed)"}   [{c.ScenarioEntryPath}]");

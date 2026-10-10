@@ -1195,15 +1195,15 @@ public static class SC2TextureBrowser
     {
         if (_styleSkin == GUI.skin && _boldStyle != null) return;
         _styleSkin = GUI.skin;
-        _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 14 };
-        _boldStyle.normal.textColor = Color.white;
-        _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 10 };
-        _miniBoldStyle.normal.textColor = new Color(.62f, .68f, .78f);
-        _centerMiniStyle = new GUIStyle(GUI.skin.label) { fontSize = 10, alignment = TextAnchor.MiddleCenter, clipping = TextClipping.Clip };
-        _centerMiniStyle.normal.textColor = new Color(.88f, .9f, .94f);
+        _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Nav };
+        _boldStyle.normal.textColor = SC2Theme.TextBright;
+        _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Caption };
+        _miniBoldStyle.normal.textColor = SC2Theme.TextSecondary;
+        _centerMiniStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2Type.Caption, alignment = TextAnchor.MiddleCenter, clipping = TextClipping.Clip };
+        _centerMiniStyle.normal.textColor = SC2Theme.TextPrimary;
         _centerDimStyle = new GUIStyle(_centerMiniStyle);
-        _centerDimStyle.normal.textColor = new Color(.55f, .6f, .68f);
-        _wrapBoldStyle = new GUIStyle(_boldStyle) { fontSize = 12, wordWrap = true };
+        _centerDimStyle.normal.textColor = SC2Theme.TextSecondary;
+        _wrapBoldStyle = new GUIStyle(_boldStyle) { fontSize = SC2Type.Body, wordWrap = true };
         _wrapDimStyle = new GUIStyle(_centerDimStyle) { alignment = TextAnchor.UpperLeft, wordWrap = true };
         _flatButtonStyle = new GUIStyle(GUI.skin.button) { alignment = TextAnchor.MiddleLeft };
         _activeButtonStyle = new GUIStyle(_flatButtonStyle);
@@ -1213,7 +1213,7 @@ public static class SC2TextureBrowser
         // superscript-style glyph that sits high in the em box, so it gets
         // extra top padding to land at the circle's center too.
         _favoriteOffStyle = new GUIStyle(GUI.skin.button)
-            { alignment = TextAnchor.MiddleCenter, padding = new RectOffset(0, 0, 0, 1), fontSize = 12 };
+            { alignment = TextAnchor.MiddleCenter, padding = new RectOffset(0, 0, 0, 1), fontSize = SC2Type.Body };
         _favoriteOnStyle = new GUIStyle(_favoriteOffStyle) { padding = new RectOffset(0, 0, 5, 0) };
     }
     private static GUIStyle FavoriteButton(bool isFavorite) { EnsureStyles(); return isFavorite ? _favoriteOnStyle : _favoriteOffStyle; }

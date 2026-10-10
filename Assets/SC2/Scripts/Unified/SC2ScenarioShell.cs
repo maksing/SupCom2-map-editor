@@ -153,7 +153,7 @@ public sealed class SC2ScenarioShell
         {
             GUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
             var isSelected = Data.PlayableAreaName == zone.Name;
-            var nowSelected = GUILayout.Toggle(isSelected, "", GUILayout.Width(SC2UiScale.Pxf(20f)));
+            var nowSelected = GUILayout.Toggle(isSelected, "", SC2UnifiedSkin.RadioStyle);
             if (nowSelected && !isSelected)
             {
                 _terrainShell.RecordUndoCheckpoint("Set Playable Area");

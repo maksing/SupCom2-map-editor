@@ -19,9 +19,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     // HeaderHeight (used to position _panelRect/_viewportRect below the
     // header) must track the same real total or the left panel/viewport
     // start too high, under where the taller header actually ends.
-    private static float TitleBarHeight => SC2UiScale.Pxf(30f);
-    private static float TabsRowHeight => SC2UiScale.Pxf(34f);
-    private static float SubtabsRowHeight => SC2UiScale.Pxf(28f);
+    private static float TitleBarHeight => SC2UiScale.Pxf(32f);
+    private static float TabsRowHeight => SC2UiScale.Pxf(35.2f);
+    private static float SubtabsRowHeight => SC2UiScale.Pxf(28.8f);
     private static float HeaderHeight => TitleBarHeight + TabsRowHeight + SubtabsRowHeight;
     private static SC2GameViewEditorUI _activeInstance;
 #if !UNITY_EDITOR
@@ -306,13 +306,14 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private bool _showCustomizationMenu;
     private bool _stylesReady;
     private float _stylesLastScale = -1f;
+    private int _stylesLastThemeVersion = -1;
     private bool _menuOverlayBlocksInput;
 
     /// <summary>True while a window that sits above the panels is open: the panels and the viewport take no input then.</summary>
     private bool AnyModalOpen(bool includeTextureBrowser = true)
     {
         var open = (includeTextureBrowser && SC2TextureBrowser.IsOpen) || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false)
-            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2BusyOverlay.IsActive;
+            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2BusyOverlay.IsActive;
 #if !UNITY_EDITOR
         // The runtime confirm dialog only exists in a build (the Editor uses its own dialogs).
         open |= SC2RuntimeConfirm.IsOpen;
@@ -998,6 +999,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private GUIStyle _miniTextStyle;
     private GUIStyle _secondaryTextStyle;
     private GUIStyle _statusPillStyle;
+    private GUIStyle _coordsPillStyle;
+    private Texture2D _statusDotTexture;
     private GUIStyle _cardStyle;
     private GUIStyle _shadowStyle;
     private GUIStyle _logoDotStyle;
@@ -1016,33 +1019,27 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private Texture2D _gizmoBallHollow;
     private Texture2D _gizmoBackdrop;
 
-    // ---- Modern dark palette (deliberately not pure black — a soft graphite/slate tone) ----
-    private static readonly Color ColorBg        = new Color(0.106f, 0.114f, 0.129f, 1f); // base chrome background
-    // Surface/SurfaceHi were only ~0.04 above ColorBg, so ghost-pill buttons
-    // (File/Edit/View tabs, panel buttons) barely read as distinct controls
-    // against the header/panel background. Bumped both up for clear contrast.
-    private static readonly Color ColorSurface   = new Color(0.208f, 0.220f, 0.251f, 1f); // cards / panels / buttons
-    private static readonly Color ColorSurfaceHi = new Color(0.267f, 0.281f, 0.318f, 1f); // hover / elevated
-    private static readonly Color ColorAccent    = new Color(0.357f, 0.576f, 0.929f, 1f); // primary accent (blue)
-    private static readonly Color ColorAccentSoft = new Color(0.357f, 0.576f, 0.929f, 0.16f);
-    private static readonly Color ColorBorder    = new Color(0.34f, 0.365f, 0.415f, 1f);
-    private static readonly Color ColorDivider   = new Color(0.243f, 0.259f, 0.294f, 0.75f);
+    // ---- Palette: the editor-wide SC2Theme (navy panels, grey-blue controls, green accent) ----
+    private static Color ColorBg => SC2Theme.Bg; // base chrome background
+    private static Color ColorSurface => SC2Theme.Button; // buttons / tab pills
+    private static Color ColorSurfaceHi => SC2Theme.ButtonHi; // hover / elevated
+    private static Color ColorAccent => SC2Theme.Accent; // primary accent (blue)
+    private static Color ColorAccentSoft => new Color(SC2Theme.Accent.r, SC2Theme.Accent.g, SC2Theme.Accent.b, 0.16f);
+    private static Color ColorBorder => SC2Theme.LineStrong;
+    private static Color ColorDivider => SC2Theme.Divider;
     private static readonly Color ColorShadow    = new Color(0f, 0f, 0f, 0.28f);
-    private static readonly Color ColorTextPrimary   = new Color(0.90f, 0.92f, 0.95f, 1f);
-    // Used everywhere for notes/help text/inactive-tab labels/status
-    // secondary text — at (0.56, 0.60, 0.67) it read as too close to
-    // ColorBg (0.106) across every tab. Brightened for real readability
-    // while staying visibly dimmer than TextPrimary.
-    private static readonly Color ColorTextSecondary = new Color(0.72f, 0.75f, 0.80f, 1f);
+    private static Color ColorTextPrimary => SC2Theme.TextPrimary;
+    // Used everywhere for notes/help text/inactive-tab labels/status secondary text.
+    private static Color ColorTextSecondary => SC2Theme.TextSecondary;
 
     // Kept for backwards-compatible call sites; mapped onto the new palette.
-    private static readonly Color HeaderColor = new Color(0.106f, 0.114f, 0.129f, 1f);
-    private static readonly Color PanelColor = new Color(0.145f, 0.153f, 0.176f, 1f);
+    private static Color HeaderColor => SC2Theme.Bg;
+    private static Color PanelColor => SC2Theme.Panel;
     private bool _orbiting;
     private bool _panning;
     private bool _flying;
     private Vector2 _lastMouse;
-    private string _mouseMapCoordinates = "Mouse: -";
+    private string _mouseMapCoordinates = "X -   Y -   Z -";
     private Rect _panelRect;
     private Vector2 _panelScroll;
     // Horizontal-only scroll position for DrawSubtabs' compact-mode strip.
@@ -1717,6 +1714,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         SC2TerrainShell.DrawRuntimeTexturePickerOverlay();
         // Same reasoning — must draw last so it stays modal and on top.
         SC2HotkeysPanel.DrawOverlay();
+        SC2ThemePanel.DrawOverlay();
 #if !UNITY_EDITOR
         // Same reasoning for the runtime Popup/ColorField shims (UnityEditorRuntimeShim.cs):
         // their dropdown lists and color palettes are floating overlays that must be
@@ -1896,15 +1894,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // on the texture-liveness check above — this method is only run
         // once lazily (per the "no need to rebuild every frame" reasoning
         // right below), so a scale change needs its own explicit trigger.
-        if (_stylesReady && _headerTexture != null && _gizmoBallSolid != null && _gizmoLabelStyle != null && Mathf.Approximately(_stylesLastScale, SC2UiScale.Scale))
+        if (_stylesReady && _headerTexture != null && _gizmoBallSolid != null && _gizmoLabelStyle != null && Mathf.Approximately(_stylesLastScale, SC2UiScale.Scale) && _stylesLastThemeVersion == SC2Theme.RenderVersion)
             return;
         _stylesLastScale = SC2UiScale.Scale;
+        _stylesLastThemeVersion = SC2Theme.RenderVersion;
 
         _headerTexture = MakeSolidTexture(ColorBg);
         // Panel uses the darker chrome color (same as the header) so that the
         // rounded Surface-colored cards inside it read as elevated elements —
         // one background/card relationship across the whole UI.
-        _panelTexture = MakeSolidTexture(ColorBg);
+        _panelTexture = MakeSolidTexture(PanelColor);
         _buttonTexture = MakeSolidTexture(new Color(1f, 1f, 1f, 0f));
         _activeButtonTexture = MakeSolidTexture(ColorSurfaceHi);
         _hoverTexture = MakeSolidTexture(new Color(1f, 1f, 1f, 0.05f));
@@ -1914,10 +1913,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         // 9-sliced rounded-corner textures: small baked texture + GUIStyle.border so
         // Unity stretches only the flat middle, keeping corners crisp at any size.
-        _cardTexture = MakeRoundedTexture(28, 9, ColorSurface, ColorBorder, 1.25f);
+        _cardTexture = MakeRoundedTexture(28, 9, SC2Theme.Surface, SC2Theme.Line, 1.25f);
         _cardShadowTexture = MakeRoundedTexture(28, 10, ColorShadow, new Color(0, 0, 0, 0), 0f);
         var pillFill = MakeRoundedTexture(24, 12, ColorSurfaceHi, new Color(0, 0, 0, 0), 0f);
-        var pillAccent = MakeRoundedTexture(24, 12, ColorAccent, new Color(0, 0, 0, 0), 0f);
         var pillGhost = MakeRoundedTexture(24, 10, ColorSurface, ColorBorder, 1f);
         var pillHover = MakeRoundedTexture(24, 10, ColorSurfaceHi, ColorBorder, 1f);
 
@@ -1947,7 +1945,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         };
         _titleStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = SC2UiScale.F(13),
+            fontSize = SC2Type.Nav,
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleLeft,
             normal = { textColor = ColorTextPrimary }
@@ -1960,66 +1958,78 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             normal = { background = _accentTexture }
         };
 
-        // Main tabs: flat "ghost" pill that fills with a solid accent pill when active —
-        // a segmented-control look instead of chunky inverse-color toolbar buttons.
-        //
-        // Inactive-tab text used ColorTextSecondary here, which is tuned for
-        // dim/muted text on the darker page background (ColorBg, L≈0.11). But
-        // this text sits on pillGhost (ColorSurface, L≈0.22) — a much LIGHTER
-        // background — where even a bright text color gets nowhere near a
-        // readable contrast ratio; that's the literal "grey text on grey
-        // background" look. Active/inactive is already conveyed by bold weight
-        // + accent fill vs ghost fill, so inactive tab text doesn't need its
-        // own dimmer color too — use full TextPrimary for both states.
+        // Main tabs: flat text on the header; the active one is lit with the panel colour and has the accent line under it.
+        var tabClear = MakeUnderlinedTexture(Color.clear, Color.clear, 0);
+        var tabHover = MakeUnderlinedTexture(new Color(SC2Theme.Bg3.r, SC2Theme.Bg3.g, SC2Theme.Bg3.b, 0.55f), Color.clear, 0);
+        var tabActive = MakeTabGlowTexture(SC2Theme.TabGlowTop, SC2Theme.TabGlowBottom, SC2Theme.TabGlowBottom);
         _tabStyle = new GUIStyle(GUI.skin.button)
         {
-            fixedHeight = SC2UiScale.Pxf(26),
-            fontSize = SC2UiScale.F(11),
+            fixedHeight = TabsRowHeight,
+            fontSize = SC2Type.Nav,
             alignment = TextAnchor.MiddleCenter,
-            border = new RectOffset(10, 10, 10, 10),
-            margin = new RectOffset(2, 2, 6, 6),
+            border = new RectOffset(0, 0, 0, 0),
+            margin = new RectOffset(0, 0, 0, 0),
             padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), 0, 0),
-            normal = { background = pillGhost, textColor = ColorTextPrimary },
-            hover = { background = pillHover, textColor = ColorTextPrimary },
-            active = { background = pillHover, textColor = ColorTextPrimary },
-            focused = { background = pillGhost, textColor = ColorTextPrimary }
+            normal = { background = tabClear, textColor = SC2Theme.TabText },
+            hover = { background = tabHover, textColor = SC2Theme.TextBright },
+            active = { background = tabHover, textColor = SC2Theme.TextBright },
+            focused = { background = tabClear, textColor = SC2Theme.TabText }
         };
         _activeTabStyle = new GUIStyle(_tabStyle)
         {
             fontStyle = FontStyle.Bold,
-            normal = { background = pillAccent, textColor = Color.white },
-            hover = { background = pillAccent, textColor = Color.white },
-            focused = { background = pillAccent, textColor = Color.white }
+            normal = { background = tabActive, textColor = SC2Theme.AccentText },
+            hover = { background = tabActive, textColor = SC2Theme.AccentText },
+            active = { background = tabActive, textColor = SC2Theme.AccentText },
+            focused = { background = tabActive, textColor = SC2Theme.AccentText }
         };
 
-        // Sub-tabs reuse the same segmented look at a slightly smaller scale.
-        // Clipping is a deliberate safety net on top of CompactSubtabLabel's
-        // abbreviations below — a label this method doesn't recognize (e.g.
-        // an unexpected Costs block name) should get visually clipped to its
-        // button's own width instead of bleeding text into the neighbouring
-        // tab, which is what the base tab styles (no clipping set) did.
-        _subtabStyle = new GUIStyle(_tabStyle) { fixedHeight = SC2UiScale.Pxf(22), fontSize = SC2UiScale.F(10), margin = new RectOffset(2, 2, 5, 5), clipping = TextClipping.Clip };
-        _activeSubtabStyle = new GUIStyle(_activeTabStyle) { fixedHeight = SC2UiScale.Pxf(22), fontSize = SC2UiScale.F(10), margin = new RectOffset(2, 2, 5, 5), clipping = TextClipping.Clip };
+        // Sub-tabs: flat text; the active one is a small outlined chip. Clipping is a deliberate safety net on top of
+        // CompactSubtabLabel's abbreviations below — a label this method doesn't recognize (e.g. an unexpected Costs block
+        // name) should get visually clipped to its button's own width instead of bleeding text into the neighbouring tab.
+        var subClear = MakeRoundedTexture(24, 9, Color.clear, Color.clear, 0f);
+        var subHover = MakeRoundedTexture(24, 9, new Color(SC2Theme.Bg3.r, SC2Theme.Bg3.g, SC2Theme.Bg3.b, 0.8f), Color.clear, 0f);
+        var subActive = MakeRoundedTexture(24, 9, SC2Theme.Bg4, ColorBorder, 1f);
+        _subtabStyle = new GUIStyle(GUI.skin.button)
+        {
+            fixedHeight = SC2UiScale.Pxf(22),
+            fontSize = SC2Type.Body,
+            alignment = TextAnchor.MiddleCenter,
+            border = new RectOffset(10, 10, 10, 10),
+            margin = new RectOffset(2, 2, 3, 3),
+            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), 0, 0),
+            clipping = TextClipping.Clip,
+            normal = { background = subClear, textColor = SC2Theme.TabText },
+            hover = { background = subHover, textColor = SC2Theme.TextBright },
+            active = { background = subHover, textColor = SC2Theme.TextBright },
+            focused = { background = subClear, textColor = SC2Theme.TabText }
+        };
+        _activeSubtabStyle = new GUIStyle(_subtabStyle)
+        {
+            normal = { background = subActive, textColor = SC2Theme.TextBright },
+            hover = { background = subActive, textColor = SC2Theme.TextBright },
+            active = { background = subActive, textColor = SC2Theme.TextBright },
+            focused = { background = subActive, textColor = SC2Theme.TextBright }
+        };
 
-        // Menu-bar buttons (File/Edit/View/...): flat text with a soft hover highlight,
-        // not a heavy 3D button — matches menu bars in modern desktop apps.
+        // Menu-bar buttons (File/Edit/View/...): flat text with a soft hover highlight; the open menu's button stays lit.
         _menuBarButtonStyle = new GUIStyle(GUI.skin.button)
         {
             fixedHeight = SC2UiScale.Pxf(24),
-            fontSize = SC2UiScale.F(11),
+            fontSize = SC2Type.Nav,
             alignment = TextAnchor.MiddleCenter,
-            border = new RectOffset(6, 6, 6, 6),
+            border = new RectOffset(10, 10, 10, 10),
             margin = new RectOffset(1, 1, 0, 0),
-            padding = new RectOffset(SC2UiScale.Px(8), SC2UiScale.Px(8), 0, 0),
-            normal = { background = pillGhost, textColor = ColorTextPrimary },
-            hover = { background = pillHover, textColor = ColorTextPrimary },
-            active = { background = pillHover, textColor = ColorTextPrimary },
-            focused = { background = pillGhost, textColor = ColorTextPrimary }
+            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), 0, 0),
+            normal = { background = subClear, textColor = ColorTextPrimary },
+            hover = { background = subHover, textColor = SC2Theme.TextBright },
+            active = { background = subHover, textColor = SC2Theme.TextBright },
+            focused = { background = subClear, textColor = ColorTextPrimary }
         };
         _menuBarButtonActiveStyle = new GUIStyle(_menuBarButtonStyle)
         {
-            normal = { background = pillFill, textColor = ColorTextPrimary },
-            focused = { background = pillFill, textColor = ColorTextPrimary }
+            normal = { background = pillFill, textColor = SC2Theme.TextBright },
+            focused = { background = pillFill, textColor = SC2Theme.TextBright }
         };
 
         // Dropdown menu items: flat list rows with hover highlight instead of default
@@ -2028,7 +2038,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // same lightness issue as the tab pills above) — full TextPrimary.
         _dropdownItemStyle = new GUIStyle(GUI.skin.button)
         {
-            fontSize = SC2UiScale.F(11),
+            fontSize = SC2Type.Body,
             alignment = TextAnchor.MiddleLeft,
             fixedHeight = SC2UiScale.Pxf(22),
             border = new RectOffset(4, 4, 4, 4),
@@ -2040,42 +2050,48 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         };
         _dropdownToggleStyle = new GUIStyle(GUI.skin.toggle)
         {
-            fontSize = SC2UiScale.F(11),
+            fontSize = SC2Type.Body,
             normal = { textColor = ColorTextPrimary },
             onNormal = { textColor = ColorTextPrimary }
         };
         _dropdownSectionLabelStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = SC2UiScale.F(10),
+            fontSize = SC2Type.Caption,
             fontStyle = FontStyle.Bold,
             margin = new RectOffset(0, 0, 4, 2),
-            normal = { textColor = ColorAccent }
+            normal = { textColor = ColorTextSecondary }
         };
 
         _miniTextStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = SC2UiScale.F(11),
+            fontSize = SC2Type.Body,
             normal = { textColor = ColorTextPrimary }
         };
         _secondaryTextStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = SC2UiScale.F(10),
+            fontSize = SC2Type.Caption,
             normal = { textColor = ColorTextSecondary }
         };
+        // The status and the mouse coordinates sit in small bordered pills on the menu bar.
+        var infoPill = MakeRoundedTexture(24, 10, SC2Theme.Bg2, SC2Theme.Line, 1f);
+        _statusDotTexture = MakeRoundedTexture(16, 8, SC2Theme.Green, new Color(0, 0, 0, 0), 0f);
         _statusPillStyle = new GUIStyle(GUI.skin.box)
         {
-            fontSize = SC2UiScale.F(10),
-            alignment = TextAnchor.MiddleCenter,
+            fontSize = SC2Type.Body,
+            alignment = TextAnchor.MiddleLeft,
             border = new RectOffset(9, 9, 9, 9),
-            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), SC2UiScale.Px(2), SC2UiScale.Px(2)),
-            // Clipping as a deliberate safety net (same reasoning as
-            // _subtabStyle/_activeSubtabStyle above) — a status message longer
-            // than this pill's own (deliberately capped, see DrawHeader) width
-            // should clip to its own box instead of overflowing MiddleCenter-
-            // aligned text symmetrically past both edges into the menu bar/
-            // mouse-coordinates label next to it.
+            padding = new RectOffset(SC2UiScale.Px(24), SC2UiScale.Px(10), SC2UiScale.Px(2), SC2UiScale.Px(2)),
+            // Clipping as a deliberate safety net (same reasoning as _subtabStyle/_activeSubtabStyle above) — a status
+            // message longer than this pill's own (deliberately capped, see DrawHeader) width should clip to its own box
+            // instead of overflowing into the menu bar/mouse-coordinates pill next to it.
             clipping = TextClipping.Clip,
-            normal = { background = pillFill, textColor = ColorTextPrimary }
+            normal = { background = infoPill, textColor = SC2Theme.TextBright }
+        };
+        _coordsPillStyle = new GUIStyle(_statusPillStyle)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), SC2UiScale.Px(2), SC2UiScale.Px(2)),
+            normal = { background = infoPill, textColor = SC2Theme.TextPrimary }
         };
         _cardStyle = new GUIStyle(GUIStyle.none)
         {
@@ -2101,7 +2117,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // fragility, can't leave this one in a broken state.
         _gizmoLabelStyle = new GUIStyle
         {
-            fontSize = SC2UiScale.F(11),
+            fontSize = SC2Type.Caption,
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter,
             normal = { textColor = Color.white }
@@ -2193,6 +2209,43 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         return outside + inside;
     }
 
+    /// <summary>The active main tab: a blue-tinted gradient rising to a line at the bottom, stretched over the tab (no 9-slice).</summary>
+    private static Texture2D MakeTabGlowTexture(Color top, Color bottom, Color line)
+    {
+        const int width = 4, height = 64, lineRows = 3;
+        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        for (var y = 0; y < height; y++)
+        {
+            var color = y < lineRows ? line : Color.Lerp(bottom, top, (y - lineRows) / (float)(height - lineRows - 1));
+            for (var x = 0; x < width; x++)
+                tex.SetPixel(x, y, color);
+        }
+        tex.Apply(false, true);
+        return tex;
+    }
+
+    /// <summary>A small texture to be 9-sliced with only a bottom border: <paramref name="fill"/> above a line of <paramref name="lineHeight"/> pixels.</summary>
+    private static Texture2D MakeUnderlinedTexture(Color fill, Color line, int lineHeight)
+    {
+        const int width = 4, height = 8;
+        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+                tex.SetPixel(x, y, y < lineHeight ? line : fill);
+        tex.Apply(false, true);
+        return tex;
+    }
+
     private static Texture2D MakeSolidTexture(Color color)
     {
         var texture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
@@ -2225,8 +2278,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         var titleBarRect = new Rect(0, 0, width, TitleBarHeight);
         var tabsRect = new Rect(0, TitleBarHeight, width, TabsRowHeight);
-        DrawSolidRect(titleBarRect, ColorBg, _headerTexture);
-        DrawSolidRect(tabsRect, ColorBg, _headerTexture);
+        DrawSolidRect(titleBarRect, ColorBg, _dividerTexture);
+        DrawSolidRect(tabsRect, ColorBg, _dividerTexture);
+        DrawSolidRect(new Rect(0, TitleBarHeight - 1, width, 1), ColorDivider, _dividerTexture);
 
         GUILayout.BeginArea(titleBarRect, _headerStyle);
         GUILayout.BeginHorizontal(GUILayout.Height(TitleBarHeight));
@@ -2251,8 +2305,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (showMapName)
             GUILayout.Label(MapName, _secondaryTextStyle, GUILayout.Width(SC2UiScale.Pxf(190f)));
         if (showMouseCoordinates)
-            GUILayout.Label(_mouseMapCoordinates, _secondaryTextStyle, GUILayout.Width(SC2UiScale.Pxf(230f)));
+            GUILayout.Label(_mouseMapCoordinates, _coordsPillStyle, GUILayout.Width(SC2UiScale.Pxf(190f)), GUILayout.Height(SC2UiScale.Pxf(20f)));
+        GUILayout.Space(SC2UiScale.Pxf(6f));
         GUILayout.Label(Status, _statusPillStyle, GUILayout.Width(Mathf.Min(SC2UiScale.Pxf(320f), Mathf.Max(SC2UiScale.Pxf(110f), width * 0.18f))), GUILayout.Height(SC2UiScale.Pxf(20f)));
+        if (Event.current.type == EventType.Repaint && _statusDotTexture != null)
+        {
+            var pill = GUILayoutUtility.GetLastRect();
+            var dot = SC2UiScale.Pxf(8f);
+            GUI.DrawTexture(new Rect(pill.x + SC2UiScale.Pxf(10f), pill.center.y - dot * 0.5f, dot, dot), _statusDotTexture);
+        }
         GUILayout.Space(4);
 
         // Minimize/maximize/close are exclusively the native OS title bar's
@@ -2284,6 +2345,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // instead, same as every other segmented-tab button in this file.
             if (GUILayout.Button(GameMainTabs[i], style))
                 SelectMainTab(i);
+            if (i == _mainTab && Event.current.type == EventType.Repaint)
+            {
+                var tab = GUILayoutUtility.GetLastRect();
+                var lineInset = SC2UiScale.Pxf(10f);
+                var previousColor = GUI.color;
+                GUI.color = SC2Theme.TabLine;
+                GUI.DrawTexture(new Rect(tab.x + lineInset, tab.yMax - SC2UiScale.Pxf(2f), Mathf.Max(1f, tab.width - lineInset * 2f), Mathf.Max(2f, SC2UiScale.Pxf(2f))), _dividerTexture);
+                GUI.color = previousColor;
+            }
         }
         GUILayout.EndHorizontal();
         GUILayout.EndArea();
@@ -2314,7 +2384,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // just on the horizontal axis of the menu BAR itself instead of the
         // vertical axis of an open dropdown's card.
         var style = open ? _menuBarButtonActiveStyle : _menuBarButtonStyle;
-        if (GUILayout.Button(label, style, GUILayout.Width(SC2UiScale.Pxf(width)), GUILayout.Height(SC2UiScale.Pxf(24))))
+        if (GUILayout.Button(label, style, GUILayout.ExpandWidth(false), GUILayout.Height(SC2UiScale.Pxf(22.4f))))
         {
             CloseMenusExcept(label);
             open = !open;
@@ -2322,6 +2392,17 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         if (Event.current.type == EventType.Repaint)
             rect = GUILayoutUtility.GetLastRect();
+    }
+
+    /// <summary>The thin cyan line under the active sub-tab (drawn in the sub-tab area's own coordinates).</summary>
+    private void DrawSubtabLine(Rect button)
+    {
+        if (Event.current.type != EventType.Repaint || _dividerTexture == null) return;
+        var previous = GUI.color;
+        GUI.color = SC2Theme.Cyan;
+        var inset = SC2UiScale.Pxf(6f);
+        GUI.DrawTexture(new Rect(button.x + inset, button.yMax - SC2UiScale.Pxf(2f), Mathf.Max(1f, button.width - inset * 2f), Mathf.Max(2f, SC2UiScale.Pxf(2f))), _dividerTexture);
+        GUI.color = previous;
     }
 
     private void CloseMenusExcept(string label)
@@ -2468,7 +2549,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // this class of bug exists at all. Deliberately generous (this only
         // sizes the background card + hit-test rect, never clips GUILayout
         // content) rather than exactly tuned.
-        var contentHeight = 4 * MenuItemHeight + 260f * SC2UiScale.Scale;
+        var contentHeight = 4 * MenuItemHeight + 260f * SC2UiScale.Factor;
         DrawMenuPanel(_viewMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
             GUILayout.Label("PANELS", _dropdownSectionLabelStyle);
@@ -2535,10 +2616,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// backup snapshots it keeps, not just the timer itself.</summary>
     private void DrawAutosaveMenu()
     {
-        var contentHeight = 1 * MenuItemHeight + 70f * SC2UiScale.Scale;
+        var contentHeight = 1 * MenuItemHeight + 70f * SC2UiScale.Factor;
 #if !UNITY_EDITOR
         // + the Build-only "Backups to keep" field.
-        contentHeight += 16f * SC2UiScale.Scale + MenuItemHeight;
+        contentHeight += 16f * SC2UiScale.Factor + MenuItemHeight;
 #endif
         DrawMenuPanel(_autosaveMenuRect.x, TitleBarHeight, 190, contentHeight, () =>
         {
@@ -2564,9 +2645,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// open, instead of being baked into the .sc2terrain file itself.</summary>
     private void DrawCustomizationMenu()
     {
-        var contentHeight = 1 * MenuItemHeight + 60f * SC2UiScale.Scale;
+        var contentHeight = 1 * MenuItemHeight + 100f * SC2UiScale.Factor;
         DrawMenuPanel(_customizationMenuRect.x, TitleBarHeight, 210, contentHeight, () =>
         {
+            GUILayout.Label("INTERFACE", _dropdownSectionLabelStyle);
+            if (GUILayout.Button("Interface Colors…", GUILayout.Height(SC2UiScale.Pxf(26f))))
+            {
+                SC2ThemePanel.Open();
+                _showCustomizationMenu = false;
+            }
             GUILayout.Label("DECALS", _dropdownSectionLabelStyle);
             var nextColor = EditorGUILayout.ColorField("Marker Color", SC2CustomizationSettings.DecalMarkerColor);
             if (nextColor != SC2CustomizationSettings.DecalMarkerColor) SC2CustomizationSettings.DecalMarkerColor = nextColor;
@@ -2743,7 +2830,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // width scaled here, once, so every Draw*Menu call site's literal
         // width (190/210/220...) gets more room for bigger text at higher
         // UI Scale without each one needing its own edit.
-        var rect = new Rect(x, y + 4, width * SC2UiScale.Scale, contentHeight + MenuChromeHeight);
+        var rect = new Rect(x, y + 4, width * SC2UiScale.Factor, contentHeight + MenuChromeHeight);
         _openMenuRect = rect;
         DrawCard(rect, _cardStyle, drawContent);
     }
@@ -2774,7 +2861,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
         _subTab = Mathf.Clamp(_subTab, 0, tabs.Length - 1);
         var rect = new Rect(0, TitleBarHeight + TabsRowHeight, width, SubtabsRowHeight);
-        DrawSolidRect(rect, ColorBg, _headerTexture);
+        DrawSolidRect(rect, PanelColor, _dividerTexture);
 
         // Same reasoning as the main-tabs row in DrawHeader: an open dropdown's
         // card commonly extends down far enough to cover this whole row, so its
@@ -2850,6 +2937,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 var btnRect = new Rect(i * compactTabWidth + 2f, 0f, compactTabWidth - 4f, rect.height);
                 if (GUI.Button(btnRect, label, style))
                     _subTab = i;
+                if (i == _subTab) DrawSubtabLine(btnRect);
             }
             GUI.EndScrollView();
         }
@@ -2862,6 +2950,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 var requestedWidth = Mathf.Clamp(tabs[i].Length * SC2UiScale.Pxf(9f) + SC2UiScale.Pxf(28f), SC2UiScale.Pxf(78f), SC2UiScale.Pxf(148f));
                 if (GUILayout.Button(tabs[i], style, GUILayout.Width(requestedWidth)))
                     _subTab = i;
+                if (i == _subTab && Event.current.type == EventType.Repaint) DrawSubtabLine(GUILayoutUtility.GetLastRect());
             }
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
@@ -2992,7 +3081,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private void DrawMainPanel(int width, int height)
     {
-        DrawSolidRect(_panelRect, ColorBg, _panelTexture);
+        DrawSolidRect(_panelRect, PanelColor, _dividerTexture);
         DrawSolidRect(new Rect(_panelRect.xMax - 1f, _panelRect.y, 1f, _panelRect.height), ColorDivider, _dividerTexture);
 
         // The area is the whole panel, with no padding of its own: the scrollbar of the one scroll view below has to sit flush
@@ -3072,7 +3161,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// show controls, and the reference-units placement list.</summary>
     private void DrawReferencePanel()
     {
-        DrawSolidRect(_referencePanelRect, ColorBg, _panelTexture);
+        DrawSolidRect(_referencePanelRect, PanelColor, _dividerTexture);
         DrawSolidRect(new Rect(_referencePanelRect.x, _referencePanelRect.y, 1f, _referencePanelRect.height), ColorDivider, _dividerTexture);
 
         // The nav gizmo (_navigationGizmoRect) is drawn AFTER this panel so
@@ -4417,8 +4506,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // 0.30 fraction above still does.
         var minPanelWidthFloor = SC2UiScale.Pxf(240f);
         var minPanelWidth = _mainTab == 3 ? Mathf.Max(minPanelWidthFloor, _objectsShell?.ComputeGroupsPanelMinWidth(_subTab) ?? 0f) : minPanelWidthFloor;
-        var maxPanelWidth = Mathf.Max(minPanelWidth, Mathf.Min(Mathf.Max(SC2UiScale.Pxf(300f), minPanelWidth), width * 0.6f));
-        var panelWidth = Mathf.Clamp(width * 0.30f * SC2UiScale.Scale, minPanelWidth, maxPanelWidth);
+        var maxPanelWidth = Mathf.Max(minPanelWidth, Mathf.Min(Mathf.Max(SC2UiScale.Pxf(272f), minPanelWidth), width * 0.6f));
+        var panelWidth = Mathf.Clamp(width * 0.30f * SC2UiScale.Factor, minPanelWidth, maxPanelWidth);
 
         _panelRect = new Rect(0f, HeaderHeight, panelWidth, Mathf.Max(1f, height - HeaderHeight));
         // Hit-test region for the title bar's right-side cluster (map name +
@@ -4449,7 +4538,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var cam = ResolveCamera();
         if (cam == null || Event.current == null)
         {
-            _mouseMapCoordinates = "Mouse: -";
+            _mouseMapCoordinates = "X -   Y -   Z -";
             return;
         }
 
@@ -4473,7 +4562,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // one pass instead of guessing X/Z first and sampling Y second.
         if (_terrainShell != null && _terrainShell.TryRaycastLiveHeightGrid(ray, out var hit))
         {
-            _mouseMapCoordinates = string.Format("Mouse X:{0:0.0} Y:{1:0.0} Z:{2:0.0}", hit.x, hit.y, hit.z);
+            _mouseMapCoordinates = string.Format(System.Globalization.CultureInfo.InvariantCulture, "X {0:0.0}   Y {1:0.0}   Z {2:0.0}", hit.x, hit.y, hit.z);
             return;
         }
 
@@ -4484,12 +4573,12 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         float enter;
         if (!ground.Raycast(ray, out enter))
         {
-            _mouseMapCoordinates = "Mouse: -";
+            _mouseMapCoordinates = "X -   Y -   Z -";
             return;
         }
 
         var p = ray.GetPoint(enter);
-        _mouseMapCoordinates = string.Format("Mouse X:{0:0.0} Y:{1:0.0} Z:{2:0.0}", p.x, p.y, p.z);
+        _mouseMapCoordinates = string.Format(System.Globalization.CultureInfo.InvariantCulture, "X {0:0.0}   Y {1:0.0}   Z {2:0.0}", p.x, p.y, p.z);
     }
 
     // ── Navigation gizmo (Blender-style viewport axis widget) ───────────────
@@ -6580,7 +6669,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var e = Event.current;
         if (e.type == EventType.Repaint)
         {
-            var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip, fontSize = SC2UiScale.F(11) };
+            var nameStyle = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip, fontSize = SC2Type.Body };
             GUI.Label(nameRect, mat.name, nameStyle);
         }
         if (e.type == EventType.MouseDown && e.button == 0 && nameRect.Contains(e.mousePosition))
@@ -6901,14 +6990,22 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawImportOnlyToggle(SC2TerrainData data, float width)
     {
         var on = data.ImportOnlyMode;
-        var style = new GUIStyle(on ? _activeTabStyle : _tabStyle)
+        // A real button (the skin's own look, with its border), outlined in the accent while the mode is on.
+        var style = new GUIStyle(GUI.skin.button)
         {
             fixedHeight = SC2UiScale.Pxf(38f),
-            fontSize = SC2UiScale.F(12),
+            fontSize = SC2Type.Body,
             fontStyle = FontStyle.Bold,
             margin = new RectOffset(0, 0, 0, 6),
             clipping = TextClipping.Clip,
         };
+        if (on)
+        {
+            style.normal.background = style.onNormal.background;
+            style.hover.background = style.onHover.background;
+            style.normal.textColor = SC2Theme.AccentText;
+            style.hover.textColor = SC2Theme.AccentText;
+        }
         if (GUILayout.Button(on ? "Import-only map: ON" : "Import-only map: OFF", style, GUILayout.Width(width), GUILayout.MaxWidth(width)))
         {
             _terrainShell.RecordUndoCheckpoint("Toggle Import-Only Mode");
@@ -7100,7 +7197,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 // out of sync with the now-explicitly-bigger font's real
                 // per-row height, which is what visually reads as rows
                 // overlapping once scrolled.
-                var rowFontSize = SC2UiScale.F(10);
+                var rowFontSize = SC2Type.Body;
                 var rowHeight = SC2UiScale.Pxf(18f);
                 var listHeight = Mathf.Min(260f, entry.TextureAttempts.Count * rowHeight + 4f);
                 entry.TextureListScroll = GUILayout.BeginScrollView(entry.TextureListScroll, GUILayout.Height(listHeight));

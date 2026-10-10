@@ -2432,12 +2432,15 @@ public class SC2TerrainShell : ScriptableObject
         // have no SC2TerrainData at all. The toolbar must render regardless
         // so those stay usable; only the _data-specific bits below
         // (height-gradient panel, symmetry buttons) stay gated on it.
-        DrawUnifiedSectionLabel("Preview mode");
+        BeginUnifiedPanelBox();
+        SC2ForgeUi.Section("Preview mode");
+        EditorGUILayout.Space(SC2UiScale.Pxf(3f));
         var prev = _prev;
         var nextPrev = (PreviewMode)DrawUnifiedSegmentGrid(
             (int)_prev,
             new[] { "Textured", "RNM", "Mats", "Pairs", "Slope", "Height" },
             3);
+        EndUnifiedPanelBox();
         if (nextPrev != prev)
         {
             // Checkpoint BEFORE _prev is reassigned below — CaptureAuxState()
@@ -2509,9 +2512,7 @@ public class SC2TerrainShell : ScriptableObject
 
     public static void DrawUnifiedSectionLabel(string text)
     {
-        var style = SafeGuiStyle(EditorStyles.miniBoldLabel);
-        style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
-        EditorGUILayout.LabelField(text, style);
+        SC2ForgeUi.Section(text);
         EditorGUILayout.Space(SC2UiScale.Pxf(3f));
     }
 
@@ -2557,8 +2558,8 @@ public class SC2TerrainShell : ScriptableObject
         {
             _unifiedPanelBoxStyle = new GUIStyle(GUIStyle.none)
             {
-                padding = new RectOffset(10, 10, 8, 8),
-                margin = new RectOffset(0, 0, 4, 4),
+                padding = new RectOffset(10, 10, 5, 7),
+                margin = new RectOffset(0, 0, 3, 3),
                 border = SC2UnifiedSkin.CardBorder,
                 normal = { background = SC2UnifiedSkin.CardTexture }
             };
@@ -2583,9 +2584,9 @@ public class SC2TerrainShell : ScriptableObject
         var hovered = rect.Contains(e.mousePosition);
         if (e.type == EventType.Repaint)
         {
-            if (hovered) EditorGUI.DrawRect(rect, new Color(0.20f, 0.25f, 0.32f));
-            var style = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, fontSize = SC2UiScale.F(11) };
-            style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
+            if (hovered) EditorGUI.DrawRect(rect, SC2Theme.Bg4);
+            var style = new GUIStyle(EditorStyles.miniBoldLabel) { alignment = TextAnchor.MiddleLeft, fontSize = SC2Type.Body };
+            style.normal.textColor = SC2Theme.TextBright;
             GUI.Label(rect, (expanded ? "▾  " : "▸  ") + label, style);
         }
         if (e.type == EventType.MouseDown && e.button == 0 && hovered)
@@ -2601,11 +2602,18 @@ public class SC2TerrainShell : ScriptableObject
     /// it); the strength is the one that scrolls.</summary>
     public static void DrawBrushHint()
     {
-        var style = SafeGuiStyle(EditorStyles.miniLabel);
-        style.wordWrap = true;
-        style.fontSize = SC2UiScale.F(10);
-        style.normal.textColor = new Color(0.82f, 0.86f, 0.92f, 1f);
-        GUILayout.Label($"Radius: hold {SC2Hotkeys.Label("Brush.RadiusResizeGesture")} and move the mouse.\nStrength: {SC2Hotkeys.Label("Brush.StrengthScrollModifier")}+Scroll.", style);
+        // F + move: radius      Ctrl + Scroll: strength   (keys as they are bound right now; both are rebindable)
+        GUILayout.BeginHorizontal();
+        SC2ForgeUi.KeyChip(SC2Hotkeys.Label("Brush.RadiusResizeGesture"));
+        SC2ForgeUi.ChipText(" + move: radius");
+        GUILayout.Space(SC2UiScale.Pxf(5f));
+        SC2ForgeUi.KeyChip(SC2Hotkeys.Label("Brush.StrengthScrollModifier"));
+        SC2ForgeUi.ChipText(" +");
+        GUILayout.Space(SC2UiScale.Pxf(3f));
+        SC2ForgeUi.KeyChip("Scroll");
+        SC2ForgeUi.ChipText(" : strength");
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
     }
 
     public static void DrawUnifiedNote(string text)
@@ -2616,7 +2624,7 @@ public class SC2TerrainShell : ScriptableObject
         // This note sits on the card background BeginUnifiedPanelBox() just
         // opened (ColorSurface) — same lightness as the tab pills, so a dim
         // text color here reads as low-contrast "grey on grey" too.
-        style.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
+        style.normal.textColor = SC2Theme.TextPrimary;
         EditorGUILayout.LabelField(text, style);
         EndUnifiedPanelBox();
     }
@@ -2641,59 +2649,39 @@ public class SC2TerrainShell : ScriptableObject
     {
         columns = Mathf.Max(1, columns);
         var rows = Mathf.CeilToInt(labels.Length / (float)columns);
-        // Scaled through SC2UiScale, same as every other fixed row-height
-        // this pass has touched: this grid draws its labels with native
-        // EditorStyles.miniLabel and never gave textStyle an explicit
-        // fontSize, so its text stayed the old small size while every
-        // OTHER control around it (regular buttons, via SC2UnifiedSkin)
-        // grew with Scale — the mismatch is what read as "squished".
-        var rowHeight = SC2UiScale.Pxf(23f);
+        // Each row is its own bordered container; the cells sit inside it, the selected one drawn as an outlined chip.
+        var rowHeight = SC2UiScale.Pxf(26.4f);
+        var rowGap = SC2UiScale.Pxf(4.4f);
         var gridWidth = GetUnifiedContentWidth();
-        var rect = GUILayoutUtility.GetRect(gridWidth, rows * rowHeight, GUILayout.Width(gridWidth), GUILayout.MaxWidth(gridWidth));
+        var rect = GUILayoutUtility.GetRect(gridWidth, rows * rowHeight + (rows - 1) * rowGap, GUILayout.Width(gridWidth), GUILayout.MaxWidth(gridWidth));
         rect.width = Mathf.Max(1f, gridWidth);
 
         var e = Event.current;
-        var normal = new Color(0.184f, 0.192f, 0.219f, 1f);
-        var hover = new Color(0.224f, 0.235f, 0.267f, 1f);
-        var active = new Color(0.357f, 0.576f, 0.929f, 1f);
-        var border = new Color(0.243f, 0.259f, 0.294f, 1f);
-        var textStyle = SafeGuiStyle(EditorStyles.miniLabel);
-        textStyle.alignment = TextAnchor.MiddleCenter;
-        textStyle.clipping = TextClipping.Clip;
-        textStyle.fontSize = SC2UiScale.F(10);
-        // Cell background above (0.184-0.219) is a light-ish pill, same as the
-        // main tab/subtab pills — a dimmer text color there reads as low
-        // contrast "grey on grey". Full near-white instead.
-        textStyle.normal.textColor = new Color(0.90f, 0.92f, 0.95f, 1f);
-        var activeTextStyle = new GUIStyle(textStyle)
+        var inset = SC2UiScale.Pxf(3.5f);
+
+        for (var row = 0; row < rows; row++)
         {
-            fontStyle = FontStyle.Bold,
-            normal = { textColor = Color.white }
-        };
+            var container = new Rect(rect.x, rect.y + row * (rowHeight + rowGap), rect.width, rowHeight);
+            SC2ForgeUi.SegmentContainer(container);
+            var inner = new Rect(container.x + inset, container.y + inset, container.width - inset * 2f, container.height - inset * 2f);
 
-        for (var i = 0; i < labels.Length; i++)
-        {
-            var row = i / columns;
-            var col = i % columns;
-            var cell = new Rect(
-                rect.x + col * rect.width / columns,
-                rect.y + row * rowHeight,
-                rect.width / columns,
-                rowHeight);
-            cell = Rect.MinMaxRect(Mathf.Floor(cell.x), Mathf.Floor(cell.y), Mathf.Floor(cell.xMax), Mathf.Floor(cell.yMax));
-
-            var isActive = i == selected;
-            var isHover = e != null && cell.Contains(e.mousePosition);
-            EditorGUI.DrawRect(cell, isActive ? active : isHover ? hover : normal);
-            EditorGUI.DrawRect(new Rect(cell.xMax - 1f, cell.y, 1f, cell.height), border);
-            EditorGUI.DrawRect(new Rect(cell.x, cell.yMax - 1f, cell.width, 1f), border);
-            GUI.Label(cell, labels[i], isActive ? activeTextStyle : textStyle);
-
-            if (e != null && e.type == EventType.MouseDown && e.button == 0 && cell.Contains(e.mousePosition))
+            for (var col = 0; col < columns; col++)
             {
-                selected = i;
-                GUI.changed = true;
-                e.Use();
+                var i = row * columns + col;
+                if (i >= labels.Length) break;
+                var cell = Rect.MinMaxRect(
+                    Mathf.Floor(inner.x + col * inner.width / columns), inner.y,
+                    Mathf.Floor(inner.x + (col + 1) * inner.width / columns), inner.yMax);
+                var isActive = i == selected;
+                var isHover = e != null && cell.Contains(e.mousePosition);
+                SC2ForgeUi.SegmentCell(cell, labels[i], isActive, isHover);
+
+                if (e != null && e.type == EventType.MouseDown && e.button == 0 && cell.Contains(e.mousePosition))
+                {
+                    selected = i;
+                    GUI.changed = true;
+                    e.Use();
+                }
             }
         }
 
@@ -2877,15 +2865,18 @@ public class SC2TerrainShell : ScriptableObject
         // two together.
         var fieldWidth = SC2UiScale.Pxf(56f);
         var labelStyle = SafeGuiStyle(EditorStyles.miniLabel);
-        labelStyle.fontSize = SC2UiScale.F(10);
+        labelStyle.fontSize = SC2Type.Body;
         EditorGUILayout.LabelField(label, labelStyle, GUILayout.MinWidth(SC2UiScale.Pxf(48f)), GUILayout.MaxWidth(Mathf.Max(SC2UiScale.Pxf(48f), cw - fieldWidth - SC2UiScale.Pxf(4f))));
 
-        var fieldHeight = SC2UiScale.Pxf(18f);
+        var fieldHeight = SC2UiScale.Pxf(16f);
         var fieldRect = GUILayoutUtility.GetRect(fieldWidth, fieldHeight, GUILayout.Width(fieldWidth), GUILayout.Height(fieldHeight));
         var e = Event.current;
         GUI.SetNextControlName(controlName);
         var fieldStyle = SafeGuiStyle(EditorStyles.textField);
-        fieldStyle.fontSize = SC2UiScale.F(10);
+        fieldStyle.fontSize = SC2Type.Body;
+        fieldStyle.alignment = TextAnchor.MiddleRight;
+        fieldStyle.margin = new RectOffset(0, 0, 0, 0);
+        fieldStyle.padding = new RectOffset(SC2UiScale.Px(4), SC2UiScale.Px(6), 0, 0);
         var nextText = GUI.TextField(fieldRect, text, fieldStyle);
         NumericFieldText[key] = nextText;
         RegisterFocusedFieldRect(controlName, fieldRect);
@@ -2919,11 +2910,12 @@ public class SC2TerrainShell : ScriptableObject
 
         EditorGUILayout.EndHorizontal();
         // A little air between the label row and the track.
-        GUILayout.Space(SC2UiScale.Pxf(2f));
+        GUILayout.Space(SC2UiScale.Pxf(1.5f));
 
         EditorGUI.BeginDisabledGroup(focused);
         EditorGUI.BeginChangeCheck();
-        var sliderValue = GUILayout.HorizontalSlider(Round2(value), min, max, GUILayout.Height(SC2UiScale.Pxf(16f)));
+        var sliderRect = GUILayoutUtility.GetRect(0f, SC2UiScale.Pxf(14f), GUILayout.ExpandWidth(true), GUILayout.Height(SC2UiScale.Pxf(14f)));
+        var sliderValue = SC2ForgeUi.Slider(sliderRect, Round2(value), min, max);
         var sliderChanged = EditorGUI.EndChangeCheck();
         EditorGUI.EndDisabledGroup();
 
@@ -3019,8 +3011,8 @@ public class SC2TerrainShell : ScriptableObject
     private static GUIStyle TextureSlotTitleStyle()
     {
         var style = SafeGuiStyle(EditorStyles.miniBoldLabel);
-        style.normal.textColor = new Color(0.55f, 0.78f, 1f);
-        style.fontSize = SC2UiScale.F(11);
+        style.normal.textColor = SC2Theme.TextPrimary;
+        style.fontSize = SC2Type.Body;
         style.wordWrap = false;
         return style;
     }
@@ -3028,8 +3020,8 @@ public class SC2TerrainShell : ScriptableObject
     private static GUIStyle TextureSlotNameStyle()
     {
         var style = SafeGuiStyle(EditorStyles.miniLabel);
-        style.normal.textColor = new Color(0.92f, 0.94f, 0.97f);
-        style.fontSize = SC2UiScale.F(10);
+        style.normal.textColor = SC2Theme.TextPrimary;
+        style.fontSize = SC2Type.Body;
         style.wordWrap = true;
         return style;
     }
@@ -3037,8 +3029,8 @@ public class SC2TerrainShell : ScriptableObject
     private static GUIStyle TextureSlotHintStyle()
     {
         var style = SafeGuiStyle(EditorStyles.miniLabel);
-        style.normal.textColor = new Color(0.62f, 0.66f, 0.72f);
-        style.fontSize = SC2UiScale.F(9);
+        style.normal.textColor = SC2Theme.TextPrimary;
+        style.fontSize = SC2Type.Caption;
         style.wordWrap = true;
         return style;
     }
@@ -3066,7 +3058,7 @@ public class SC2TerrainShell : ScriptableObject
             var empty = new Color(0.86f, 0.33f, 0.33f, 1f);
             EditorGUI.DrawRect(rect, new Color(0.13f, 0.09f, 0.09f, 1f));
             DrawOutline(rect, empty);
-            var noneStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter, fontSize = SC2UiScale.F(9) };
+            var noneStyle = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter, fontSize = SC2Type.Caption };
             noneStyle.normal.textColor = empty;
             GUI.Label(rect, "none", noneStyle);
             letterStyle.normal.textColor = empty;
@@ -3221,7 +3213,7 @@ public class SC2TerrainShell : ScriptableObject
             var textStyle = SafeGuiStyle(EditorStyles.centeredGreyMiniLabel);
             textStyle.alignment = TextAnchor.MiddleCenter;
             textStyle.normal.textColor = new Color(0.85f, 0.18f, 0.18f);
-            textStyle.fontSize = SC2UiScale.F(10);
+            textStyle.fontSize = SC2Type.Body;
             textStyle.wordWrap = true;
             GUI.Label(rect, "Select\ntexture", textStyle);
         }
@@ -3336,7 +3328,7 @@ public class SC2TerrainShell : ScriptableObject
         else
         {
             var fallbackStyle = SafeGuiStyle(EditorStyles.centeredGreyMiniLabel);
-            fallbackStyle.fontSize = SC2UiScale.F(8);
+            fallbackStyle.fontSize = SC2Type.Micro;
             GUI.Label(rect, locked ? "Lock" : "Edit", fallbackStyle);
         }
         if (newLocked != locked) _pathFieldLocked[key] = newLocked;
@@ -3357,7 +3349,7 @@ public class SC2TerrainShell : ScriptableObject
         // scrolling character-by-character. Same fix, same reasoning, as SC2ExportPanel's own
         // ExportDirAreaStyle for the Export Folder path.
         var pathStyle = SafeGuiStyle(EditorStyles.textField);
-        pathStyle.fontSize = SC2UiScale.F(9);
+        pathStyle.fontSize = SC2Type.Caption;
         pathStyle.wordWrap = true;
         var prevEnabled = GUI.enabled;
         GUI.enabled = prevEnabled && !locked;
@@ -3401,7 +3393,7 @@ public class SC2TerrainShell : ScriptableObject
 
         var baseStyle = SafeGuiStyle(EditorStyles.boldLabel);
         baseStyle.alignment = TextAnchor.MiddleCenter;
-        baseStyle.fontSize = SC2UiScale.F(12);
+        baseStyle.fontSize = SC2Type.Body;
         baseStyle.wordWrap = false;
         var size = baseStyle.CalcSize(new GUIContent(text));
         var rect = new Rect(guiPosition.x - size.x * 0.5f - 4f, guiPosition.y - size.y * 0.5f - 14f, size.x + 8f, size.y + 4f);

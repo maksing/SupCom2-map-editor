@@ -934,7 +934,7 @@ public sealed class SC2CostsShell
         for (var i = 0; i < _presets.Count; i++)
         {
             EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-            var selected = GUILayout.Toggle(_activePreset == i, "", GUILayout.Width(SC2UiScale.Pxf(18f)));
+            var selected = GUILayout.Toggle(_activePreset == i, "", SC2UnifiedSkin.RadioStyle);
             if (selected && _activePreset != i)
             {
                 RecordUndo();

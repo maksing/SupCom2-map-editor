@@ -66,11 +66,20 @@ public sealed class SC2ExportPanel
     private bool _exportAsArchives;
 
     private GUIStyle _exportDirAreaStyle;
-    private GUIStyle ExportDirAreaStyle => _exportDirAreaStyle ??= new GUIStyle(EditorStyles.textArea)
+    private GUISkin _exportDirAreaSkin;
+    private GUIStyle ExportDirAreaStyle
     {
-        wordWrap = true,
-        fixedHeight = 0f,
-    };
+        get
+        {
+            // A copy of the skin's text area, so it is taken again when the palette changes and the skin is rebuilt.
+            if (_exportDirAreaStyle == null || _exportDirAreaSkin != GUI.skin)
+            {
+                _exportDirAreaSkin = GUI.skin;
+                _exportDirAreaStyle = new GUIStyle(EditorStyles.textArea) { wordWrap = true, fixedHeight = 0f };
+            }
+            return _exportDirAreaStyle;
+        }
+    }
 
     public SC2ExportPanel(SC2TerrainShell win, SC2TerrainData data)
     {
@@ -214,7 +223,7 @@ public sealed class SC2ExportPanel
 
     private void DrawExportButtons(float w)
     {
-        var btnStyle = new GUIStyle(GUI.skin.button) { fontSize = SC2UiScale.F(14), fontStyle = FontStyle.Bold };
+        var btnStyle = new GUIStyle(GUI.skin.button) { fontSize = SC2Type.Nav, fontStyle = FontStyle.Bold };
         var exportPending = SC2MapPreviewCapture.IsCapturePending;
         var guiEnabledBeforeExport = GUI.enabled;
         GUI.enabled = guiEnabledBeforeExport && !exportPending;

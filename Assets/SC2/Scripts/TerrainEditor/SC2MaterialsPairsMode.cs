@@ -533,7 +533,7 @@ public class SC2PairsMode
             EditorUtility.SetDirty(Data);
         }
         SC2TerrainShell.DrawUnifiedNote("1 = a slope's texture span matches its real 3D surface distance. Higher gives steep cliffs more texture space, for very sharp terrain. Saved with the map; applies to core and background.");
-        if (GUILayout.Button("Recalculate UV1 (fix cliff texture stretching)", GUILayout.Height(SC2UiScale.Pxf(24f))))
+        if (GUILayout.Button("Recalculate UV1", GUILayout.Height(SC2UiScale.Pxf(24f))))
         {
             // Not tied to Bake Lighting (a separate, independent
             // feature/button) — this ONLY refreshes the live preview's
@@ -551,7 +551,7 @@ public class SC2PairsMode
             _win.BackgroundRuntime?.RecalculateUv1(Data.Uv1HeightWeight);
             _win.MarkDirtyAndRepaint();
         }
-        SC2TerrainShell.DrawUnifiedNote("Export always unwraps UV1 by real surface distance. This button only refreshes the editor preview after you reshape the terrain or change the weight; it does not bake or touch lighting.");
+        SC2TerrainShell.DrawUnifiedNote("Fixes cliff texture stretching in the editor preview. Export always unwraps UV1 by real surface distance. This button only refreshes the editor preview after you reshape the terrain or change the weight; it does not bake or touch lighting.");
         SC2TerrainShell.EndUnifiedPanelBox();
     }
 
@@ -712,7 +712,7 @@ public class SC2PairsMode
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
         }
-        if (GUILayout.Button("Assign Unassigned Polygons to This Pair") &&
+        if (GUILayout.Button("Assign unassigned polygons") &&
             EditorUtility.DisplayDialog("Assign", $"Assign every currently-unassigned polygon to '{pair.Name}'?", "Yes", "Cancel"))
         {
             _win.RecordUndoCheckpointFor(Data, "Assign Unassigned Polygons");

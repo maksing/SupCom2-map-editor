@@ -59,7 +59,7 @@ public static class SC2RuntimeQuitConfirm
         int response;
         try
         {
-            response = MessageBoxW(owner, text, "SC2 Map Editor", MB_YESNOCANCEL | MB_ICONWARNING | MB_SYSTEMMODAL);
+            response = MessageBoxW(owner, text, "SupCom2 Map Editor", MB_YESNOCANCEL | MB_ICONWARNING | MB_SYSTEMMODAL);
         }
         finally
         {

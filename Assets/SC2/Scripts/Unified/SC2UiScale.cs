@@ -60,15 +60,28 @@ public static class SC2UiScale
     /// reused — see each class's own "liveness sentinel" comment).</summary>
     public static event Action Changed;
 
+    /// <summary>The size the interface is designed at, relative to the base numbers written in code: the reference layout is about a
+    /// quarter larger than those numbers (14 px menu text where the code says 11), so every size goes through this factor too. The
+    /// View menu's UI Scale then adjusts on top of it, 1.0 meaning the design size.</summary>
+    public const float DesignFactor = 1.25f;
+
+    /// <summary>The scale sizes are actually multiplied by: the user's UI Scale times the design factor.</summary>
+    public static float Factor => Scale * DesignFactor;
+
     /// <summary>Scaled font size for a GUIStyle.fontSize assignment.</summary>
-    public static int F(int baseFontSize) => Mathf.RoundToInt(baseFontSize * Scale);
+    public static int F(int baseFontSize) => Mathf.RoundToInt(baseFontSize * Factor);
 
     /// <summary>Scaled pixel size for a GUILayout.Width(int)/Height(int) call site.</summary>
-    public static int Px(int basePixels) => Mathf.RoundToInt(basePixels * Scale);
+    public static int Px(int basePixels) => Mathf.RoundToInt(basePixels * Factor);
 
     /// <summary>Scaled pixel size for a float-typed field (fixedHeight,
     /// fixedWidth, RectOffset components built from a float, etc.).</summary>
-    public static float Pxf(float basePixels) => basePixels * Scale;
+    public static float Pxf(float basePixels) => basePixels * Factor;
+
+    // The start window keeps its own sizes (they are not part of the editor layout): the user's UI Scale only.
+    public static int FRaw(int baseFontSize) => Mathf.RoundToInt(baseFontSize * Scale);
+    public static int PxRaw(int basePixels) => Mathf.RoundToInt(basePixels * Scale);
+    public static float PxfRaw(float basePixels) => basePixels * Scale;
 
     private static GUIStyle _popupStyle;
     private static float _popupStyleBuiltAtScale = -1f;
@@ -95,7 +108,7 @@ public static class SC2UiScale
             }
             try { _popupStyle = basis != null ? new GUIStyle(basis) : new GUIStyle(); }
             catch (System.NullReferenceException) { _popupStyle = new GUIStyle(); }
-            _popupStyle.fontSize = F(11);
+            _popupStyle.fontSize = SC2Type.Body;
             _popupStyleBuiltAtScale = Scale;
         }
         return _popupStyle;

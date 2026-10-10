@@ -2,7 +2,7 @@ using UnityEngine;
 
 /// <summary>
 /// Runtime-generated dark GUISkin matching the SC2 Game View top panel
-/// (graphite background, rounded "pill" buttons, blue accent).
+/// (Forge Steel palette: dark blue-grey surfaces, rounded buttons, blue accent; see SC2Theme).
 ///
 /// Applied by SC2GameViewEditorUI around all overlay drawing, so every
 /// GUILayout.Button / TextField / Toggle / HorizontalSlider used anywhere
@@ -16,29 +16,25 @@ using UnityEngine;
 /// </summary>
 public static class SC2UnifiedSkin
 {
-    // ---- Palette (kept in sync with SC2GameViewEditorUI) ----
-    public static readonly Color Bg            = new Color(0.106f, 0.114f, 0.129f, 1f);
-    // Kept in sync with SC2GameViewEditorUI.ColorSurface/ColorSurfaceHi/ColorBorder:
-    // both were only ~0.04 above Bg, so buttons/fields barely read as distinct
-    // controls against the dark background. Bumped up for clear contrast.
-    public static readonly Color Surface       = new Color(0.208f, 0.220f, 0.251f, 1f);
-    public static readonly Color SurfaceHi     = new Color(0.267f, 0.281f, 0.318f, 1f);
-    public static readonly Color Accent        = new Color(0.357f, 0.576f, 0.929f, 1f);
-    public static readonly Color AccentDim     = new Color(0.294f, 0.475f, 0.766f, 1f);
-    public static readonly Color Border        = new Color(0.34f, 0.365f, 0.415f, 1f);
-    public static readonly Color TextPrimary   = new Color(0.90f, 0.92f, 0.95f, 1f);
+    // ---- Palette (SC2Theme; SC2GameViewEditorUI reads the same values) ----
+    public static Color Bg => SC2Theme.Bg;
+    // Surface/SurfaceHi are the button fills; the cards are SC2Theme.Surface.
+    public static Color Surface => SC2Theme.Button;
+    public static Color SurfaceHi => SC2Theme.ButtonHi;
+    public static Color Accent => SC2Theme.Accent;
+    public static Color AccentDim => SC2Theme.AccentPressed;
+    public static Color Border => SC2Theme.LineStrong;
+    public static Color TextPrimary => SC2Theme.TextPrimary;
     // Also used by GUI.skin.box's textColor below, which is what the runtime
     // EditorGUILayout.HelpBox shim renders with (GUILayout.Label(msg,
-    // GUI.skin.box)) — i.e. every "placeholder"/help/note box across every
-    // tab. At (0.56, 0.60, 0.67) that read as blending into the dark
-    // background; brightened to match SC2GameViewEditorUI.ColorTextSecondary.
-    public static readonly Color TextSecondary = new Color(0.72f, 0.75f, 0.80f, 1f);
+    // GUI.skin.box)) — i.e. every "placeholder"/help/note box across every tab.
+    public static Color TextSecondary => SC2Theme.TextSecondary;
 
     // Scaled through SC2UiScale (View menu > UI Scale) instead of fixed
     // constants — see SC2UiScale's own doc comment for why this project
     // scales real layout numbers rather than a GUI.matrix transform.
-    public static int FontSizeBody => SC2UiScale.F(11);
-    public static int FontSizeMini => SC2UiScale.F(10);
+    public static int FontSizeBody => SC2Type.Body;
+    public static int FontSizeMini => SC2Type.Caption;
 
     static SC2UnifiedSkin()
     {
@@ -50,9 +46,11 @@ public static class SC2UnifiedSkin
     }
 
     private static GUISkin _skin;
+    private static int _builtThemeVersion = -1;
     private static Texture2D _pillGhost;
     private static Texture2D _pillHover;
     private static Texture2D _pillActive;
+    private static Texture2D _pillSelected;
     private static Texture2D _fieldNormal;
     private static Texture2D _fieldFocused;
     private static Texture2D _toggleOff;
@@ -64,6 +62,22 @@ public static class SC2UnifiedSkin
     private static Texture2D _scrollTrack;
     private static Texture2D _scrollThumb;
     private static Texture2D _card;
+    private static Texture2D _radioOff;
+    private static Texture2D _radioOffHover;
+    private static Texture2D _radioOn;
+    private static GUIStyle _selectRow;
+    private static GUIStyle _radio;
+    private static GUIStyle _smallButton;
+
+    /// <summary>A compact button for dense rows (filter chips): caption-sized text and tight padding.</summary>
+    public static GUIStyle SmallButtonStyle { get { Ensure(); return _smallButton; } }
+
+    /// <summary>A row the user picks from a list (armies, zones, units): a left-aligned pill that is outlined in the accent while it is
+    /// the selected one. Use it with GUILayout.Toggle where the state means "this row is the current one", not an on/off option.</summary>
+    public static GUIStyle SelectRowStyle { get { Ensure(); return _selectRow; } }
+
+    /// <summary>A round one-of-many selector with no label of its own (the row's text sits beside it).</summary>
+    public static GUIStyle RadioStyle { get { Ensure(); return _radio; } }
 
     /// <summary>9-sliced rounded card texture, shared with panel boxes.</summary>
     public static Texture2D CardTexture { get { Ensure(); return _card; } }
@@ -85,7 +99,7 @@ public static class SC2UnifiedSkin
         // _pillGhost doubles as the "textures alive" sentinel: if Unity killed
         // the baked textures, every style in the skin is pointing at dead
         // objects and the whole thing must be rebuilt, not patched.
-        if (_skin != null && _pillGhost != null)
+        if (_skin != null && _pillGhost != null && _builtThemeVersion == SC2Theme.RenderVersion)
             return;
 
         Build();
@@ -93,20 +107,25 @@ public static class SC2UnifiedSkin
 
     private static void Build()
     {
+        _builtThemeVersion = SC2Theme.RenderVersion;
         _pillGhost        = Rounded(24, 10, Surface, Border, 1f);
         _pillHover        = Rounded(24, 10, SurfaceHi, Border, 1f);
-        _pillActive       = Rounded(24, 10, Accent, new Color(0, 0, 0, 0), 0f);
-        _fieldNormal      = Rounded(20, 6, new Color(0.09f, 0.096f, 0.11f, 1f), Border, 1f);
-        _fieldFocused     = Rounded(20, 6, new Color(0.09f, 0.096f, 0.11f, 1f), Accent, 1.25f);
-        _toggleOff        = Rounded(16, 4, new Color(0.09f, 0.096f, 0.11f, 1f), Border, 1.25f);
-        _toggleOffHover   = Rounded(16, 4, SurfaceHi, Border, 1.25f);
-        _toggleOn         = Rounded(16, 4, Accent, new Color(0, 0, 0, 0), 0f);
-        _sliderTrack      = Rounded(12, 5, new Color(0.09f, 0.096f, 0.11f, 1f), Border, 1f);
-        _sliderThumb      = Rounded(16, 8, Accent, new Color(0, 0, 0, 0), 0f);
-        _sliderThumbHover = Rounded(16, 8, AccentDim, new Color(0, 0, 0, 0), 0f);
+        _pillActive       = Rounded(24, 10, SC2Theme.AccentPressed, new Color(0, 0, 0, 0), 0f);
+        _pillSelected     = Rounded(24, 10, SC2Theme.SelectedFillOver(Surface), SC2Theme.SelectedBorderOver(Surface), 1.25f);
+        _fieldNormal      = Rounded(20, 6, SC2Theme.FieldFill, Border, 1f);
+        _fieldFocused     = Rounded(20, 6, SC2Theme.FieldFill, SC2Theme.AccentHover, 1.25f);
+        _toggleOff        = SwitchTexture(on: false, hover: false);
+        _toggleOffHover   = SwitchTexture(on: false, hover: true);
+        _toggleOn         = SwitchTexture(on: true, hover: false);
+        _sliderTrack      = Rounded(12, 5, SC2Theme.SliderTrack, SC2Theme.SliderTrack, 0f);
+        _sliderThumb      = Rounded(16, 8, Accent, Color.white, 1.5f);
+        _sliderThumbHover = Rounded(16, 8, SC2Theme.AccentHover, Color.white, 1.5f);
         _scrollTrack      = Solid(new Color(0f, 0f, 0f, 0.15f));
-        _scrollThumb      = Rounded(12, 5, SurfaceHi, new Color(0, 0, 0, 0), 0f);
-        _card             = Rounded(28, 9, Surface, Border, 1.25f);
+        _scrollThumb      = Rounded(12, 5, SC2Theme.LineStrong, new Color(0, 0, 0, 0), 0f);
+        _card             = Rounded(28, 9, SC2Theme.Surface, SC2Theme.Line, 1.25f);
+        _radioOff         = RadioTexture(on: false, hover: false);
+        _radioOffHover    = RadioTexture(on: false, hover: true);
+        _radioOn          = RadioTexture(on: true, hover: false);
 
         var baseSkin = GUI.skin != null ? GUI.skin : ScriptableObject.CreateInstance<GUISkin>();
         _skin = Object.Instantiate(baseSkin);
@@ -118,7 +137,7 @@ public static class SC2UnifiedSkin
         // doesn't end up visually cramped inside an unscaled pill/field —
         // border/corner-radius bake parameters above are left fixed
         // (cosmetic, reads fine unscaled at any of Scale's 1x-2x range).
-        var buttonPadding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), SC2UiScale.Px(4), SC2UiScale.Px(4));
+        var buttonPadding = new RectOffset(SC2UiScale.Px(6), SC2UiScale.Px(6), SC2UiScale.Px(5), SC2UiScale.Px(5));
         var fieldPadding = new RectOffset(SC2UiScale.Px(7), SC2UiScale.Px(7), SC2UiScale.Px(3), SC2UiScale.Px(3));
         var togglePadding = new RectOffset(SC2UiScale.Px(20), SC2UiScale.Px(4), SC2UiScale.Px(2), SC2UiScale.Px(2));
         var boxPadding = new RectOffset(SC2UiScale.Px(8), SC2UiScale.Px(8), SC2UiScale.Px(6), SC2UiScale.Px(6));
@@ -139,17 +158,20 @@ public static class SC2UnifiedSkin
         _skin.button = new GUIStyle()
         {
             fontSize = FontSizeBody,
+            fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter,
+            // Text that does not fit is cut at the button's edge instead of spilling out of it.
+            clipping = TextClipping.Clip,
             border = pillBorder,
             margin = new RectOffset(2, 2, 2, 2),
             padding = buttonPadding,
-            normal   = { background = _pillGhost,  textColor = TextPrimary },
-            hover    = { background = _pillHover,  textColor = TextPrimary },
-            active   = { background = _pillActive, textColor = Color.white },
-            focused  = { background = _pillHover,  textColor = TextPrimary },
-            onNormal = { background = _pillActive, textColor = Color.white },
-            onHover  = { background = _pillActive, textColor = Color.white },
-            onActive = { background = _pillActive, textColor = Color.white }
+            normal   = { background = _pillGhost,  textColor = SC2Theme.TextBright },
+            hover    = { background = _pillHover,  textColor = SC2Theme.TextBright },
+            active   = { background = _pillActive, textColor = SC2Theme.TextOnAccent },
+            focused  = { background = _pillHover,  textColor = SC2Theme.TextBright },
+            onNormal = { background = _pillSelected, textColor = SC2Theme.AccentText },
+            onHover  = { background = _pillSelected, textColor = SC2Theme.AccentText },
+            onActive = { background = _pillSelected, textColor = SC2Theme.AccentText }
         };
 
         _skin.label = new GUIStyle()
@@ -178,17 +200,56 @@ public static class SC2UnifiedSkin
         _skin.toggle = new GUIStyle()
         {
             fontSize = FontSizeBody,
-            border = new RectOffset(4, 4, 4, 4),
-            padding = togglePadding,
+            alignment = TextAnchor.MiddleLeft,
+            // The switch is baked into the left of the texture and kept unstretched by the left border; the rest of the
+            // control (the label) stays transparent.
+            border = new RectOffset(SwitchWidth + 4, 2, 12, 12),
+            // The control has to be at least as tall as the switch texture (24 px, kept unstretched by its 12 px top and bottom
+            // borders), or Unity squeezes the borders and the switch comes out flat.
+            padding = new RectOffset(SwitchWidth + SC2UiScale.Px(10), SC2UiScale.Px(4), SC2UiScale.Px(5), SC2UiScale.Px(5)),
             margin = new RectOffset(2, 2, 2, 2),
-            normal   = { background = _toggleOff,      textColor = TextSecondary },
-            hover    = { background = _toggleOffHover, textColor = TextPrimary },
-            active   = { background = _toggleOffHover, textColor = TextPrimary },
-            focused  = { background = _toggleOff,      textColor = TextSecondary },
-            onNormal = { background = _toggleOn,       textColor = TextPrimary },
-            onHover  = { background = _toggleOn,       textColor = TextPrimary },
-            onActive = { background = _toggleOn,       textColor = TextPrimary },
-            onFocused = { background = _toggleOn,      textColor = TextPrimary }
+            normal   = { background = _toggleOff,      textColor = SC2Theme.TextPrimary },
+            hover    = { background = _toggleOffHover, textColor = SC2Theme.TextBright },
+            active   = { background = _toggleOffHover, textColor = SC2Theme.TextBright },
+            focused  = { background = _toggleOff,      textColor = SC2Theme.TextPrimary },
+            onNormal = { background = _toggleOn,       textColor = SC2Theme.TextBright },
+            onHover  = { background = _toggleOn,       textColor = SC2Theme.TextBright },
+            onActive = { background = _toggleOn,       textColor = SC2Theme.TextBright },
+            onFocused = { background = _toggleOn,      textColor = SC2Theme.TextBright }
+        };
+
+        _selectRow = new GUIStyle(_skin.button)
+        {
+            alignment = TextAnchor.MiddleLeft,
+            fontStyle = FontStyle.Normal,
+            clipping = TextClipping.Clip,
+            wordWrap = false,
+            padding = new RectOffset(SC2UiScale.Px(10), SC2UiScale.Px(10), SC2UiScale.Px(4), SC2UiScale.Px(4)),
+        };
+        _selectRow.normal.textColor = SC2Theme.TextPrimary;
+        _selectRow.onNormal.textColor = SC2Theme.AccentText;
+        _selectRow.onHover.textColor = SC2Theme.AccentText;
+        _selectRow.onActive.textColor = SC2Theme.AccentText;
+
+        _smallButton = new GUIStyle(_skin.button)
+        {
+            fontSize = FontSizeMini,
+            padding = new RectOffset(SC2UiScale.Px(3), SC2UiScale.Px(3), SC2UiScale.Px(2), SC2UiScale.Px(2)),
+        };
+
+        _radio = new GUIStyle()
+        {
+            fixedWidth = SC2UiScale.Pxf(20f),
+            fixedHeight = SC2UiScale.Pxf(20f),
+            margin = new RectOffset(2, 2, 2, 2),
+            normal    = { background = _radioOff },
+            hover     = { background = _radioOffHover },
+            active    = { background = _radioOffHover },
+            focused   = { background = _radioOff },
+            onNormal  = { background = _radioOn },
+            onHover   = { background = _radioOn },
+            onActive  = { background = _radioOn },
+            onFocused = { background = _radioOn }
         };
 
         _skin.horizontalSlider = new GUIStyle()
@@ -240,6 +301,82 @@ public static class SC2UnifiedSkin
             thumb.hover.background = _scrollThumb;
             thumb.active.background = _scrollThumb;
         }
+    }
+
+    private const int SwitchWidth = 32;
+
+    /// <summary>The on/off switch of a toggle: a 32 x 16 pill with a knob, at the left of a 44 x 24 texture (the rest is clear).</summary>
+    private static Texture2D SwitchTexture(bool on, bool hover)
+    {
+        const int width = SwitchWidth + 12, height = 24;
+        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+        var trackFill = on ? (hover ? SC2Theme.AccentHover : Accent) : (hover ? SC2Theme.Bg1 : SC2Theme.FieldFill);
+        var trackBorder = on ? trackFill : SC2Theme.LineStrong;
+        var knobColor = on ? Color.white : SC2Theme.TextSecondary;
+        const float trackLeft = 2f, trackWidth = SwitchWidth - 2f, trackHeight = 16f, trackBottom = 4f, knobRadius = 5.5f;
+        var knobCenterX = on ? trackLeft + trackWidth - 8f : trackLeft + 8f;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var px = x + 0.5f; var py = y + 0.5f;
+                // Signed distance to the pill-shaped track (a capsule whose radius is half its height).
+                var cx = trackLeft + trackWidth * 0.5f; var cy = trackBottom + trackHeight * 0.5f;
+                var radius = trackHeight * 0.5f;
+                var halfLength = trackWidth * 0.5f - radius;
+                var ex = Mathf.Max(Mathf.Abs(px - cx) - halfLength, 0f); var ey = py - cy;
+                var d = Mathf.Sqrt(ex * ex + ey * ey) - radius;
+                var coverage = Mathf.Clamp01(0.5f - d);
+                var color = Color.Lerp(trackFill, trackBorder, Mathf.Clamp01(0.5f + d + 1f));
+                color.a *= coverage;
+                // The knob on top.
+                var kd = Mathf.Sqrt((px - knobCenterX) * (px - knobCenterX) + (py - cy) * (py - cy)) - knobRadius;
+                var kc = Mathf.Clamp01(0.5f - kd);
+                if (kc > 0f)
+                {
+                    color = Color.Lerp(color, knobColor, kc);
+                    color.a = Mathf.Max(color.a, kc);
+                }
+                tex.SetPixel(x, y, color);
+            }
+        }
+        tex.Apply(false, true);
+        return tex;
+    }
+
+    /// <summary>A round selector: a ring, with a filled centre in the accent when it is the chosen one.</summary>
+    private static Texture2D RadioTexture(bool on, bool hover)
+    {
+        const int size = 32;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+        var ringColor = on ? Accent : (hover ? SC2Theme.AccentHover : SC2Theme.LineStrong);
+        var fill = hover && !on ? SC2Theme.Bg1 : SC2Theme.FieldFill;
+        const float center = size * 0.5f, outer = size * 0.5f - 2f, ringWidth = 2.5f, dot = size * 0.2f;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var d = Mathf.Sqrt((x + 0.5f - center) * (x + 0.5f - center) + (y + 0.5f - center) * (y + 0.5f - center));
+                var coverage = Mathf.Clamp01(outer - d + 0.5f);
+                var color = Color.Lerp(fill, ringColor, Mathf.Clamp01(d - (outer - ringWidth) + 0.5f));
+                if (on)
+                    color = Color.Lerp(color, Accent, Mathf.Clamp01(dot - d + 0.5f));
+                color.a = coverage;
+                tex.SetPixel(x, y, color);
+            }
+        }
+        tex.Apply(false, true);
+        return tex;
     }
 
     private static Texture2D Solid(Color color)

@@ -49,6 +49,7 @@ public sealed class SC2UnitPropBrowser
     private const string PropViewPrefsKey = "SC2.PropBrowserView";
     private bool _favoritesOnly;
     private GUIStyle _favoriteStarStyle;
+    private GUISkin _favoriteStarSkin;
 
     private string _search = string.Empty;
     private bool _showUnavailable;
@@ -937,8 +938,8 @@ public sealed class SC2UnitPropBrowser
     {
         var rect = new Rect(previewRect.x + 3f, previewRect.y + 3f, 44f, 17f);
         DrawRect(rect, destructable ? new Color(0.82f, 0.42f, 0.12f, 0.95f) : new Color(0.07f, 0.08f, 0.1f, 0.8f));
-        _badgeStyle ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 10, fontStyle = FontStyle.Bold, clipping = TextClipping.Clip, padding = new RectOffset(0, 0, 0, 0) };
-        _badgeStyle.normal.textColor = destructable ? Color.white : new Color(0.7f, 0.74f, 0.8f);
+        _badgeStyle ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = SC2Type.Micro, fontStyle = FontStyle.Bold, clipping = TextClipping.Clip, padding = new RectOffset(0, 0, 0, 0) };
+        _badgeStyle.normal.textColor = SC2Theme.TextBright;
         GUI.Label(rect, new GUIContent(destructable ? "Breaks" : "Solid", destructable ? "Destructible: breaks when a unit or a shot reaches it" : "Not destructible: stays standing"), _badgeStyle);
     }
 
@@ -946,6 +947,7 @@ public sealed class SC2UnitPropBrowser
     {
         var starRect = new Rect(previewRect.xMax - 22f, previewRect.y + 3f, 19f, 19f);
         bool favorite = IsFavorite(entry);
+        if (_favoriteStarSkin != GUI.skin) { _favoriteStarSkin = GUI.skin; _favoriteStarStyle = null; }
         _favoriteStarStyle ??= new GUIStyle(GUI.skin.button) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold, padding = new RectOffset(0, 0, 0, 0) };
         var previousColor = GUI.backgroundColor;
         GUI.backgroundColor = favorite ? new Color(1f, 0.82f, 0.2f, 1f) : previousColor;
@@ -1101,7 +1103,7 @@ public sealed class SC2UnitPropBrowser
         return string.IsNullOrEmpty(result) ? null : result;
     }
 
-    private GUIStyle TitleStyle => _titleStyle ??= new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = 14, normal = { textColor = Color.white } };
+    private GUIStyle TitleStyle => _titleStyle ??= new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Nav, normal = { textColor = Color.white } };
     private GUIStyle CardLabelStyle => _cardLabelStyle ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, wordWrap = false, clipping = TextClipping.Clip };
     private GUIStyle CardStateReadyStyle => _cardStateReadyStyle ??= new GUIStyle(CardLabelStyle) { normal = { textColor = new Color(0.42f, 0.9f, 0.55f) } };
     private GUIStyle CardStateIssueStyle => _cardStateIssueStyle ??= new GUIStyle(CardLabelStyle) { normal = { textColor = new Color(1f, 0.62f, 0.28f) } };

@@ -35,6 +35,43 @@ public static class SC2RuntimeWindow
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_FRAMECHANGED = 0x0020;
 
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
+
+    /// <summary>Dark title bar to go with the dark interface: the dark-mode flag (Windows 10 2004 and later) and, where Windows 11 allows
+    /// it, the caption, text and border colours of the theme. Anything the system does not know is quietly ignored.</summary>
+    private static void ApplyDarkTitleBar(IntPtr hWnd)
+    {
+        try
+        {
+            var dark = 1;
+            if (DwmSetWindowAttribute(hWnd, 20, ref dark, sizeof(int)) != 0)
+                DwmSetWindowAttribute(hWnd, 19, ref dark, sizeof(int));
+            var caption = ColorRef(SC2Theme.Bg1);
+            DwmSetWindowAttribute(hWnd, 35, ref caption, sizeof(int));
+            var text = ColorRef(SC2Theme.TextPrimary);
+            DwmSetWindowAttribute(hWnd, 36, ref text, sizeof(int));
+            var border = ColorRef(SC2Theme.Line);
+            DwmSetWindowAttribute(hWnd, 34, ref border, sizeof(int));
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[SC2RuntimeWindow] could not set the dark title bar: {ex.Message}");
+        }
+    }
+
+    private static void RefreshTitleBarColors()
+    {
+        var hWnd = ResolveWindowHandle();
+        if (hWnd != IntPtr.Zero) ApplyDarkTitleBar(hWnd);
+    }
+
+    /// <summary>A Windows COLORREF (0x00BBGGRR).</summary>
+    private static int ColorRef(Color color)
+    {
+        var c = (Color32)color;
+        return c.r | (c.g << 8) | (c.b << 16);
+    }
+
     [DllImport("user32.dll")] private static extern IntPtr GetActiveWindow();
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
@@ -108,6 +145,9 @@ public static class SC2RuntimeWindow
             style |= WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_THICKFRAME;
             SetWindowStyle(hWnd, style);
             SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            ApplyDarkTitleBar(hWnd);
+            // The caption colours come from the palette, so they follow it when the user changes a colour.
+            SC2Theme.Applied += RefreshTitleBarColors;
             _nativeMaximizeApplied = true;
             return true;
         }

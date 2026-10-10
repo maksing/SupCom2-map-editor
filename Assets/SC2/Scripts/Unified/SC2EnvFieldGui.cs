@@ -63,13 +63,13 @@ public static class SC2EnvFieldGui
         return result;
     }
 
-    private static GUIStyle Label => SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2UiScale.F(10));
+    private static GUIStyle Label => SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2Type.Body);
 
     private static GUIStyle BoldLabel
     {
         get
         {
-            var s = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2UiScale.F(11));
+            var s = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2Type.Body);
             s.fontStyle = FontStyle.Bold;
             return s;
         }
@@ -79,8 +79,8 @@ public static class SC2EnvFieldGui
     {
         get
         {
-            var s = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2UiScale.F(9));
-            s.normal.textColor = new Color(0.75f, 0.78f, 0.82f, 1f);
+            var s = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2Type.Caption);
+            s.normal.textColor = SC2Theme.TextSecondary;
             return s;
         }
     }
@@ -89,7 +89,7 @@ public static class SC2EnvFieldGui
     {
         get
         {
-            var s = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2UiScale.F(10));
+            var s = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2Type.Body);
             s.wordWrap = true;
             return s;
         }
@@ -105,7 +105,18 @@ public static class SC2EnvFieldGui
         GUILayout.Label(text, WrapLabelStyle, GUILayout.Width(Mathf.Max(20f, width)));
     }
 
-    private static GUIStyle TextFieldStyle => SafeStyle(GUI.skin != null ? GUI.skin.textField : null, SC2UiScale.F(10));
+    private static GUIStyle TextFieldStyle => SafeStyle(GUI.skin != null ? GUI.skin.textField : null, SC2Type.Body);
+
+    /// <summary>The numeric boxes show their value at the right edge, as in the reference.</summary>
+    private static GUIStyle NumberFieldStyle
+    {
+        get
+        {
+            var style = TextFieldStyle;
+            style.alignment = TextAnchor.MiddleRight;
+            return style;
+        }
+    }
 
     private static Texture2D _whitePixel;
     private static Texture2D WhitePixel
@@ -122,7 +133,7 @@ public static class SC2EnvFieldGui
         }
     }
 
-    private static readonly Color BorderColor = new Color(0.35f, 0.37f, 0.40f, 1f);
+    private static Color BorderColor => SC2Theme.LineStrong;
 
     private static void FillRect(Rect r, Color c)
     {
@@ -151,7 +162,7 @@ public static class SC2EnvFieldGui
     public static void SectionLabel(string iconName, string text)
     {
         var tex = SC2UiIcon.Get(iconName);
-        if (tex == null) { GUILayout.Label(text, BoldLabel); return; }
+        if (tex == null) { SC2ForgeUi.Section(text); return; }
         GUILayout.BeginHorizontal();
         var size = SC2UiScale.Pxf(20f);
         GUILayout.Label(tex, GUILayout.Width(size), GUILayout.Height(size));
@@ -168,22 +179,25 @@ public static class SC2EnvFieldGui
     public static bool Foldout(string iconName, ref bool expanded, string label)
     {
         var rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(SC2UiScale.Px(20)), GUILayout.ExpandWidth(true));
-        FillRect(rect, new Color(0.16f, 0.17f, 0.19f, 1f));
+        // A header bar a step lighter than the panel under it, like the buttons, instead of a darker hole in it.
+        FillRect(rect, rect.Contains(Event.current.mousePosition) ? SC2Theme.Bg3 : Color.Lerp(SC2Theme.Bg2, SC2Theme.Bg3, 0.5f));
         var arrow = expanded ? "▼" : "▶";
+        var boldLabel = BoldLabel;
+        boldLabel.alignment = TextAnchor.MiddleLeft;
         var textX = rect.x + 4f;
         var tex = SC2UiIcon.Get(iconName);
         if (tex != null)
         {
             var arrowWidth = SC2UiScale.Pxf(16f);
             var iconSize = SC2UiScale.Pxf(17f);
-            GUI.Label(new Rect(textX, rect.y, arrowWidth, rect.height), arrow, BoldLabel);
+            GUI.Label(new Rect(textX, rect.y, arrowWidth, rect.height), arrow, boldLabel);
             GUI.DrawTexture(new Rect(textX + arrowWidth, rect.y + (rect.height - iconSize) * 0.5f, iconSize, iconSize), tex);
             textX += arrowWidth + iconSize + 4f;
-            GUI.Label(new Rect(textX, rect.y, rect.xMax - textX - 4f, rect.height), label, BoldLabel);
+            GUI.Label(new Rect(textX, rect.y, rect.xMax - textX - 4f, rect.height), label, boldLabel);
         }
         else
         {
-            GUI.Label(new Rect(textX, rect.y, rect.width - 8f, rect.height), arrow + "  " + label, BoldLabel);
+            GUI.Label(new Rect(textX, rect.y, rect.width - 8f, rect.height), arrow + "  " + label, boldLabel);
         }
 
         var e = Event.current;
@@ -198,19 +212,24 @@ public static class SC2EnvFieldGui
 
     public static bool Button(string label, params GUILayoutOption[] options) => GUILayout.Button(label, options);
 
-    /// <summary>The colour of the buttons that do a tab's main work (export, bake, generate): the green of the start window's Open button.</summary>
-    public static readonly Color PrimaryActionColor = new Color(0.42f, 0.78f, 0.5f);
+    /// <summary>The colour of the buttons that do a tab's main work (export, bake, generate): the primary green of the editor theme.</summary>
+    public static Color PrimaryActionColor => SC2Theme.Primary;
 
-    /// <summary>A button for one of the main actions of a tab, in <see cref="PrimaryActionColor"/> so it stands out from the rest.</summary>
+    /// <summary>A button for one of the main actions of a tab: the filled green, rounded button of the start window, so it stands out
+    /// from the rest.</summary>
     public static bool PrimaryButton(string label, params GUILayoutOption[] options) => PrimaryButton(label, GUI.skin.button, options);
 
     public static bool PrimaryButton(string label, GUIStyle style, params GUILayoutOption[] options)
     {
-        var previous = GUI.backgroundColor;
-        GUI.backgroundColor = PrimaryActionColor;
-        var clicked = GUILayout.Button(label, style, options);
-        GUI.backgroundColor = previous;
-        return clicked;
+        SC2StartupUi.EnsureStyles();
+        // The look is the start window's primary button; the text size follows the button style the caller would have used.
+        var primary = new GUIStyle(SC2StartupUi.Primary);
+        if (style != null && style.fontSize > 0) primary.fontSize = style.fontSize;
+        // A stretching button takes the width of the whole scroll view; keep it inside the panel's content, margins included.
+        var buttonOptions = new GUILayoutOption[options.Length + 1];
+        buttonOptions[0] = GUILayout.MaxWidth(Mathf.Max(1f, SC2TerrainShell.GetUnifiedContentWidth() - 6f));
+        options.CopyTo(buttonOptions, 1);
+        return GUILayout.Button(label, primary, buttonOptions);
     }
 
     /// <summary>True while the numeric box for `key` holds keyboard focus.
@@ -244,18 +263,15 @@ public static class SC2EnvFieldGui
     public static bool Toggle(string label, bool value)
     {
         GUILayout.BeginHorizontal();
-        var boxSize = SC2UiScale.Pxf(16f);
-        var boxRect = GUILayoutUtility.GetRect(boxSize, boxSize, GUILayout.Width(boxSize), GUILayout.Height(boxSize));
-        FillRect(boxRect, new Color(0.12f, 0.13f, 0.15f, 1f));
-        DrawBorder(boxRect, BorderColor);
-        if (value)
-            FillRect(new Rect(boxRect.x + 3f, boxRect.y + 3f, boxRect.width - 6f, boxRect.height - 6f), new Color(0.35f, 0.58f, 0.93f, 1f));
-        GUILayout.Space(4f);
+        var height = SC2UiScale.Pxf(16f);
+        var switchRect = GUILayoutUtility.GetRect(height * 1.8f, height, GUILayout.Width(height * 1.8f), GUILayout.Height(height));
+        GUILayout.Space(6f);
         GUILayout.Label(label, Label);
         GUILayout.EndHorizontal();
 
         var e = Event.current;
-        if (e.type == EventType.MouseDown && boxRect.Contains(e.mousePosition))
+        SC2ForgeUi.DrawSwitch(switchRect, value, switchRect.Contains(e.mousePosition));
+        if (e.type == EventType.MouseDown && switchRect.Contains(e.mousePosition))
         {
             value = !value;
             GUI.changed = true;
@@ -302,7 +318,7 @@ public static class SC2EnvFieldGui
         var boxRect = new Rect(sliderRect.xMax + gap, row.y, boxWidth, row.height);
 
         var clamped = Mathf.Clamp(value, min, max);
-        var sliderValue = GUI.HorizontalSlider(sliderRect, clamped, min, max);
+        var sliderValue = SC2ForgeUi.Slider(sliderRect, clamped, min, max);
         var draggedBySlider = !Mathf.Approximately(sliderValue, clamped);
         // Bug fixed here: the box's staleness check must compare against the
         // real incoming `value` (which may legitimately sit outside
@@ -335,7 +351,7 @@ public static class SC2EnvFieldGui
         var boxRect = new Rect(sliderRect.xMax + gap, row.y, boxWidth, row.height);
 
         var clamped = Mathf.Clamp(value, min, max);
-        var sliderValue = Mathf.RoundToInt(GUI.HorizontalSlider(sliderRect, clamped, min, max));
+        var sliderValue = Mathf.RoundToInt(SC2ForgeUi.Slider(sliderRect, clamped, min, max));
         var draggedBySlider = sliderValue != clamped;
         // Same fix as Slider above — compare against the real incoming
         // `value`, not the clamped `sliderValue`, when not dragging.
@@ -367,7 +383,7 @@ public static class SC2EnvFieldGui
         // is the same fix already established elsewhere in this codebase
         // for this exact ID-instability bug class.
         GUI.SetNextControlName("SC2EnvNum_" + key);
-        var next = GUI.TextField(rect, text, TextFieldStyle);
+        var next = GUI.TextField(rect, text, NumberFieldStyle);
         _text[key] = next;
 
         var parsedOk = float.TryParse(next, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed);
@@ -383,7 +399,7 @@ public static class SC2EnvFieldGui
             text = value.ToString(CultureInfo.InvariantCulture);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
-        var next = GUI.TextField(rect, text, TextFieldStyle);
+        var next = GUI.TextField(rect, text, NumberFieldStyle);
         _text[key] = next;
 
         var parsedOk = int.TryParse(next, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed);
@@ -399,7 +415,7 @@ public static class SC2EnvFieldGui
             text = value.ToString(CultureInfo.InvariantCulture);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
-        var next = GUILayout.TextField(text, TextFieldStyle, GUILayout.Width(width));
+        var next = GUILayout.TextField(text, NumberFieldStyle, GUILayout.Width(width));
         _text[key] = next;
 
         var parsedOk = int.TryParse(next, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed);
@@ -415,7 +431,7 @@ public static class SC2EnvFieldGui
             text = FormatFloat(value);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
-        var next = GUILayout.TextField(text, TextFieldStyle, GUILayout.Width(width));
+        var next = GUILayout.TextField(text, NumberFieldStyle, GUILayout.Width(width));
         _text[key] = next;
 
         var parsedOk = float.TryParse(next, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed);
@@ -437,7 +453,7 @@ public static class SC2EnvFieldGui
             text = FormatFloat(value);
 
         GUI.SetNextControlName("SC2EnvNum_" + key);
-        var next = GUILayout.TextField(text, TextFieldStyle, GUILayout.MinWidth(30f), GUILayout.ExpandWidth(true));
+        var next = GUILayout.TextField(text, NumberFieldStyle, GUILayout.MinWidth(30f), GUILayout.ExpandWidth(true));
         _text[key] = next;
 
         var parsedOk = float.TryParse(next, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed);
@@ -487,7 +503,7 @@ public static class SC2EnvFieldGui
     // use (pick the hue/tint on the wheel, dial brightness past 1 with a
     // separate control) rather than trying to cram unbounded values onto a
     // 0..1 square.
-    public static Color ColorField(string label, Color value, string key, bool hdr = false, bool showAlpha = true)
+    public static Color ColorField(string label, Color value, string key, bool hdr = false, bool showAlpha = true, bool startExpanded = true)
     {
         // Defaults to expanded (not a click-to-reveal foldout) so the full
         // RGB/HSV picker is visible immediately — the whole point of
@@ -495,7 +511,7 @@ public static class SC2EnvFieldGui
         // the normal, always-available state, not something hidden behind an
         // extra click.
         if (!_colorExpanded.TryGetValue(key, out var expanded))
-            expanded = true;
+            expanded = startExpanded;
 
         GUILayout.BeginHorizontal();
         var swatchW = SC2UiScale.Pxf(24f); var swatchH = SC2UiScale.Pxf(20f);
@@ -652,8 +668,8 @@ public static class SC2EnvFieldGui
 
     private static bool SegmentButton(string label, bool active)
     {
-        var style = SafeStyle(GUI.skin != null ? GUI.skin.button : null, SC2UiScale.F(10));
-        style.normal.textColor = active ? Color.white : new Color(0.75f, 0.78f, 0.82f, 1f);
+        var style = SafeStyle(GUI.skin != null ? GUI.skin.button : null, SC2Type.Body);
+        style.normal.textColor = active ? SC2Theme.TextOnAccent : SC2Theme.TextSecondary;
         if (active && style.onNormal.background != null)
             style.normal.background = style.onNormal.background;
         return GUILayout.Button(label, style, GUILayout.Height(SC2UiScale.Pxf(20f)), GUILayout.ExpandWidth(true));
@@ -671,12 +687,12 @@ public static class SC2EnvFieldGui
     /// were getting clipped/hidden at the right edge).</summary>
     private static float ChannelRow(string label, float value, string key)
     {
-        var rowStyle = new GUIStyle { normal = { background = ColoredTexture(new Color(0.204f, 0.322f, 0.549f, 1f)) } };
+        var rowStyle = new GUIStyle { normal = { background = ColoredTexture(SC2Theme.Accent) } };
         var row = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(SC2UiScale.Pxf(24f)), GUILayout.ExpandWidth(true));
         GUI.Box(row, GUIContent.none, rowStyle);
         var pad = SC2UiScale.Pxf(8f);
         var boxWidth = SC2UiScale.Pxf(70f);
-        var labelStyle = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2UiScale.F(10));
+        var labelStyle = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2Type.Body);
         labelStyle.normal.textColor = Color.white;
         var labelRect = new Rect(row.x + pad, row.y, row.width - boxWidth - pad * 2f, row.height);
         GUI.Label(labelRect, label, labelStyle);
@@ -687,7 +703,7 @@ public static class SC2EnvFieldGui
     private static Color HexRow(Color value, string key)
     {
         var row = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(SC2UiScale.Pxf(18f)), GUILayout.ExpandWidth(true));
-        var labelStyle = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2UiScale.F(10));
+        var labelStyle = SafeStyle(GUI.skin != null ? GUI.skin.label : null, SC2Type.Body);
         var labelWidth = SC2UiScale.Pxf(30f);
         var labelRect = new Rect(row.x, row.y, labelWidth, row.height);
         GUI.Label(labelRect, "Hex", labelStyle);
