@@ -79,6 +79,7 @@
     <Compile Include="$(SC2Root)\Scripts\SC2ScdEntryPointResolver.cs" Link="Source\SC2ScdEntryPointResolver.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2MarkerOrientation.cs" Link="Source\SC2MarkerOrientation.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2HeightMode.cs" Link="Source\SC2HeightMode.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2AxisMove.cs" Link="Source\SC2AxisMove.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ShaderFlag.cs" Link="Source\SC2ShaderFlag.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2EnvironmentDefaults.cs" Link="Source\SC2EnvironmentDefaults.cs" />
     <!-- Unified Import Map pipeline: SC2ScdEntryPointResolver's new
