@@ -194,25 +194,57 @@ public sealed partial class SC2GameViewEditorUI
         if (e != null && e.type == EventType.MouseDown) e.Use();
     }
 
+    // The credits are meant to be read: large, near white, with a dark shadow so they hold up on any part of the picture.
+    private static GUIStyle _startupCreditsStyle;
+    private static float _startupCreditsStyleScale = -1f;
+    private static GUIStyle StartupCreditsStyle()
+    {
+        if (_startupCreditsStyle == null || !Mathf.Approximately(_startupCreditsStyleScale, SC2UiScale.Scale))
+        {
+            _startupCreditsStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = SC2UiScale.F(22),
+                fontStyle = FontStyle.Bold,
+                wordWrap = true,
+                alignment = TextAnchor.UpperLeft,
+            };
+            _startupCreditsStyleScale = SC2UiScale.Scale;
+        }
+        return _startupCreditsStyle;
+    }
+
     private void DrawStartupCredits(int screenWidth, int screenHeight)
     {
         if (string.IsNullOrEmpty(StartupMadeByText) && string.IsNullOrEmpty(StartupThanksToText))
             return;
 
-        // A fixed 320x60 area is too narrow for the real credits text
-        // ("Thanks to: ...") at any reasonable font size; without word-wrap
-        // enabled on the labels, BeginArea's own clip would cut the line
-        // off mid-word wherever it ran out of room instead of wrapping to a
-        // second line.
-        var width = Mathf.Min(480f, screenWidth - 24f);
-        var height = 80f;
-        GUILayout.BeginArea(new Rect(12f, screenHeight - height - 10f, width, height));
-        var prevContentColor = GUI.contentColor;
-        GUI.contentColor = new Color(0.75f, 0.75f, 0.75f);
-        if (!string.IsNullOrEmpty(StartupMadeByText)) GUILayout.Label("Made by: " + StartupMadeByText, StartupWrapLabelStyle());
-        if (!string.IsNullOrEmpty(StartupThanksToText)) GUILayout.Label("Thanks to: " + StartupThanksToText, StartupWrapLabelStyle());
-        GUI.contentColor = prevContentColor;
-        GUILayout.EndArea();
+        var style = StartupCreditsStyle();
+        var margin = SC2UiScale.Pxf(24f);
+        var width = Mathf.Max(100f, Mathf.Min(screenWidth - margin * 2f, SC2UiScale.Pxf(900f)));
+        var lines = new List<string>(2);
+        if (!string.IsNullOrEmpty(StartupMadeByText)) lines.Add("Made by: " + StartupMadeByText);
+        if (!string.IsNullOrEmpty(StartupThanksToText)) lines.Add("Thanks to: " + StartupThanksToText);
+
+        var heights = new float[lines.Count];
+        var total = 0f;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            heights[i] = style.CalcHeight(new GUIContent(lines[i]), width);
+            total += heights[i];
+        }
+
+        var previousContentColor = GUI.contentColor;
+        var y = screenHeight - margin - total;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var rect = new Rect(margin, y, width, heights[i]);
+            GUI.contentColor = new Color(0f, 0f, 0f, 0.9f);
+            GUI.Label(new Rect(rect.x + 2f, rect.y + 2f, rect.width, rect.height), lines[i], style);
+            GUI.contentColor = new Color(0.96f, 0.96f, 0.96f);
+            GUI.Label(rect, lines[i], style);
+            y += heights[i];
+        }
+        GUI.contentColor = previousContentColor;
     }
 
     // Cached, lazily built — a plain GUI.skin.label clone with word-wrap
