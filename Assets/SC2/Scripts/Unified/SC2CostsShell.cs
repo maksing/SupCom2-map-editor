@@ -1302,6 +1302,8 @@ public sealed class SC2CostsShell
         Runtime.SetCostsOverlayTexture(_overlayTex);
         PushOverlayToImportedTerrains(_overlayTex);
         PushOverlayToDecalPreview?.Invoke(_overlayTex, true, Data.CostsGridSize);
+        // A building that is part of the heightmap carries the overlay on its own surfaces, not only on the ground under it.
+        SC2GameAssetScenePreview.SetPropCostsOverlay(_overlayTex, Data.CostsGridSize, SC2PropHeightmapGeometry.IncludedPropIds(Data));
     }
 
     /// <summary>Wired in SC2GameViewEditorUI (same cross-shell callback
@@ -1319,6 +1321,7 @@ public sealed class SC2CostsShell
         Runtime?.SetCostsOverlayTexture(null);
         PushOverlayToImportedTerrains(null);
         PushOverlayToDecalPreview?.Invoke(null, false, Data.CostsGridSize);
+        SC2GameAssetScenePreview.SetPropCostsOverlay(null, Data.CostsGridSize, null);
     }
 
     /// <summary>Call when leaving the Costs tab — turns off the "Enable

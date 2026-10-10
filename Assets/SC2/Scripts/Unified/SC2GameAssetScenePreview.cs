@@ -345,6 +345,47 @@ public static class SC2GameAssetScenePreview
                 }
             }
         }
+        DrawPropCostsOverlay();
+    }
+
+    // The Costs overlay on the props that are part of the heightmap: the terrain shaders drape the overlay over the terrain itself, so
+    // under a building it would sit on the ground out of sight. These props are drawn once more with an overlay material (see
+    // SC2PropCostsOverlay.shader) that paints the same texture over their upward-facing surfaces.
+    private static Material _propCostsOverlayMaterial;
+    private static bool _propCostsOverlayOn;
+    private static readonly HashSet<int> _propCostsOverlayIds = new HashSet<int>();
+
+    /// <summary>Turns the Costs overlay on the given props on (a null texture turns it off). Cheap to call every frame.</summary>
+    public static void SetPropCostsOverlay(Texture overlay, float gridSize, IEnumerable<int> propIds)
+    {
+        _propCostsOverlayIds.Clear();
+        if (overlay == null || propIds == null) { _propCostsOverlayOn = false; return; }
+        foreach (var id in propIds) _propCostsOverlayIds.Add(id);
+        if (_propCostsOverlayIds.Count == 0) { _propCostsOverlayOn = false; return; }
+        if (_propCostsOverlayMaterial == null)
+        {
+            var shader = Resources.Load<Shader>("SC2PropCostsOverlay") ?? Shader.Find("SC2/PropCostsOverlay");
+            if (shader == null) { _propCostsOverlayOn = false; return; }
+            _propCostsOverlayMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+        }
+        _propCostsOverlayMaterial.SetTexture("_CostsOverlayTex", overlay);
+        _propCostsOverlayMaterial.SetFloat("_CostsOverlayGridSize", gridSize);
+        _propCostsOverlayOn = true;
+    }
+
+    private static void DrawPropCostsOverlay()
+    {
+        if (!_propCostsOverlayOn || _propCostsOverlayMaterial == null || HideProps) return;
+        foreach (var batch in Batches.Values)
+        {
+            if (batch.Mesh == null) continue;
+            foreach (var instance in batch.Instances)
+            {
+                if (instance.Key.IsUnit || !_propCostsOverlayIds.Contains(instance.Key.Id)) continue;
+                for (var subMesh = 0; subMesh < batch.Mesh.subMeshCount; subMesh++)
+                    Graphics.DrawMesh(batch.Mesh, instance.Value, _propCostsOverlayMaterial, 0, null, subMesh, null, ShadowCastingMode.Off, false);
+            }
+        }
     }
 
     // Reused across batches/frames to avoid a per-batch List allocation —
