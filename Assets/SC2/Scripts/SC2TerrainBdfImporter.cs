@@ -159,6 +159,14 @@ public static class SC2TerrainBdfImporter
     {
         var meshFilter = go.GetComponent<MeshFilter>();
         if (meshFilter != null && meshFilter.sharedMesh != null) ShiftMesh(meshFilter.sharedMesh, pivot);
+        // The collider was baked from the vertices before they were shifted; without baking it again its surface sits one pivot
+        // away from the visible mesh, and every height sampled from it (markers, props, units, areas) is wrong.
+        var collider = go.GetComponent<MeshCollider>();
+        if (collider != null && meshFilter != null)
+        {
+            collider.sharedMesh = null;
+            collider.sharedMesh = meshFilter.sharedMesh;
+        }
         var holder = go.GetComponent<SC2ImportedTerrainPivot>() ?? go.AddComponent<SC2ImportedTerrainPivot>();
         holder.Value = pivot;
         go.transform.position = pivot;
