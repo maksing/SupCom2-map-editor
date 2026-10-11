@@ -2435,31 +2435,9 @@ public class SC2TerrainShell : ScriptableObject
         SC2TerrainRuntime.PublishDecalShadow(rnmLit, _previewShadowColor, ShadowAmount);
     }
 
-    private const string ShadowAmountKey = "SC2.Preview.ShadowAmount", GlowGainKey = "SC2.Preview.GlowGain2", SpecularGainKey = "SC2.Preview.SpecularGain3";
-    private const float DefaultShadowAmount = 0f, DefaultGlowGain = 6.5f, DefaultSpecularGain = 1f;
-    private static float _shadowAmount = -1f, _glowGain = -1f, _specularGain = -1f;
-
-    /// <summary>How much of the sun's specular the RNM preview keeps; the specular is added to the colour, so at full strength it can fill in
-    /// the dark cells of a mask and hide what glows there.</summary>
-    private static float SpecularGain
-    {
-        get { if (_specularGain < 0f) _specularGain = PlayerPrefs.GetFloat(SpecularGainKey, DefaultSpecularGain); return _specularGain; }
-        set { _specularGain = value; PlayerPrefs.SetFloat(SpecularGainKey, value); }
-    }
-
-    /// <summary>How much of the lit terrain the RNM preview treats as being in the game's dynamic shadow (the preview has no shadow map).</summary>
-    private static float ShadowAmount
-    {
-        get { if (_shadowAmount < 0f) _shadowAmount = PlayerPrefs.GetFloat(ShadowAmountKey, DefaultShadowAmount); return _shadowAmount; }
-        set { _shadowAmount = value; PlayerPrefs.SetFloat(ShadowAmountKey, value); }
-    }
-
-    /// <summary>How far a strongly glowing texel is lifted in the RNM preview (the game's bloom).</summary>
-    private static float GlowGain
-    {
-        get { if (_glowGain < 0f) _glowGain = PlayerPrefs.GetFloat(GlowGainKey, DefaultGlowGain); return _glowGain; }
-        set { _glowGain = value; PlayerPrefs.SetFloat(GlowGainKey, value); }
-    }
+    /// <summary>The RNM preview's game look, the same for every map and not adjustable. The preview has no shadow map, so none of the
+    /// terrain is put in shadow; the glow gain stands for the game's bloom; the sun's highlights are kept whole.</summary>
+    private const float ShadowAmount = 0f, GlowGain = 6.5f, SpecularGain = 1f;
 
     private void DrawPreviewToolbar()
     {
@@ -2510,26 +2488,6 @@ public class SC2TerrainShell : ScriptableObject
         _runtime?.SetMatCapPreset(EffectiveMatCapPreset);
         _bgRuntime?.SetMatCapPreset(EffectiveMatCapPreset);
 
-        if (_prev == PreviewMode.TexturedRNM)
-        {
-            EditorGUILayout.Space(SC2UiScale.Pxf(8f));
-            DrawUnifiedSectionLabel("Game look");
-            BeginUnifiedPanelBox();
-            var shadowAmount = DrawCompactSlider("Shadow amount", ShadowAmount, 0f, 1f, "preview-rnm-shadow");
-            if (!Mathf.Approximately(shadowAmount, ShadowAmount)) ShadowAmount = shadowAmount;
-            var glowGain = DrawCompactSlider("Glow strength", GlowGain, 1f, 8f, "preview-rnm-glow");
-            if (!Mathf.Approximately(glowGain, GlowGain)) GlowGain = glowGain;
-            var specularGain = DrawCompactSlider("Highlight strength", SpecularGain, 0f, 1f, "preview-rnm-specular");
-            if (!Mathf.Approximately(specularGain, SpecularGain)) SpecularGain = specularGain;
-            if (GUILayout.Button("Reset to game look", GUILayout.Height(SC2UiScale.Pxf(20f))))
-            {
-                ShadowAmount = DefaultShadowAmount;
-                GlowGain = DefaultGlowGain;
-                SpecularGain = DefaultSpecularGain;
-            }
-            DrawUnifiedNote("The game puts the terrain in shadow where the sun is blocked: the light turns to the map's shadow colour and the sun's highlights disappear. The preview has no shadow map, so raise Shadow amount to match a map that is mostly in shadow. Glow strength stands for the game's bloom. Lower Highlight strength if the highlights hide a glowing pattern.");
-            EndUnifiedPanelBox();
-        }
         PublishDecalShadow();
         _runtime?.SetGameLook(ShadowAmount, GlowGain, SpecularGain, _previewShadowColor);
         _bgRuntime?.SetGameLook(ShadowAmount, GlowGain, SpecularGain, _previewShadowColor);
