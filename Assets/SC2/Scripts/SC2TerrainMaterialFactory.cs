@@ -237,7 +237,11 @@ public static class SC2TerrainMaterialFactory
             if (resourcePath.StartsWith("file:", System.StringComparison.Ordinal))
             {
                 var filePath = resourcePath.Substring(5);
-                if (SC2CustomTextureImporter.TryLoad(filePath, out var custom, out var customError, isLinear))
+                var found = SC2CustomTextureImporter.TryLoad(filePath, out var custom, out var customError, isLinear);
+                // The file the texture was imported from is not on this machine: the copy the map carries stands in for it.
+                if (!found && SC2CustomTextureImporter.TryRestoreFromMapshare(filePath, out var restoredPath))
+                    found = SC2CustomTextureImporter.TryLoad(restoredPath, out custom, out customError, isLinear);
+                if (found)
                 {
                     custom.name = string.IsNullOrEmpty(name) ? System.IO.Path.GetFileNameWithoutExtension(filePath) : name;
                     RegisterResourcePath(custom, resourcePath);
@@ -777,7 +781,11 @@ public static class SC2TerrainMaterialFactory
             // control) — "file:" resource paths are only ever custom flat
             // textures (SC2CustomTextureImporter.Import's own convention),
             // never cube/volume, so Texture2D is the right shape here.
-            if (SC2CustomTextureImporter.TryLoad(filePath, out Texture2D tex, out _, isLinear, disableMipmaps))
+            var loaded = SC2CustomTextureImporter.TryLoad(filePath, out Texture2D tex, out _, isLinear, disableMipmaps);
+            // The file the texture was imported from is not on this machine: the copy the map carries stands in for it.
+            if (!loaded && SC2CustomTextureImporter.TryRestoreFromMapshare(filePath, out var restoredPath))
+                loaded = SC2CustomTextureImporter.TryLoad(restoredPath, out tex, out _, isLinear, disableMipmaps);
+            if (loaded)
             {
                 RegisterResourcePath(tex, resourcePath);
                 return tex;
@@ -1111,6 +1119,11 @@ public static class SC2TerrainMaterialFactory
         var archiveTex = TryLoadFromGameArchive(basePath, isLinear, disableMipmaps);
         if (archiveTex != null) return archiveTex;
 
+        // Nothing here has it: the copy the map itself carries (a texture an imported terrain.bdf names that only its author's
+        // project held).
+        var mapshareTex = TryLoadFromMapshare(basePath, isLinear, disableMipmaps);
+        if (mapshareTex != null) return mapshareTex;
+
         if (!optional)
         {
             var triedList = string.Join(", ", searchRoots.SelectMany(root => basePaths.SelectMany(bp => extensions.Select(ext => $"{root}/{bp}{ext}"))));
@@ -1162,6 +1175,13 @@ public static class SC2TerrainMaterialFactory
             if (tex != null) loadedFrom = TryGetResourcePath(tex) ?? "archive";
         }
 
+        if (tex == null)
+        {
+            // Last, the copy the map itself carries.
+            tex = TryLoadFromMapshare(basePath, isLinear, disableMipmaps);
+            if (tex != null) loadedFrom = TryGetResourcePath(tex) ?? "mapshare";
+        }
+
         if (tex != null)
         {
             _resourcePathByTexture[tex] = loadedFrom;
@@ -1179,6 +1199,50 @@ public static class SC2TerrainMaterialFactory
         }
         return tex;
 #endif
+    }
+
+    /// <summary>The texture the open map carries under <paramref name="basePath"/> in its own share (SC2MapshareTextures), the very last
+    /// place a path-based lookup tries. Registered under the same Resources-style path the project's own copy would have had, so a save
+    /// refers to it the way it always did.</summary>
+    private static Texture2D TryLoadFromMapshare(string basePath, bool isLinear, bool disableMipmaps = false)
+    {
+        if (!SC2MapshareTextures.TryRead(basePath, out var bytes, out var extension)) return null;
+        if (!SC2CustomTextureImporter.TryLoadBytesAny(bytes, extension, out var any, out var preview, out _, out _, out _, isLinear, disableMipmaps)
+            || preview == null)
+            return null;
+        if (!ReferenceEquals(any, preview) && any != null) Object.Destroy(any);
+        _resourcePathByTexture[preview] = $"{ResourcesTextureRoot}/{basePath}";
+        return preview;
+    }
+
+    /// <summary>The file of a texture an imported terrain.bdf names, as this machine has it (the project's Resources/SC2Textures folder
+    /// in the Editor, the StreamingAssets copy anywhere), for SC2MapshareTextureCapture to keep with the map. False when this machine
+    /// has no file for it.</summary>
+    public static bool TryReadLooseTextureBytes(string bdfPath, out byte[] bytes, out string extension)
+    {
+        bytes = null;
+        extension = ".dds";
+        if (string.IsNullOrEmpty(bdfPath)) return false;
+        var basePath = StripExtension(NormalizePath(bdfPath));
+        var roots = new System.Collections.Generic.List<string>
+        {
+            Path.Combine(Application.streamingAssetsPath, StreamingAssetsTextureRoot),
+        };
+#if UNITY_EDITOR
+        roots.Add(Path.Combine(Application.dataPath, "SC2", "Resources", ResourcesTextureRoot));
+        roots.Add(Path.Combine(Application.dataPath, "SC2Textures"));
+#endif
+        foreach (var root in roots)
+        foreach (var bp in new[] { basePath, CapitalizeFirstSegment(basePath) })
+        foreach (var win in new[] { "", ".win" })
+        foreach (var ext in new[] { ".dds", ".png", ".tga" })
+        {
+            var full = Path.Combine(root, bp.Replace('/', Path.DirectorySeparatorChar) + win + ext);
+            if (!File.Exists(full)) continue;
+            try { bytes = File.ReadAllBytes(full); extension = ext; return true; }
+            catch (System.IO.IOException) { }
+        }
+        return false;
     }
 
     /// <summary>Resolves basePath ("Textures/Name", already extension- and

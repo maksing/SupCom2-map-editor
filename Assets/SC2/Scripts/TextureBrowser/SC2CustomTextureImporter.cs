@@ -72,6 +72,27 @@ public static class SC2CustomTextureImporter
         }
     }
 
+    /// <summary>For an imported texture whose file is not on this machine (the map came from another one): puts the copy the map carries
+    /// (SC2MapshareTextures) into the texture library under the file's own name, and says where. False when the map has none.</summary>
+    public static bool TryRestoreFromMapshare(string filePath, out string restoredPath)
+    {
+        restoredPath = null;
+        if (string.IsNullOrEmpty(filePath)) return false;
+        if (!SC2MapshareTextures.TryRead(SC2MapshareTextures.FilePrefix + filePath.Replace('\\', '/'), out var bytes, out _)) return false;
+        try
+        {
+            Directory.CreateDirectory(LibraryDirectory);
+            var local = Path.Combine(LibraryDirectory, Path.GetFileName(filePath));
+            if (!File.Exists(local)) WriteAtomic(local, bytes);
+            restoredPath = local;
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     public static SC2CustomTextureImportResult Import(string sourcePath, SC2TextureUsage usage, bool overwrite)
     {
         var result = new SC2CustomTextureImportResult();

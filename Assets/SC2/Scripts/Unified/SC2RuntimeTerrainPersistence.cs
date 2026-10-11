@@ -434,6 +434,8 @@ public static class SC2RuntimeTerrainPersistence
         // fresh BuildFromLegacy above knows nothing about them.
         if (session?.Document?.Terrain?.ImportedRnm != null)
             doc.Terrain.ImportedRnm = new SC2RnmDocument { MaskSets = session.Document.Terrain.ImportedRnm.CloneMaskSets() };
+        // The textures that live only on this machine (imported from a file, or named by an imported terrain.bdf) travel with the map.
+        SC2MapshareTextureCapture.Capture(doc, blobStore);
         doc.Hfield = SC2HfieldLegacyBridge.BuildFromLegacy(data, blobStore);
         doc.Costs = SC2CostsLegacyBridge.BuildFromLegacy(data, blobStore);
         doc.Collision2 = SC2CollisionLegacyBridge.BuildFromLegacy(data);
@@ -683,7 +685,10 @@ public static class SC2RuntimeTerrainPersistence
         {
             var manifestJson = File.ReadAllText(manifestPath, Encoding.UTF8);
             document = SC2MapDocumentSerializer.Deserialize(manifestJson);
-            data = SC2MapDocumentToLegacyBridge.ApplyToLegacy(document, SC2SaveStorage.CreateSessionBlobStore());
+            var sessionStore = SC2SaveStorage.CreateSessionBlobStore();
+            // Textures are looked up as they always were; the ones the map carries are only a fallback for what this machine lacks.
+            SC2MapshareTextures.Register(document.Terrain?.MapshareTextures, sessionStore);
+            data = SC2MapDocumentToLegacyBridge.ApplyToLegacy(document, sessionStore);
             Debug.Log($"[SC2RuntimeTerrainPersistence] Loaded '{mapName}' from document package: {manifestPath}");
             return data != null;
         }

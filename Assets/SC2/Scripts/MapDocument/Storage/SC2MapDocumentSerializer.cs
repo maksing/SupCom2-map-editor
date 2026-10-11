@@ -996,6 +996,16 @@ namespace SC2.MapEditor.Document
             var importedEntries = SC2JsonValue.NewArray();
             foreach (var e in t.ImportedEntries) importedEntries.Add(WriteImportedTerrainEntry(e));
             o.Set("importedEntries", importedEntries);
+            var mapshareTextures = SC2JsonValue.NewArray();
+            foreach (var texture in t.MapshareTextures)
+            {
+                var item = SC2JsonValue.NewObject();
+                item.Set("key", SC2JsonValue.Of(texture.Key));
+                item.Set("extension", SC2JsonValue.Of(texture.Extension));
+                item.Set("blob", WriteBlobRef(texture.Blob));
+                mapshareTextures.Add(item);
+            }
+            o.Set("mapshareTextures", mapshareTextures);
             return o;
         }
 
@@ -1065,6 +1075,13 @@ namespace SC2.MapEditor.Document
                 RadialCount = symmetry.Get("radialCount").AsInt(4),
             };
             foreach (var v in o.Get("importedEntries").Items()) t.ImportedEntries.Add(ReadImportedTerrainEntry(v));
+            foreach (var v in o.Get("mapshareTextures").Items())
+                t.MapshareTextures.Add(new SC2MapshareTextureDocument
+                {
+                    Key = v.Get("key").AsString("") ?? "",
+                    Extension = v.Get("extension").AsString(".dds") ?? ".dds",
+                    Blob = ReadBlobRef(v.Get("blob")),
+                });
             var background = o.Get("background");
             if (background.Kind == SC2JsonKind.Object) t.Background = ReadTerrain(background);
             return t;

@@ -336,6 +336,9 @@ public static class SC2TerrainExporter
             if (rawPath.StartsWith("file:", StringComparison.Ordinal))
             {
                 var sourceFile = rawPath.Substring(5);
+                // The file the texture was imported from is not on this machine: the copy the map carries stands in for it.
+                if (!File.Exists(sourceFile) && SC2CustomTextureImporter.TryRestoreFromMapshare(sourceFile, out var restoredSource))
+                    sourceFile = restoredSource;
                 if (!File.Exists(sourceFile))
                 {
                     warnings.Add($"Custom texture file '{sourceFile}' does not exist on this machine (imported by another user and not part of the map) — the slot keeps its original texture path instead.");

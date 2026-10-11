@@ -40,6 +40,10 @@ namespace SC2.MapEditor.Document
         /// is unrelated bridge-classification work, not a prerequisite for
         /// imported terrain surviving Save/Load.</summary>
         public List<SC2ImportedTerrainEntryDocument> ImportedEntries = new();
+        /// <summary>Texture files the map carries itself, so it still has them on a machine without the author's project: textures
+        /// imported from a file, and those an imported terrain.bdf names that only the author's project holds. Looked up last, after
+        /// every usual place (see SC2MapshareTextures).</summary>
+        public List<SC2MapshareTextureDocument> MapshareTextures = new();
         public List<SC2MaterialDocument> Materials = new();
         public List<SC2MaterialPairDocument> MaterialPairs = new();
         public SC2TrianglePairMap PairAssignments = new();
