@@ -17,7 +17,7 @@ using SC2.MapEditor.SmartExport;
 /// <summary>
 /// Exports SC2TerrainData to terrain.bdf.
 /// Paths follow the real vanilla convention:
-///   Textures/<Name>.dds            - diffuse, normal, mask
+///   Textures/<mapName>/<Name>.dds  - diffuse, normal, mask
 ///   maps/<mapName>/lighting/<PairName>.dds - RNM masks (_0/_1/_2)
 ///   maps/<mapName>/<mapName>.terrain.win.bdf
 /// </summary>
@@ -245,7 +245,10 @@ public static class SC2TerrainExporter
         // uncompiled/ all sitting directly at that ONE folder's root) — so
         // no further "type" subfolder wrapping belongs here.
         var mapDir      = Path.Combine(outputDir, "maps", mapName);
-        var texDir      = Path.Combine(outputDir, "Textures"); // /Textures/Name.dds
+        // The textures the export writes itself live in a folder of this map's own, /Textures/<mapName>/<Name>.dds, so two maps never
+        // share (or overwrite) a file name.
+        var texDir      = Path.Combine(outputDir, "Textures", mapName);
+        var texGamePath = $"/Textures/{mapName}/";
         var lightingDir = Path.Combine(mapDir, "lighting");          // /maps/<mapName>/lighting/
         Directory.CreateDirectory(mapDir);
         Directory.CreateDirectory(texDir);
@@ -343,7 +346,7 @@ public static class SC2TerrainExporter
                 var customDestination = Path.Combine(texDir, customFileName);
                 try { File.Copy(sourceFile, customDestination, true); copied++; }
                 catch (Exception ex) { warnings.Add($"{sourceFile}: {ex.Message}"); return null; }
-                return rawPathReg[rawPath] = $"/Textures/{customFileName}";
+                return rawPathReg[rawPath] = texGamePath + customFileName;
             }
             if (rawPath.StartsWith("archive:", StringComparison.Ordinal))
             {
@@ -379,7 +382,7 @@ public static class SC2TerrainExporter
                     copied++;
                 }
                 catch (Exception ex) { warnings.Add($"{entryPath}: {ex.Message}"); return null; }
-                return rawPathReg[rawPath] = $"/Textures/{customFileName}";
+                return rawPathReg[rawPath] = texGamePath + customFileName;
             }
             return null;
         }
@@ -485,7 +488,7 @@ public static class SC2TerrainExporter
             // Forward slash, not a backslash
             // — the game reads this as a real path string, and a literal
             // backslash inside it isn't a valid path separator there.
-            texReg[tex] = $"/Textures/{fn}";
+            texReg[tex] = texGamePath + fn;
             return texReg[tex];
         }
 
@@ -733,7 +736,7 @@ public static class SC2TerrainExporter
                 {
                     MergeImportedTerrain(model, imported, ResolveRawResourcePath);
                     ApplyImportedRnmMasks(model, firstImportedMaterial, imported, session, mapName, lightingDir, rnmCache, warnings);
-                    CopyImportedTextures(imported.Model, outputDir, warnings, CollectForceExportBasePaths(imported));
+                    CopyImportedTextures(imported.Model, outputDir, mapName, warnings, CollectForceExportBasePaths(imported));
                 });
             }
         }
@@ -2064,8 +2067,7 @@ public static class SC2TerrainExporter
     /// output folder.
     ///
     /// Unlike RegTex above (which flattens painted-pair textures into
-    /// "/Textures/<Name>.dds", matching the SC2_D3_crab reference
-    /// convention), imported-object textures keep their ORIGINAL path
+    /// "/Textures/<mapName>/<Name>.dds"), imported-object textures keep their ORIGINAL path
     /// string as-is in the exported material, so the physical file must be
     /// placed at that exact same relative path under outputDir — not
     /// flattened — for the two to still match up.
@@ -2102,7 +2104,7 @@ public static class SC2TerrainExporter
         return result;
     }
 
-    private static void CopyImportedTextures(TerrainModel source, string outputDir, List<string> warnings, HashSet<string> forceExportBasePaths = null)
+    private static void CopyImportedTextures(TerrainModel source, string outputDir, string mapName, List<string> warnings, HashSet<string> forceExportBasePaths = null)
     {
 #if UNITY_EDITOR
         var resourcesRoot = Path.Combine(Application.dataPath, "SC2", "Resources",
@@ -2118,13 +2120,14 @@ public static class SC2TerrainExporter
             // already went through MergeImportedTerrain -> SC2TerrainMaterialExporter.
             // ApplyFromScene -> ResolveRawResourcePath just above, in this same
             // BuildExportArtifacts call, which already copied its real file into
-            // this flat "/Textures/<Name>.dds" destination — re-resolving it
+            // this map's own "/Textures/<mapName>/<Name>.dds" destination — re-resolving it
             // here against the ORIGINAL imported-map's own nested Resources
             // cache would always miss (it was never a pre-extracted vanilla
             // path to begin with) and log a spurious "not found" warning for a
             // texture that's actually already present and correctly referenced.
-            if (normalized.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) &&
-                normalized.IndexOf('/', "textures/".Length) < 0)
+            var ownTexturePrefix = "textures/" + mapName + "/";
+            if (normalized.StartsWith(ownTexturePrefix, StringComparison.OrdinalIgnoreCase) &&
+                normalized.IndexOf('/', ownTexturePrefix.Length) < 0)
                 continue;
             var basePath = SC2TerrainMaterialFactory.StripExtension(normalized);
             if (!seen.Add(basePath)) continue;
