@@ -507,6 +507,26 @@ public static class SC2TerrainMaterialFactory
         return null;
     }
 
+    /// <summary>The map's sun as the lit materials use it: the direction (a fallback one when the map has none) and the colour already
+    /// multiplied by the sun intensity (white when the map has none).</summary>
+    public static void ResolveSun(InfoModel info, out Vector3 direction, out Color colorTimesIntensity)
+    {
+        var rawSunColor = new Color(info.SunColorR, info.SunColorG, info.SunColorB);
+        var sunColor = IsEffectivelyBlack(rawSunColor) ? Color.white : rawSunColor;
+        colorTimesIntensity = sunColor * Mathf.Max(0.01f, info.SunIntensity);
+        direction = new Vector3(info.SunDirectionX, info.SunDirectionY, info.SunDirectionZ);
+        if (direction.sqrMagnitude < 0.0001f) direction = new Vector3(0.3f, 0.8f, 0.5f);
+    }
+
+    /// <summary>The map's ShadowColor as the lit materials use it, a neutral grey when the map has none (a from-scratch map's is all zero).</summary>
+    public static Color ResolveShadowColor(InfoModel info)
+    {
+        var raw = new Color(info.ShadowColorR, info.ShadowColorG, info.ShadowColorB);
+        return IsEffectivelyBlack(raw)
+            ? new Color(0.25f, 0.25f, 0.28f, 1f)
+            : new Color(info.ShadowColorR, info.ShadowColorG, info.ShadowColorB, info.ShadowColorA);
+    }
+
     /// <summary>Real per-map Sun/Shadow/Fog/EnvironmentMap data, following
     /// the exact per-material wiring pattern SC2WaterMaterialFactory.ApplyTo
     /// already uses for SC2/Water (info.SunDirection/SunColor/CoreFogColor*
@@ -533,19 +553,12 @@ public static class SC2TerrainMaterialFactory
     {
         if (material == null || info == null) return;
 
-        var rawSunColor = new Color(info.SunColorR, info.SunColorG, info.SunColorB);
-        var sunColor = IsEffectivelyBlack(rawSunColor) ? Color.white : rawSunColor;
-        var sunIntensity = Mathf.Max(0.01f, info.SunIntensity);
-        var sunDirection = new Vector3(info.SunDirectionX, info.SunDirectionY, info.SunDirectionZ);
-        if (sunDirection.sqrMagnitude < 0.0001f) sunDirection = new Vector3(0.3f, 0.8f, 0.5f);
+        ResolveSun(info, out var sunDirection, out var sunColorTimesIntensity);
 
-        var rawShadowColor = new Color(info.ShadowColorR, info.ShadowColorG, info.ShadowColorB);
-        var shadowColor = IsEffectivelyBlack(rawShadowColor)
-            ? new Color(0.25f, 0.25f, 0.28f, 1f)
-            : new Color(info.ShadowColorR, info.ShadowColorG, info.ShadowColorB, info.ShadowColorA);
+        var shadowColor = ResolveShadowColor(info);
 
         material.SetColor("_ShadowColor", shadowColor);
-        material.SetColor("_SunColor", sunColor * sunIntensity);
+        material.SetColor("_SunColor", sunColorTimesIntensity);
         material.SetVector("_SunDirection", new Vector4(sunDirection.x, sunDirection.y, sunDirection.z, 0f));
         material.SetColor("_SC2FogColor", new Color(info.CoreFogColorR, info.CoreFogColorG, info.CoreFogColorB, info.CoreFogColorA));
         material.SetVector("_SC2FogAmounts", new Vector4(info.CoreFogAmount1, info.CoreFogAmount2, info.CoreFogAmount3, 0f));

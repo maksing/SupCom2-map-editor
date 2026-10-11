@@ -840,6 +840,8 @@ public class SC2PairsMode
         if (AddMissingFlags(pair.ShaderFlags))
             EditorUtility.SetDirty(Data);
 
+        // SPECULAR_LIGHTING / GLOW / ENVIRONMENT_MAPPING decide what the pair's mask does in the viewport preview, so a change refreshes it.
+        var flagsChanged = false;
         EditorGUI.indentLevel++;
         foreach (var flag in pair.ShaderFlags)
         {
@@ -850,6 +852,7 @@ public class SC2PairsMode
             {
                 _win.RecordUndoCheckpointFor(Data, "Change Shader Flag");
                 flag.Value = newFlagValue;
+                flagsChanged = true;
             }
             if (flag.Key == "ALPHA_TEST" && flag.Value)
             {
@@ -873,13 +876,20 @@ public class SC2PairsMode
         {
             _win.RecordUndoCheckpointFor(Data, "Shader Flags All ON");
             foreach (var f in pair.ShaderFlags) f.Value = true;
+            flagsChanged = true;
         }
         if (GUILayout.Button("Reset", GUILayout.Height(SC2UiScale.Pxf(20f))))
         {
             _win.RecordUndoCheckpointFor(Data, "Reset Shader Flags");
             pair.ShaderFlags = DefaultFlags();
+            flagsChanged = true;
         }
         EditorGUILayout.EndHorizontal();
+        if (flagsChanged)
+        {
+            if (Data == _win.Data) _win.ApplyPreviewModeToChunks();
+            else _win.RefreshBackgroundRuntime();
+        }
         }
         EditorGUILayout.Space(SC2UiScale.Pxf(14f));
         DrawPairRampAndEnvironment(pair, i);
@@ -927,8 +937,15 @@ public class SC2PairsMode
     private struct PairTextureCache { public string Path; public Texture Texture; }
     private readonly Dictionary<string, PairTextureCache> _pairTextureCache = new();
 
-    /// <summary>The pair's Ramp (terrain.bdf material slot 8) and Environment (slot 11) textures; export-only, like
-    /// the State and Texture Scroll below (the live preview does not draw them).</summary>
+    /// <summary>The pair's Ramp and Environment textures shape its specular and environment reflection in the preview.</summary>
+    private void RefreshPreviewTextures()
+    {
+        if (Data == _win.Data) _win.ApplyPreviewModeToChunks();
+        else _win.RefreshBackgroundRuntime();
+    }
+
+    /// <summary>The pair's Ramp (terrain.bdf material slot 8) and Environment (slot 11) textures: the ramp shapes the pair's specular
+    /// and its environment reflection, which also needs the Environment texture.</summary>
     private void DrawPairRampAndEnvironment(SC2MaterialPair pair, int i)
     {
         SC2TerrainShell.DrawUnifiedSectionLabel("Ramp / Environment textures");
@@ -939,6 +956,7 @@ public class SC2PairsMode
             pair.RampPath = rampPath; pair.RampSourceTag = rampTag; pair.RampForceExport = rampForce;
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
+            RefreshPreviewTextures();
         }
         if (DrawPairTextureSlot("Environment", i, pair.EnvironmentPath, pair.EnvironmentSourceTag, pair.EnvironmentForceExport,
                 out var envPath, out var envTag, out var envForce))
@@ -947,6 +965,7 @@ public class SC2PairsMode
             pair.EnvironmentPath = envPath; pair.EnvironmentSourceTag = envTag; pair.EnvironmentForceExport = envForce;
             EditorUtility.SetDirty(Data);
             _win.MarkDirtyAndRepaint();
+            RefreshPreviewTextures();
         }
 
         var environmentMapping = false;
