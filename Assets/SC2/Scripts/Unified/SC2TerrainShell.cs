@@ -2424,6 +2424,43 @@ public class SC2TerrainShell : ScriptableObject
     /// look picked in Mats does not linger on the Textured, RNM, Slope or Height previews once its picker is hidden.</summary>
     private int EffectiveMatCapPreset => UsesMatCap(_prev) ? _matCapPreset : 0;
 
+    private Color _previewShadowColor = new Color(0.25f, 0.25f, 0.28f, 1f);
+
+    /// <summary>Tells the decals how the terrain is drawn: with the RNM game look, its shadow amount and the map's ShadowColor, or as the
+    /// other views draw it.</summary>
+    private void PublishDecalShadow()
+    {
+        var rnmLit = _prev == PreviewMode.TexturedRNM
+            || ((_prev == PreviewMode.Textured || _prev == PreviewMode.HeightGradient) && _forceRnmOverlay);
+        SC2TerrainRuntime.PublishDecalShadow(rnmLit, _previewShadowColor, ShadowAmount);
+    }
+
+    private const string ShadowAmountKey = "SC2.Preview.ShadowAmount", GlowGainKey = "SC2.Preview.GlowGain2", SpecularGainKey = "SC2.Preview.SpecularGain3";
+    private const float DefaultShadowAmount = 0f, DefaultGlowGain = 6.5f, DefaultSpecularGain = 1f;
+    private static float _shadowAmount = -1f, _glowGain = -1f, _specularGain = -1f;
+
+    /// <summary>How much of the sun's specular the RNM preview keeps; the specular is added to the colour, so at full strength it can fill in
+    /// the dark cells of a mask and hide what glows there.</summary>
+    private static float SpecularGain
+    {
+        get { if (_specularGain < 0f) _specularGain = PlayerPrefs.GetFloat(SpecularGainKey, DefaultSpecularGain); return _specularGain; }
+        set { _specularGain = value; PlayerPrefs.SetFloat(SpecularGainKey, value); }
+    }
+
+    /// <summary>How much of the lit terrain the RNM preview treats as being in the game's dynamic shadow (the preview has no shadow map).</summary>
+    private static float ShadowAmount
+    {
+        get { if (_shadowAmount < 0f) _shadowAmount = PlayerPrefs.GetFloat(ShadowAmountKey, DefaultShadowAmount); return _shadowAmount; }
+        set { _shadowAmount = value; PlayerPrefs.SetFloat(ShadowAmountKey, value); }
+    }
+
+    /// <summary>How far a strongly glowing texel is lifted in the RNM preview (the game's bloom).</summary>
+    private static float GlowGain
+    {
+        get { if (_glowGain < 0f) _glowGain = PlayerPrefs.GetFloat(GlowGainKey, DefaultGlowGain); return _glowGain; }
+        set { _glowGain = value; PlayerPrefs.SetFloat(GlowGainKey, value); }
+    }
+
     private void DrawPreviewToolbar()
     {
         // Used to bail out entirely without an active/initialized
@@ -2472,6 +2509,30 @@ public class SC2TerrainShell : ScriptableObject
         }
         _runtime?.SetMatCapPreset(EffectiveMatCapPreset);
         _bgRuntime?.SetMatCapPreset(EffectiveMatCapPreset);
+
+        if (_prev == PreviewMode.TexturedRNM)
+        {
+            EditorGUILayout.Space(SC2UiScale.Pxf(8f));
+            DrawUnifiedSectionLabel("Game look");
+            BeginUnifiedPanelBox();
+            var shadowAmount = DrawCompactSlider("Shadow amount", ShadowAmount, 0f, 1f, "preview-rnm-shadow");
+            if (!Mathf.Approximately(shadowAmount, ShadowAmount)) ShadowAmount = shadowAmount;
+            var glowGain = DrawCompactSlider("Glow strength", GlowGain, 1f, 8f, "preview-rnm-glow");
+            if (!Mathf.Approximately(glowGain, GlowGain)) GlowGain = glowGain;
+            var specularGain = DrawCompactSlider("Highlight strength", SpecularGain, 0f, 1f, "preview-rnm-specular");
+            if (!Mathf.Approximately(specularGain, SpecularGain)) SpecularGain = specularGain;
+            if (GUILayout.Button("Reset to game look", GUILayout.Height(SC2UiScale.Pxf(20f))))
+            {
+                ShadowAmount = DefaultShadowAmount;
+                GlowGain = DefaultGlowGain;
+                SpecularGain = DefaultSpecularGain;
+            }
+            DrawUnifiedNote("The game puts the terrain in shadow where the sun is blocked: the light turns to the map's shadow colour and the sun's highlights disappear. The preview has no shadow map, so raise Shadow amount to match a map that is mostly in shadow. Glow strength stands for the game's bloom. Lower Highlight strength if the highlights hide a glowing pattern.");
+            EndUnifiedPanelBox();
+        }
+        PublishDecalShadow();
+        _runtime?.SetGameLook(ShadowAmount, GlowGain, SpecularGain, _previewShadowColor);
+        _bgRuntime?.SetGameLook(ShadowAmount, GlowGain, SpecularGain, _previewShadowColor);
 
         if (_prev == PreviewMode.HeightGradient)
         {
@@ -5279,6 +5340,54 @@ public class SC2TerrainShell : ScriptableObject
         }
     }
 
+    /// <summary>The pair's SPECULAR_LIGHTING / GLOW / ENVIRONMENT_MAPPING flags for the preview shader. A pair with no flag list yet has
+    /// the editor's defaults (specular on, glow and environment mapping off).</summary>
+    private static int MaskFlagBits(SC2MaterialPair pair)
+    {
+        bool specular = true, glow = false, environment = false;
+        if (pair.ShaderFlags != null)
+            foreach (var flag in pair.ShaderFlags)
+            {
+                if (flag.Key == "SPECULAR_LIGHTING") specular = flag.Value;
+                else if (flag.Key == "GLOW") glow = flag.Value;
+                else if (flag.Key == "ENVIRONMENT_MAPPING") environment = flag.Value;
+            }
+        return (specular ? SC2TerrainRuntime.PairMaterialData.FlagSpecular : 0)
+             | (glow ? SC2TerrainRuntime.PairMaterialData.FlagGlow : 0)
+             | (environment ? SC2TerrainRuntime.PairMaterialData.FlagEnvironment : 0)
+             | (!string.IsNullOrEmpty(pair.RampPath) ? SC2TerrainRuntime.PairMaterialData.FlagRamp : 0);
+    }
+
+    private readonly Dictionary<string, Texture2D> _rampTextures = new();
+
+    /// <summary>The pair's Ramp texture (null when it has none or it cannot be loaded). Loaded once per path.</summary>
+    private Texture2D LoadRampTexture(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (!_rampTextures.TryGetValue(path, out var ramp))
+        {
+            ramp = SC2TerrainMaterialFactory.LoadTexturePublicAny(path) as Texture2D;
+            _rampTextures[path] = ramp;
+        }
+        return ramp;
+    }
+
+    private string _environmentCubePath;
+    private Cubemap _environmentCube;
+
+    /// <summary>The map's environment cubemap for the preview's environment reflection (null when none is set or it cannot be loaded).
+    /// Loaded once per path.</summary>
+    private Cubemap LoadEnvironmentCube(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (path != _environmentCubePath)
+        {
+            _environmentCubePath = path;
+            _environmentCube = SC2TerrainMaterialFactory.LoadTexturePublicAny(path) as Cubemap;
+        }
+        return _environmentCube;
+    }
+
     /// <summary>Parameterized so the background's own SC2TerrainRuntime can
     /// share this exact same Textured/RNM/Mats/Pairs/Slope logic instead of
     /// a second copy — the shell-level preview-mode state (_prev,
@@ -5292,6 +5401,7 @@ public class SC2TerrainShell : ScriptableObject
 
         // The MatCap look shades the Mats and Pairs colours of every runtime (core and background alike); other modes use the default.
         runtime.SetMatCapPreset(EffectiveMatCapPreset);
+        PublishDecalShadow();
 
         if (_prev == PreviewMode.PairColors)
         {
@@ -5349,7 +5459,9 @@ public class SC2TerrainShell : ScriptableObject
             mats[i] = new SC2TerrainRuntime.PairMaterialData
             {
                 Diffuse1 = m1?.Diffuse, Diffuse2 = m2?.Diffuse,
-                Normal1 = m1?.Normal, Normal2 = m2?.Normal,
+                Normal1 = m1?.Normal, Normal2 = m2?.Normal, Mask1 = m1?.Mask, Mask2 = m2?.Mask,
+                Ramp = LoadRampTexture(p.RampPath),
+                FlagBits = MaskFlagBits(p),
                 Color1 = m1?.Color ?? Color.grey, Color2 = m2?.Color ?? Color.grey,
                 // The shared tiling size lives only on the CORE's own
                 // SC2TerrainData (it is never set on the background's own
@@ -5368,6 +5480,19 @@ public class SC2TerrainShell : ScriptableObject
         // "there's only one Lighting Bake config" for both core and
         // background bakes — see SC2RnmBakeService.BakeInternal's own
         // bakeSettingsSource parameter).
+        // The Environment texture is a pair's own (terrain.bdf material slot 11); the preview shows one cube, that of the first pair
+        // that reflects it.
+        string environmentPath = null;
+        for (var i = 0; i < n && environmentPath == null; i++)
+            if ((mats[i].FlagBits & SC2TerrainRuntime.PairMaterialData.FlagEnvironment) != 0 && !string.IsNullOrEmpty(data.Pairs[i].EnvironmentPath))
+                environmentPath = data.Pairs[i].EnvironmentPath;
+        runtime.SetEnvironmentCube(LoadEnvironmentCube(environmentPath));
+        var sunInfo = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true);
+        SC2TerrainMaterialFactory.ResolveSun(sunInfo, out var sunDirection, out var sunColor);
+        runtime.SetSunLight(sunDirection, sunColor);
+        _previewShadowColor = SC2TerrainMaterialFactory.ResolveShadowColor(sunInfo);
+        runtime.SetGameLook(ShadowAmount, GlowGain, SpecularGain, _previewShadowColor);
+        PublishDecalShadow();
         runtime.SetAllPairMaterials(mats, shaderMode, _data.RnmBakeGeneration);
         runtime.SetHeightGradientOverlay(_prev == PreviewMode.HeightGradient || _forceHfieldOverlay, _heightGradientMin, _heightGradientMax);
         // Map-wide, not tied to core-vs-background — cheap (cache-gated on the

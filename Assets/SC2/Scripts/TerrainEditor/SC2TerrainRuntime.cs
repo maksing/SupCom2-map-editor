@@ -206,10 +206,12 @@ public partial class SC2TerrainRuntime : IDisposable
     // world-space UV transform from the diffuse arrays' uv1_tiled.
     private Texture2DArray _rnmArray;
     private Texture2D      _rnmFallback;
-    // The pairs' Normal textures, packed like _rnmArray (layer = pairIdx * 2 + material); see RebuildNormalArray.
-    private Texture2DArray _normalArray;
-    private int _lastNormalHash = -1;
-    private bool _hasNormalContent;
+    // The pairs' Normal and Mask textures, packed like _rnmArray (layer = pairIdx * 2 + material); see RebuildNormalMaskArrays.
+    private Texture2DArray _normalArray, _maskArray;
+    private int _lastNormalMaskHash = -1;
+    private bool _hasNormalMaskContent;
+    // Whether the mask array carries the pairs' Ramp textures after its 2 * pairs mask layers; see RebuildNormalMaskArrays.
+    private bool _hasRampLayers;
     private Texture2D      _greyTex;
 
     /// <summary>Unity has no built-in Texture2D.greyTexture (only white/
@@ -319,6 +321,14 @@ public partial class SC2TerrainRuntime : IDisposable
         Shader.SetGlobalVector("_RnmUvInvScale_" + suffix, new Vector4(invX, invY, 0f, 0f));
     }
 
+    /// <summary>Whether the terrain is drawn with the RNM game look, and how far it is lit towards the map's ShadowColor, for SC2Decal.shader:
+    /// the terrain is shadowed by that much, so the baked light the decals sample must be too, or they would stand out as bright patches.</summary>
+    public static void PublishDecalShadow(bool gameLook, Color shadowColor, float shadowAmount)
+    {
+        Shader.SetGlobalFloat("_SC2DecalGameLook", gameLook ? 1f : 0f);
+        Shader.SetGlobalVector("_SC2DecalShadow", new Vector4(shadowColor.r, shadowColor.g, shadowColor.b, shadowColor.a * shadowAmount));
+    }
+
     // Static/map-wide cache for PublishImportedRnmGlobals below — this baked
     // texture belongs to neither the core nor the background runtime
     // instance (it covers imported terrain.bdf objects, which can sit
@@ -375,6 +385,7 @@ public partial class SC2TerrainRuntime : IDisposable
         if (_diffuse2Array != null) DestroyObject(_diffuse2Array);
         if (_rnmArray != null) DestroyObject(_rnmArray);
         if (_normalArray != null) DestroyObject(_normalArray);
+        if (_maskArray != null) DestroyObject(_maskArray);
         if (_fallbackNormalArray != null) DestroyObject(_fallbackNormalArray);
         if (_greyTex != null) DestroyObject(_greyTex);
         if (_pairLUT       != null) DestroyObject(_pairLUT);
@@ -388,7 +399,7 @@ public partial class SC2TerrainRuntime : IDisposable
         PairMapRT = null; BlendRT = null; _pairColorRT = null;
         _diffuse1Array = null; _diffuse2Array = null; _diffuse1Fallback = null; _diffuse2Fallback = null; _pairLUT = null; _tilingLUT = null;
         _rnmArray = null; _rnmFallback = null; _greyTex = null;
-        _normalArray = null; _fallbackNormalArray = null; _lastNormalHash = -1; _hasNormalContent = false;
+        _normalArray = null; _maskArray = null; _hasRampLayers = false; _fallbackNormalArray = null; _lastNormalMaskHash = -1; _hasNormalMaskContent = false;
         _pairColorRT_tex = null; _pairColorViewMat = null; _paintBrushMat = null; _viewMat = null;
         _activeBlendMaskName = null;
         _initialized = false;
@@ -1298,7 +1309,7 @@ public partial class SC2TerrainRuntime : IDisposable
         var n = Mathf.Min(pairs?.Length ?? 0, 72);
         _lastPairCountForGlobals = Mathf.Max(n, 1);
         RebuildDiffuseArrays(pairs, n);
-        RebuildNormalArray(pairs, n);
+        RebuildNormalMaskArrays(pairs, n);
         // RebuildRnmArrays does a full CPU readback (CopyRawToArray) per
         // layer, same cost class as RebuildDiffuseArrays. Only rebuild the
         // real per-pair content when PreviewMode==4 is actually going to
@@ -1324,7 +1335,7 @@ public partial class SC2TerrainRuntime : IDisposable
         mat.SetTexture("_Diffuse2Fallback", _diffuse2Fallback != null ? _diffuse2Fallback : Texture2D.whiteTexture);
         if (_rnmArray != null) mat.SetTexture("_RnmArr", _rnmArray);
         mat.SetTexture("_RnmFallback", _rnmFallback != null ? _rnmFallback : GreyTexture());
-        BindNormalArray(mat);
+        BindNormalMaskArrays(mat);
         // Was Application.isEditor ? 1 : 0 — that always evaluated to 0 in a
         // standalone Build & Run player, so Textured mode with 2+ material
         // pairs could never sample Texture2DArray there and silently fell back
@@ -1361,8 +1372,14 @@ public partial class SC2TerrainRuntime : IDisposable
         // RebuildRnmArrays' own CopyRawToArray null-fallback fills that
         // layer with flat mid-grey instead of leaving it undefined.
         public Texture2D Rnm0, Rnm1, Rnm2;
-        // The pair's materials' Normal textures (null = a flat normal).
-        public Texture2D Normal1, Normal2;
+        // The pair's materials' Normal and Mask textures (null = a flat normal / no mask).
+        public Texture2D Normal1, Normal2, Mask1, Mask2;
+        // The pair's Ramp texture (terrain.hlsl's RampMap), null = none: it shapes the specular and makes the environment reflection exist.
+        public Texture2D Ramp;
+        // The pair's SPECULAR_LIGHTING / GLOW / ENVIRONMENT_MAPPING shader flags as FlagSpecular | FlagGlow | FlagEnvironment: the mask's
+        // blue / green / red channels only act where the matching flag is on. FlagRamp is set when the pair has a Ramp texture.
+        public int       FlagBits;
+        public const int FlagSpecular = 1, FlagGlow = 2, FlagEnvironment = 4, FlagRamp = 8;
     }
 
     private void RebuildLUTs(PairMaterialData[] pairs, int n)
@@ -1389,7 +1406,9 @@ public partial class SC2TerrainRuntime : IDisposable
             // which falls back to normal ComputeLight sun shading rather
             // than RNM math when a material has no real mask data.
             var hasBakedRnm = pairs != null && i < n && pairs[i].Rnm0 != null ? 1f : 0f;
-            tiling[i] = new Color(ts,ts,ts,hasBakedRnm);
+            // .g carries the pair's mask flags (PairMaterialData.FlagBits); the shader reads only .r, .g and .a.
+            var flagBits = pairs != null && i < n ? pairs[i].FlagBits : 0;
+            tiling[i] = new Color(ts,flagBits,ts,hasBakedRnm);
         }
         _pairLUT.SetPixels(0,0,72,1,row0); _pairLUT.SetPixels(0,1,72,1,row1); _pairLUT.Apply(false);
         _tilingLUT.SetPixels(tiling); _tilingLUT.Apply(false);
@@ -1698,75 +1717,194 @@ public partial class SC2TerrainRuntime : IDisposable
         SC2Log.Log($"[SC2Runtime] RebuildRnmArrays: gen={bakeGeneration}, {bakedPairs}/{pairCount} pair(s) have real baked data, array {w}x{h}x{layers}.");
     }
 
-    // Kept small: a normal map is read once per pixel, and 2 layers per pair add up on a map with many pairs (a 512 x 512 layer with
-    // its mips is 1.4 MB).
+    // Normal and mask arrays are kept small: they are fine-grained data read once per pixel, and 2 layers per pair add up on a map with
+    // many pairs (a 512 x 512 layer with its mips is 1.4 MB).
     private const int NormalArraySize = 512;
+    private const int MaskArraySize = 256;
 
-    /// <summary>Packs the pairs' Normal textures into a Texture2DArray (layer = pairIdx * 2 + material), the same way the diffuse arrays
-    /// hold the Diffuse textures, so the preview shader can light the surface with the real normal map. Rebuilt only when the set of
-    /// textures changes.</summary>
-    private void RebuildNormalArray(PairMaterialData[] pairs, int n)
+    /// <summary>Packs the pairs' Normal and Mask textures into two Texture2DArrays (layer = pairIdx * 2 + material), the same way the
+    /// diffuse arrays hold the Diffuse textures, so the preview shader can light the surface with the real normal map and give it
+    /// the mask's specular and glow. Rebuilt only when the set of textures changes.</summary>
+    private void RebuildNormalMaskArrays(PairMaterialData[] pairs, int n)
     {
         var hash = n;
         var any = false;
+        var anyRamp = false;
         for (var i = 0; i < n && pairs != null; i++)
         {
-            hash = hash * 31 + (pairs[i].Normal1?.GetInstanceID() ?? 0) + (pairs[i].Normal2?.GetInstanceID() ?? 0) * 7;
-            if (pairs[i].Normal1 != null || pairs[i].Normal2 != null) any = true;
+            hash = hash * 31 + (pairs[i].Normal1?.GetInstanceID() ?? 0) + (pairs[i].Normal2?.GetInstanceID() ?? 0) * 7
+                 + (pairs[i].Mask1?.GetInstanceID() ?? 0) * 13 + (pairs[i].Mask2?.GetInstanceID() ?? 0) * 17
+                 + (pairs[i].Ramp?.GetInstanceID() ?? 0) * 19;
+            if (pairs[i].Normal1 != null || pairs[i].Normal2 != null || pairs[i].Mask1 != null || pairs[i].Mask2 != null || pairs[i].Ramp != null) any = true;
+            if (pairs[i].Ramp != null) anyRamp = true;
         }
-        var layers = Mathf.Max(n, 1) * 2;
-        if (hash == _lastNormalHash && (_normalArray == null || _normalArray.depth == layers)) return;
-        _lastNormalHash = hash;
+        var pairLayers = Mathf.Max(n, 1) * 2;
+        var layers = pairLayers;
+        if (hash == _lastNormalMaskHash && (_normalArray == null || _normalArray.depth == pairLayers)) { return; }
+        _lastNormalMaskHash = hash;
 
         if (_normalArray != null) { DestroyObject(_normalArray); _normalArray = null; }
-        _hasNormalContent = false;
+        if (_maskArray != null) { DestroyObject(_maskArray); _maskArray = null; }
+        _hasNormalMaskContent = false;
+        _hasRampLayers = false;
         if (!any || !SystemInfo.supports2DArrayTextures) return;
 
-        _normalArray = new Texture2DArray(NormalArraySize, NormalArraySize, layers, TextureFormat.RGBA32, true, true)
+        // The Ramp textures follow the mask layers (one layer per pair) in the same array, so the shader needs no texture slot for them.
+        var maskLayers = anyRamp ? pairLayers + Mathf.Max(n, 1) : pairLayers;
+        _normalArray = new Texture2DArray(NormalArraySize, NormalArraySize, pairLayers, TextureFormat.RGBA32, true, true)
             { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, name = "SC2_NormalArr" };
+        _maskArray = new Texture2DArray(MaskArraySize, MaskArraySize, maskLayers, TextureFormat.RGBA32, true, true)
+            { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, name = "SC2_MaskArr" };
         var flatNormal = new Color32(128, 128, 255, 255);
+        // terrain.hlsl's mask for a material with no Mask texture: no environment, no glow, full specular level.
+        var noMask = new Color32(0, 0, 255, 0);
         for (var i = 0; i < Mathf.Max(n, 1); i++)
         {
             var p = pairs != null && i < pairs.Length ? pairs[i] : default;
             CopyRawToArrayFilled(_normalArray, p.Normal1, i * 2, NormalArraySize, NormalArraySize, flatNormal);
             CopyRawToArrayFilled(_normalArray, p.Normal2, i * 2 + 1, NormalArraySize, NormalArraySize, flatNormal);
+            CopyRawToArrayFilled(_maskArray, p.Mask1, i * 2, MaskArraySize, MaskArraySize, noMask);
+            CopyRawToArrayFilled(_maskArray, p.Mask2, i * 2 + 1, MaskArraySize, MaskArraySize, noMask);
         }
-        _normalArray.Apply(true);
-        _hasNormalContent = true;
-        SC2Log.Log($"[SC2Runtime] RebuildNormalArray: {layers} layer(s), {NormalArraySize}x{NormalArraySize}.");
+        if (anyRamp)
+            for (var i = 0; i < Mathf.Max(n, 1); i++)
+                CopyRampToArray(_maskArray, pairs != null && i < n ? pairs[i].Ramp : null, pairLayers + i);
+        _hasRampLayers = anyRamp;
+        _normalArray.Apply(true); _maskArray.Apply(true);
+        _hasNormalMaskContent = true;
+        SC2Log.Log($"[SC2Runtime] RebuildNormalMaskArrays: {pairLayers} layer(s), normals {NormalArraySize}x{NormalArraySize}, masks {MaskArraySize}x{MaskArraySize}, {(anyRamp ? Mathf.Max(n, 1) : 0)} ramp layer(s).");
     }
 
-    private void BindNormalArray(Material mat)
+    private float _shadowAmount, _glowGain = 6.5f, _specularGain = 1f;
+    private Color _shadowColor = new Color(0.25f, 0.25f, 0.28f, 1f);
+
+    /// <summary>The RNM preview's match to the game's picture: how much of the lit terrain is in the game's dynamic shadow (lit towards
+    /// <paramref name="shadowColor"/> and without the sun's specular), and how far a strongly glowing texel is lifted by the game's bloom, and how much of the sun's specular is kept.</summary>
+    public void SetGameLook(float shadowAmount, float glowGain, float specularGain, Color shadowColor)
+    {
+        _shadowAmount = shadowAmount;
+        _glowGain = glowGain;
+        _specularGain = specularGain;
+        _shadowColor = shadowColor;
+        if (_sharedChunkMat != null) BindGameLook(_sharedChunkMat);
+    }
+
+    private void BindGameLook(Material mat)
+    {
+        mat.SetFloat("_ShadowAmount", _shadowAmount);
+        mat.SetFloat("_GlowGain", _glowGain);
+        mat.SetFloat("_SpecularGain", _specularGain);
+        mat.SetColor("_PreviewShadowColor", _shadowColor);
+    }
+
+    private Vector3 _sunDirection = new Vector3(0.3f, 0.8f, 0.5f).normalized;
+    private Color _sunColor = Color.white;
+
+    /// <summary>The map's SunDirection (pointing at the sun) and SunColor (already times the sun intensity): the light the mask's
+    /// specular is computed against.</summary>
+    public void SetSunLight(Vector3 direction, Color color)
+    {
+        if (direction.sqrMagnitude < 0.0001f) return;
+        direction.Normalize();
+        if (direction == _sunDirection && color == _sunColor) return;
+        _sunDirection = direction;
+        _sunColor = color;
+        if (_sharedChunkMat != null) BindSunLight(_sharedChunkMat);
+    }
+
+    private void BindSunLight(Material mat)
+    {
+        mat.SetVector("_PreviewSunDir", new Vector4(_sunDirection.x, _sunDirection.y, _sunDirection.z, 0f));
+        mat.SetColor("_PreviewSunColor", _sunColor);
+    }
+
+    private Cubemap _environmentCube;
+
+    /// <summary>The map's environment cubemap (null = none), reflected by the pairs whose ENVIRONMENT_MAPPING flag is on.</summary>
+    public void SetEnvironmentCube(Cubemap cube)
+    {
+        _environmentCube = cube;
+        if (_sharedChunkMat != null) BindEnvironmentCube(_sharedChunkMat);
+    }
+
+    private void BindEnvironmentCube(Material mat)
+    {
+        mat.SetInt("_HasEnvCube", _environmentCube != null ? 1 : 0);
+        if (_environmentCube != null) mat.SetTexture("_EnvCube", _environmentCube);
+    }
+
+    private void BindNormalMaskArrays(Material mat)
     {
         if (mat == null) return;
-        if (_hasNormalContent && _normalArray != null)
+        BindEnvironmentCube(mat);
+        BindSunLight(mat);
+        BindGameLook(mat);
+        mat.SetInt("_HasRampArr", _hasRampLayers ? 1 : 0);
+        if (_hasNormalMaskContent && _normalArray != null && _maskArray != null)
         {
             mat.SetTexture("_NormalArr", _normalArray);
-            mat.SetInt("_HasNormalArr", 1);
+            mat.SetTexture("_MaskArr", _maskArray);
+            mat.SetInt("_HasNormalMaskArr", 1);
         }
         else
         {
-            // Nothing to show: the shader keeps the flat normal (the array bound is never sampled).
-            EnsureFallbackNormalArray();
+            // Nothing to show: the shader keeps the flat normal and no mask (the arrays bound are never sampled).
+            EnsureFallbackNormalMaskArrays();
             mat.SetTexture("_NormalArr", _fallbackNormalArray);
-            mat.SetInt("_HasNormalArr", 0);
+            mat.SetTexture("_MaskArr", _fallbackNormalArray);
+            mat.SetInt("_HasNormalMaskArr", 0);
         }
     }
 
     private Texture2DArray _fallbackNormalArray;
 
-    private void EnsureFallbackNormalArray()
+    private void EnsureFallbackNormalMaskArrays()
     {
         if (_fallbackNormalArray != null) return;
         _fallbackNormalArray = new Texture2DArray(4, 4, 2, TextureFormat.RGBA32, false, true)
-            { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Point, name = "SC2_NormalArr_Fallback" };
+            { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Point, name = "SC2_NormalMaskArr_Fallback" };
         var neutral = new Color32[16];
         for (var i = 0; i < neutral.Length; i++) neutral[i] = new Color32(128, 128, 255, 255);
         for (var layer = 0; layer < 2; layer++) _fallbackNormalArray.SetPixels32(neutral, layer);
         _fallbackNormalArray.Apply(false);
     }
 
-    /// <summary>CopyRawToArray's raw (not gamma-converted) copy, with a given colour for a missing texture (a flat normal).</summary>
+    private const int RampRows = 8;
+
+    /// <summary>Stores a Ramp texture in the first 8 rows of a mask-array layer, scaled to the layer's width (the rest of the layer stays
+    /// white). A missing ramp leaves a white layer, which is never read: the shader reads a ramp only for a pair that has one.</summary>
+    private static void CopyRampToArray(Texture2DArray arr, Texture2D ramp, int layer)
+    {
+        var size = arr.width;
+        var pixels = new Color32[size * size];
+        for (var i = 0; i < pixels.Length; i++) pixels[i] = new Color32(255, 255, 255, 255);
+        if (ramp != null)
+        {
+            // Same as CopyRawToArray: the ramp's own bytes, whether or not the texture is flagged sRGB.
+            var rampIsSrgb = ramp.isDataSRGB;
+            var tmp = RenderTexture.GetTemporary(size, RampRows, 0, RenderTextureFormat.ARGB32, rampIsSrgb ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
+            var prev = RenderTexture.active;
+            Texture2D readable = null;
+            try
+            {
+                Graphics.Blit(ramp, tmp);
+                RenderTexture.active = tmp;
+                readable = new Texture2D(size, RampRows, TextureFormat.RGBA32, false, !rampIsSrgb);
+                readable.ReadPixels(new Rect(0, 0, size, RampRows), 0, 0);
+                readable.Apply(false);
+                System.Array.Copy(readable.GetPixels32(), pixels, size * RampRows);
+            }
+            finally
+            {
+                if (readable != null) DestroyObject(readable);
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(tmp);
+            }
+        }
+        arr.SetPixels32(pixels, layer, 0);
+    }
+
+    /// <summary>CopyRawToArray's raw (not gamma-converted) copy, with a given colour for a missing texture (flat normal, no mask).</summary>
     private static void CopyRawToArrayFilled(Texture2DArray arr, Texture2D src, int layer, int w, int h, Color32 missing)
     {
         if (src == null)
@@ -1827,14 +1965,18 @@ public partial class SC2TerrainRuntime : IDisposable
             return;
         }
 
-        var tmp = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+        // A texture flagged sRGB (a Mask or Ramp picked through the texture browser is: only Normals are loaded as linear data) is decoded
+        // to linear when it is sampled, which would crush the data these arrays hold (a mask value of 0.44 would become 0.16). An sRGB
+        // target encodes it straight back, so the stored bytes are the file's own either way.
+        var srcIsSrgb = src.isDataSRGB;
+        var tmp = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32, srcIsSrgb ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
         var prev = RenderTexture.active;
         Texture2D readable = null;
         try
         {
             Graphics.Blit(src, tmp);
             RenderTexture.active = tmp;
-            readable = new Texture2D(w, h, TextureFormat.RGBA32, false, true);
+            readable = new Texture2D(w, h, TextureFormat.RGBA32, false, !srcIsSrgb);
             readable.ReadPixels(new Rect(0, 0, w, h), 0, 0);
             readable.Apply(false);
             arr.SetPixels32(readable.GetPixels32(), layer, 0);
@@ -1864,7 +2006,7 @@ public partial class SC2TerrainRuntime : IDisposable
         mat.SetTexture("_Diffuse2Fallback", _diffuse2Fallback != null ? _diffuse2Fallback : Texture2D.whiteTexture);
         mat.SetTexture("_RnmArr", _rnmArray);
         mat.SetTexture("_RnmFallback", _rnmFallback != null ? _rnmFallback : GreyTexture());
-        BindNormalArray(mat);
+        BindNormalMaskArrays(mat);
         mat.SetVector ("_RnmUvOffset", new Vector4(0f, 0f, 0f, 0f));
         // Default only — SetRnmUvTransform (called unconditionally by
         // SC2TerrainShell.ApplyPreviewModeToChunksFor after every material

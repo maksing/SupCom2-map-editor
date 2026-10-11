@@ -27,11 +27,30 @@ Shader "Hidden/SC2/TerrainView"
         // exceeded"). One array + one shared fallback costs only 2 more
         // sampler slots instead of 6. Grey (not black/white) fallback so an
         // un-baked pair still reads as lit rather than going solid black.
-        // The pairs' Normal textures (layer = pairIdx*2 + 0 for material 1, + 1 for material 2), packed into one array for the same
-        // sampler-count reason as _RnmArr: the surface is lit with the real normal map, as the game's terrain shader does
-        // (SC2Terrain.shader), instead of showing the diffuse alone.
+        // The pairs' Normal and Mask textures (layer = pairIdx*2 + 0 for material 1, + 1 for material 2), packed into one array each for the same
+        // sampler-count reason as _RnmArr: the surface is lit with the real normal map and given the specular / glow of the mask, as the
+        // game's terrain shader does (SC2Terrain.shader), instead of showing the diffuse alone.
         _NormalArr   ("Normal Arr (packed x2)", 2DArray) = "" {}
-        _HasNormalArr ("Has Normal Array", Int) = 0
+        _MaskArr     ("Mask Arr (packed x2)", 2DArray) = "" {}
+        _HasNormalMaskArr ("Has Normal/Mask Arrays", Int) = 0
+        // The Environment cubemap of the pairs whose ENVIRONMENT_MAPPING flag is on (the mask's red channel is the level).
+        _EnvCube     ("Environment Cube", Cube) = "" {}
+        _HasEnvCube  ("Has Environment Cube", Int) = 0
+        // The pairs' Ramp textures (terrain.hlsl's RampMap) live in _MaskArr too, after the 2 * pairs mask layers: layer 2 * pairs + pairIdx,
+        // the ramp in its first 8 rows. A texture slot of their own would pass the 16 the shader model allows.
+        _HasRampArr  ("Has Ramps In The Mask Array", Int) = 0
+        // The map's SunDirection (normalized, pointing at the sun) and SunColor (times the sun intensity) from info.bdf.
+        _PreviewSunDir   ("Sun Direction", Vector) = (0.3, 0.8, 0.5, 0)
+        _PreviewSunColor ("Sun Color", Color) = (1, 1, 1, 1)
+        // The game's dynamic shadow, which the preview has no shadow map for: _ShadowAmount is how much of the lit terrain is in shadow
+        // (0 = none, 1 = all of it), where the light is replaced by the map's ShadowColor (_PreviewShadowColor, alpha = its strength) and
+        // the sun's specular is lost, as in terrain.hlsl. _GlowGain stands for the game's bloom, which lifts what glows.
+        _ShadowAmount       ("Shadow Amount", Float) = 0
+        _PreviewShadowColor ("Shadow Color", Color) = (0.25, 0.25, 0.28, 1)
+        _GlowGain           ("Glow Gain", Float) = 5
+        // The sun's specular is added to the colour, not multiplied by the texture, so at full strength it fills in the dark cells of a mask
+        // such as a hex pattern and cancels what glows there; this scales it (1 = the game's own formula).
+        _SpecularGain       ("Specular Gain", Float) = 1
         _RnmArr      ("RNM Basis Arr (packed x3)", 2DArray) = "" {}
         _RnmFallback ("RNM Fallback", 2D) = "grey" {}
         // World-space XZ -> RNM mask UV transform (SC2TerrainRuntime.
@@ -105,7 +124,18 @@ Shader "Hidden/SC2/TerrainView"
             sampler2D _Diffuse2Fallback;
             UNITY_DECLARE_TEX2DARRAY(_RnmArr);
             UNITY_DECLARE_TEX2DARRAY(_NormalArr);
-            int _HasNormalArr;
+            UNITY_DECLARE_TEX2DARRAY(_MaskArr);
+            int _HasNormalMaskArr;
+            // No sampler of its own (the 16-sampler cap): the cube is read through the mask array's sampler state.
+            UNITY_DECLARE_TEXCUBE_NOSAMPLER(_EnvCube);
+            int _HasEnvCube;
+            int _HasRampArr;
+            float4 _PreviewSunDir;
+            float4 _PreviewSunColor;
+            float _ShadowAmount;
+            float4 _PreviewShadowColor;
+            float _GlowGain;
+            float _SpecularGain;
             sampler2D _RnmFallback;
             float4 _RnmUvOffset;
             float4 _RnmUvInvScale;
@@ -203,6 +233,19 @@ Shader "Hidden/SC2/TerrainView"
             bool PairHasBakedRnm(int idx)
             {
                 return tex2Dlod(_TilingLUT, float4(LutUV(idx, .5), 0, 0)).a > 0.5;
+            }
+
+            // The pair's SPECULAR_LIGHTING / GLOW / ENVIRONMENT_MAPPING shader flags (SC2TerrainRuntime.RebuildLUTs packs them into the
+            // _TilingLUT green channel), which decide what the mask's channels do: blue = specular level, green = glow, red = environment level.
+            static const int kFlagSpecular = 1;
+            static const int kFlagGlow = 2;
+            static const int kFlagEnvironment = 4;
+            // The pair has a Ramp texture (terrain.hlsl's RAMP_MAP): its specular follows the ramp and its environment reflection exists.
+            static const int kFlagRamp = 8;
+
+            int GetPairFlags(int idx)
+            {
+                return (int)round(tex2Dlod(_TilingLUT, float4(LutUV(idx, .5), 0, 0)).g);
             }
 
             // MatCap-style shading for the debug/no-real-material preview
@@ -516,16 +559,21 @@ Shader "Hidden/SC2/TerrainView"
                 return baseColor;
             }
 
-            // The tangent-space normal of the pair's two materials at uv, blended like the diffuse. Flat when the array is not available.
-            half3 SampleSurfaceNormal(int pIdx, float2 uv, half blend)
+            // The tangent-space normal and the mask of the pair's two materials at uv, blended like the diffuse. Without the arrays the normal
+            // is flat and the mask is what terrain.hlsl uses for a material with no Mask texture: no environment, no glow, full specular.
+            void SampleSurfaceNormalMask(int pIdx, float2 uv, half blend, out half3 tn, out half4 mask)
             {
-                if (_UseArrayTextures != 0 && _HasNormalArr != 0)
+                tn = half3(0, 0, 1);
+                mask = half4(0, 0, 1, 0);
+                if (_UseArrayTextures != 0 && _HasNormalMaskArr != 0)
                 {
                     half4 n1 = UNITY_SAMPLE_TEX2DARRAY(_NormalArr, float3(uv, (float)(pIdx * 2)));
                     half4 n2 = UNITY_SAMPLE_TEX2DARRAY(_NormalArr, float3(uv, (float)(pIdx * 2 + 1)));
-                    return normalize(lerp(UnpackNormal(n1), UnpackNormal(n2), blend));
+                    tn = normalize(lerp(UnpackNormal(n1), UnpackNormal(n2), blend));
+                    half4 m1 = UNITY_SAMPLE_TEX2DARRAY(_MaskArr, float3(uv, (float)(pIdx * 2)));
+                    half4 m2 = UNITY_SAMPLE_TEX2DARRAY(_MaskArr, float3(uv, (float)(pIdx * 2 + 1)));
+                    mask = lerp(m1, m2, blend);
                 }
-                return half3(0, 0, 1);
             }
 
             // The tangent-space normal in world space. Texture u runs along world +X (the stretch compensation changes the scale, not the
@@ -540,6 +588,79 @@ Shader "Hidden/SC2/TerrainView"
             }
 
             static const float3 kPreviewLight = float3(0.4264, 0.8528, 0.2558); // normalize(0.5, 1.0, 0.3)
+
+            // terrain.hlsl: lightBlend = lerp(rnmColor, ShadowColor, min((1 - shadowScalar) * ShadowColor.a, sunOcclusion)). The preview has no
+            // shadow map, so (1 - shadowScalar) is the uniform _ShadowAmount; sunOcclusion keeps the baked shadows from being darkened twice.
+            half3 GameLight(half3 baked, half sunOcclusion)
+            {
+                return lerp(baked, _PreviewShadowColor.rgb, saturate(_ShadowAmount * _PreviewShadowColor.a) * saturate(sunOcclusion));
+            }
+
+            // terrain.hlsl samples its RampMap (8 rows) at row 0.5 / 8 for the diffuse, 1.5 / 8 for the specular and 2.5 / 8 for the
+            // environment lookup, counting rows from the top of the file. A ramp is stored in the first 8 rows of a 256 x 256 mask-array
+            // layer, where Unity keeps a file's top row at the highest v, so the file's row r is row 7 - r here. The coordinate is kept on
+            // texel centres so the repeat-wrapped sampler never mixes the two ends of the ramp.
+            static const float kRampSize = 256.0;
+
+            half3 SampleRamp(int pIdx, float u, float row)
+            {
+                u = clamp(u, 0.5 / kRampSize, 1.0 - 0.5 / kRampSize);
+                return UNITY_SAMPLE_TEX2DARRAY_LOD(_MaskArr, float3(u, (7.0 - row + 0.5) / kRampSize, (float)(_PairCount * 2 + pIdx)), 0).rgb;
+            }
+
+            // SpecularFormula (global_constants.hlsl): SunColor times the mask's blue level, shaped by the ramp when the pair has one and
+            // by pow(.., 20) when not; nothing at all where SPECULAR_LIGHTING is off. The caller scales it by the baked sun occlusion.
+            half3 PreviewSpecular(int pIdx, int flags, float3 reflView, half specLevel)
+            {
+                if ((flags & kFlagSpecular) == 0) return half3(0, 0, 0);
+                float lambert = max(0.000001, dot(_PreviewSunDir.xyz, reflView));
+                half3 sColor = _PreviewSunColor.rgb * specLevel;
+                if ((flags & kFlagRamp) != 0 && _HasRampArr != 0)
+                    return sColor * SampleRamp(pIdx, lambert, 1.0);
+                return sColor * (half)pow(lambert, 20.0);
+            }
+
+            // ComputeEnvironment (global_constants.hlsl): the Environment cube along the reflected view, weighted by the ramp's fresnel row and the
+            // mask's red level. The game compiles it only with a ramp, so a pair without one reflects nothing.
+            half3 PreviewEnvironment(int pIdx, int flags, float3 nWorld, float3 viewDir, float3 reflView, half envLevel)
+            {
+                if ((flags & kFlagEnvironment) == 0 || (flags & kFlagRamp) == 0 || _HasEnvCube == 0 || _HasRampArr == 0)
+                    return half3(0, 0, 0);
+                half3 fresnel = SampleRamp(pIdx, dot(viewDir, nWorld), 2.0);
+                return UNITY_SAMPLE_TEXCUBE_SAMPLER(_EnvCube, _MaskArr, reflView).rgb * (fresnel * envLevel);
+            }
+
+            // What the mask adds to a lit surface: the sun's specular (blue, times the baked sun occlusion and the share of the surface that is
+            // not in shadow) and the environment reflection (red, which the game does not shadow).
+            half3 PreviewMaskExtras(int pIdx, int flags, float3 nWorld, float3 worldPos, half4 mask, half sunOcclusion, half shadowScalar)
+            {
+                float3 viewDir = normalize(_WorldSpaceCameraPos - worldPos);
+                float3 reflView = -reflect(viewDir, nWorld);
+                return PreviewSpecular(pIdx, flags, reflView, mask.b) * (sunOcclusion * shadowScalar * (half)_SpecularGain)
+                     + PreviewEnvironment(pIdx, flags, nWorld, viewDir, reflView, mask.r);
+            }
+
+            // GLOW (terrain.hlsl): the mask's green channel lifts the light term towards full light (glowTarget = 1) before it multiplies the
+            // diffuse, so a glowing texel shows its own colour unshaded. The game's bloom takes a strong glow further, which the preview
+            // imitates with a larger glowTarget that grows with the glow (the 0.44 lines of a hex mask come out about 2.4 times brighter than
+            // their cells, as in the game with its fog of war off; a full glow reaches glowTarget).
+            // The game's bloom does not only brighten the glowing texels, it spreads their light over what is around them, so a patch of glowing
+            // lines (a hex pattern) lifts the whole patch against the plain surface next to it. The mask is read at a coarse mip, about the size of
+            // a hex cell, and the glow found there is added as light on the diffuse. Zero without the GLOW flag or the mask array.
+            half3 PreviewBloom(int pIdx, int flags, float2 uv, half blend, half3 albedo)
+            {
+                if ((flags & kFlagGlow) == 0 || _UseArrayTextures == 0 || _HasNormalMaskArr == 0)
+                    return half3(0, 0, 0);
+                half g1 = UNITY_SAMPLE_TEX2DARRAY_LOD(_MaskArr, float3(uv, (float)(pIdx * 2)), 4).g;
+                half g2 = UNITY_SAMPLE_TEX2DARRAY_LOD(_MaskArr, float3(uv, (float)(pIdx * 2 + 1)), 4).g;
+                return albedo * (lerp(g1, g2, blend) * (half)_GlowGain);
+            }
+
+            half3 PreviewGlow(int flags, half3 lightTerm, half glowLevel, half glowTarget)
+            {
+                half target = 1.0h + (glowTarget - 1.0h) * saturate(glowLevel);
+                return (flags & kFlagGlow) != 0 ? lerp(lightTerm, half3(target, target, target), glowLevel) : lightTerm;
+            }
 
             float4 frag(v2f i) : SV_Target
             {
@@ -611,16 +732,21 @@ Shader "Hidden/SC2/TerrainView"
                     d2 = tex2D(_Diffuse2Fallback, uv1_tiled).rgb;
                 }
                 half3 albedo = lerp(d1, d2, blend);
+                int pairFlags = GetPairFlags(pIdx);
 
                 if (_PreviewMode == 0)
                 {
-                    // Lit by the normal map, so the surface detail shows; the brightness stays what the flat preview had on average.
-                    half3 tn0 = SampleSurfaceNormal(pIdx, uv1_tiled, blend);
+                    // Lit by the normal map and given the mask's specular, so the surface detail shows; the brightness stays what the flat
+                    // preview had on average.
+                    half3 tn0; half4 mask0;
+                    SampleSurfaceNormalMask(pIdx, uv1_tiled, blend, tn0, mask0);
                     float3 nWorld0 = ApplyTangentNormal(normalize(i.nrm), tn0);
                     // Relative to the shading of the plain mesh normal, so the geometry looks as it did and the normal map adds its detail on top.
                     half flatShade0 = (half)(0.35 + 0.65 * saturate(dot(normalize(i.nrm), kPreviewLight)));
                     half shade0 = (half)(0.35 + 0.65 * saturate(dot(nWorld0, kPreviewLight))) / max(flatShade0, 0.2h);
-                    half3 readableDiffuse = saturate(albedo * _TexturedBrightness * shade0);
+                    half3 readableDiffuse = saturate(albedo * PreviewGlow(pairFlags, (half3)(_TexturedBrightness * shade0), mask0.g, (half)_GlowGain)
+                                                     + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedo)
+                                                     + PreviewMaskExtras(pIdx, pairFlags, nWorld0, i.worldPos, mask0, 1.0h, 1.0h));
                     return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(readableDiffuse, 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
@@ -638,10 +764,14 @@ Shader "Hidden/SC2/TerrainView"
                 // its own fallback looks like ordinary lit terrain).
                 if (!PairHasBakedRnm(pIdx))
                 {
-                    half3 tn2 = SampleSurfaceNormal(pIdx, uv1_tiled, blend);
+                    half3 tn2; half4 mask2;
+                    SampleSurfaceNormalMask(pIdx, uv1_tiled, blend, tn2, mask2);
                     float3 nrm2 = ApplyTangentNormal(normalize(i.nrm), tn2);
                     half ndl2 = abs(dot(nrm2, kPreviewLight)) * 0.3 + 0.7;
-                    half3 lit2 = albedo * ndl2;
+                    // Only the RNM view reaches here (every other view has returned above), so the pair is lit like the baked ones are.
+                    half3 lit2 = albedo * PreviewGlow(pairFlags, GameLight((half3)ndl2, 1.0h), mask2.g, (half)_GlowGain)
+                               + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedo)
+                               + PreviewMaskExtras(pIdx, pairFlags, nrm2, i.worldPos, mask2, 1.0h, (half)(1.0 - _ShadowAmount));
                     return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
@@ -661,9 +791,13 @@ Shader "Hidden/SC2/TerrainView"
                 // shows the same brightness/shadowing here as in-game.
                 float2 rnmUV = (i.uv0 - _RnmUvOffset.xy) * _RnmUvInvScale.xy;
                 half3 m0, m1, m2;
+                // Slice 0's alpha is the baked sun occlusion: the game multiplies the specular by it.
+                half sunOcclusion = 1.0h;
                 if (_UseArrayTextures != 0)
                 {
-                    m0 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 0))).rgb;
+                    half4 m0Full = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 0)));
+                    m0 = m0Full.rgb;
+                    sunOcclusion = m0Full.a;
                     m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 1))).rgb;
                     m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr, float3(rnmUV, (float)(pIdx * 3 + 2))).rgb;
                 }
@@ -677,33 +811,20 @@ Shader "Hidden/SC2/TerrainView"
                 }
                 // The game's own formula: each baked basis weighted by how much the (normal-mapped) normal faces its direction. A flat
                 // normal gives (m0 + m1 + m2) * 0.5774, which is what this used to be.
-                half3 tnR = SampleSurfaceNormal(pIdx, uv1_tiled, blend);
+                half3 tnR; half4 maskR;
+                SampleSurfaceNormalMask(pIdx, uv1_tiled, blend, tnR, maskR);
                 half3 rnmColor = m0 * saturate(dot(tnR, half3(0.8165, 0.0, 0.5774)))
                                + m1 * saturate(dot(tnR, half3(-0.4082, 0.7071, 0.5774)))
                                + m2 * saturate(dot(tnR, half3(-0.4082, -0.7071, 0.5774)));
-                // Confirmed via a debug build that the real baked occlusion
-                // signal IS present and correctly shaped/positioned (matches
-                // the in-game cast shadow's own outline) — but it's a
-                // genuinely subtle hue/brightness shift toward a fairly
-                // bright "sky-bounce" ShadowColor by design (real vanilla
-                // masks aren't meant to go dark on their own), and it lives
-                // in a narrow band close to 1.0. A flat brightness multiplier
-                // (tried first) only pushed everything closer to saturating
-                // white without making the shadow itself read as darker — a
-                // genuine contrast stretch around the midtone is what
-                // actually widens the visible gap between lit and shadowed
-                // areas, at the cost of some flattening at the very top/
-                // bottom of the range (acceptable for a preview mode). The
-                // dramatic, sharp-edged cast shadow the real game shows still
-                // comes from its OWN real-time terrain shadow map
-                // (SC2Terrain.shader's DYNAMIC_SHADOWS/ComputeShadow path,
-                // sampling an actual ShadowMap render target) — a separate
-                // rendering feature this procedural preview has no
-                // equivalent of; this contrast stretch only makes the RNM
-                // bake's own (real, but subtle) signal easier to see.
-                const half RNM_CONTRAST = 2.2;
-                rnmColor = saturate((rnmColor - 0.5) * RNM_CONTRAST + 0.5);
+                // The baked light is used as the game uses it, with no contrast stretch: a stretch applied per channel crushes the red and
+                // green of a shadow to zero and leaves a saturated blue, where the game's shadow is a dull blue-grey. The game's own
+                // darkness (its exposure and dynamic shadows) comes from the Game look settings, applied to the light just below.
+                rnmColor = saturate(rnmColor);
                 half3 lit = albedo * rnmColor;
+                // Glow lifts the light term, then the sun's specular and the environment reflection are added on top, each by its own flag.
+                lit = albedo * PreviewGlow(pairFlags, GameLight(rnmColor, sunOcclusion), maskR.g, (half)_GlowGain)
+                    + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedo);
+                lit += PreviewMaskExtras(pIdx, pairFlags, ApplyTangentNormal(normalize(i.nrm), tnR), i.worldPos, maskR, sunOcclusion, (half)(1.0 - _ShadowAmount));
                 return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
             }
             ENDCG

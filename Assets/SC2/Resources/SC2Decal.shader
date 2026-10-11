@@ -110,6 +110,10 @@ Shader "SC2/Decal"
             sampler2D _PairMapTex_Core; float4 _PairMapTex_Core_TexelSize;
             sampler2D _TilingLUT_Core;
             UNITY_DECLARE_TEX2DARRAY(_RnmArr_Core);
+            // The RNM preview's shadow (SC2TerrainRuntime.PublishDecalShadow): the terrain under the decal is lit towards the map's ShadowColor
+            // by this amount (rgb = ShadowColor, a = amount times its strength), so the decal's baked light is too.
+            float _SC2DecalGameLook;
+            float4 _SC2DecalShadow;
             int _RnmValid_Core, _PairCount_Core;
             float4 _RnmUvOffset_Core, _RnmUvInvScale_Core;
 
@@ -199,6 +203,17 @@ Shader "SC2/Decal"
                 return tex2Dlod(tilingLut, float4((idx + 0.5) / 72.0, 0.5, 0, 0)).a > 0.5;
             }
 
+            // The baked light as the terrain under the decal shows it: as it is, times the light level, in the RNM game look; with the
+            // contrast stretch the other views have always used otherwise.
+            // The baked light as the terrain under the decal shows it: lerp towards ShadowColor like SC2TerrainView.shader's GameLight in the RNM
+            // game look; with the contrast stretch the other views have always used otherwise.
+            half3 DecalBakedLight(half3 baked)
+            {
+                if (_SC2DecalGameLook > 0.5)
+                    return lerp(saturate(baked), _SC2DecalShadow.rgb, saturate(_SC2DecalShadow.a));
+                return saturate((baked - 0.5) * 2.2 + 0.5);
+            }
+
             fixed4 frag(v2f i) : SV_Target
             {
                 // Same projection-box clip as decal.hlsl's DecalPS: discard
@@ -243,7 +258,7 @@ Shader "SC2/Decal"
                                 half3 m0 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 0))).rgb;
                                 half3 m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 1))).rgb;
                                 half3 m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 2))).rgb;
-                                half3 rnm = saturate(((m0 + m1 + m2) * 0.5774 - 0.5) * 2.2 + 0.5);
+                                half3 rnm = DecalBakedLight((m0 + m1 + m2) * 0.5774);
                                 lit = diffuseColor.rgb * rnm;
                                 resolved = true;
                             }
@@ -265,7 +280,7 @@ Shader "SC2/Decal"
                                 half3 m0 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 0))).rgb;
                                 half3 m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 1))).rgb;
                                 half3 m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 2))).rgb;
-                                half3 rnm = saturate(((m0 + m1 + m2) * 0.5774 - 0.5) * 2.2 + 0.5);
+                                half3 rnm = DecalBakedLight((m0 + m1 + m2) * 0.5774);
                                 lit = diffuseColor.rgb * rnm;
                                 resolved = true;
                             }
