@@ -104,15 +104,12 @@ public sealed class SC2ScenarioShell
 
         if (!IsReady)
         {
-            SC2TerrainShell.DrawUnifiedNote("Create/load a terrain first (Terrain tab) — Scenario edits the procedural map's own name, used by Save/Export.");
+            SC2TerrainShell.DrawUnifiedNote("Create or load a map first (Terrain tab). Scenario sets the name of the map and what the game shows for it.");
             GUILayout.EndVertical();
             return;
         }
 
         if (_loadedForData != Data) LoadFromNewData();
-
-        DrawUndoRedoRow(w);
-        GUILayout.Space(4);
 
         if (subTab == 1) DrawScriptsTab(w);
         else if (subTab == 2) DrawPreviewTab(w);
@@ -124,10 +121,10 @@ public sealed class SC2ScenarioShell
     private void DrawInfoTab(float w)
     {
         DrawDisplayNameField();
-        SC2TerrainShell.DrawUnifiedNote("Display Name: shown in the game's own map browser (_scenario.lua ScenarioInfo.name) — genuinely separate from the technical Map Name below, confirmed against real vanilla maps (e.g. name='!Eclipse map' vs. MapName='SC2_D3_Eclipse').");
+        SC2TerrainShell.DrawUnifiedNote("Display Name: the name players see in the game's map list. It can differ from the Map Name below.");
         GUILayout.Space(4);
         DrawMapNameField();
-        SC2TerrainShell.DrawUnifiedNote("Map Name: the technical identifier used for every file/folder name on export — terrain.bdf, maps/<MapName>/, the .scd archive/folder name, and the map/save/script path fields inside _scenario.lua. Every other Scenario field (Description/Type/CampaignId/...) belongs to the imported-.scd workflow and has no equivalent here yet — see the status doc for why.");
+        SC2TerrainShell.DrawUnifiedNote("Map Name: the technical name of the map. It is used for the file and folder names on export (terrain.bdf, maps/<Map Name>/, the .scd archive) and for the paths inside _scenario.lua.");
     }
 
     /// <summary>_script.lua's one real per-map setting — confirmed against a
@@ -140,7 +137,7 @@ public sealed class SC2ScenarioShell
     private void DrawScriptsTab(float w)
     {
         SC2EnvFieldGui.SectionLabel("Playable Area");
-        SC2TerrainShell.DrawUnifiedNote("Passed to ScenarioFramework.SetPlayableArea(...) in the exported _script.lua — the game clips the actual playable region to this Area's rectangle. Pick which Area (Objects tab) that is.");
+        SC2TerrainShell.DrawUnifiedNote("The game limits the playable region of the map to the rectangle of this Area. Choose which Area (Objects tab) it is.");
 
         var zones = Data.ObjZones;
         if (zones == null || zones.Count == 0)
@@ -178,7 +175,7 @@ public sealed class SC2ScenarioShell
     private void DrawPreviewTab(float w)
     {
         SC2EnvFieldGui.SectionLabel("Minimap");
-        SC2TerrainShell.DrawUnifiedNote("Orthographic top-down render (RNM + props) — written fresh into minimap.win.dds on every Export, unless a custom image is imported below. Preview one here any time to check the framing.");
+        SC2TerrainShell.DrawUnifiedNote("A top-down picture of the map (terrain lighting and props), written into minimap.win.dds on every export unless you import a custom image below. Preview it here to check the framing.");
 
         // An imported minimap is shown as soon as the tab opens (also after the map was reloaded or switched).
         var custom = Data.CustomMinimapPng is { Length: > 0 } ? Data.CustomMinimapPng : null;
@@ -240,7 +237,7 @@ public sealed class SC2ScenarioShell
         GUILayout.Space(12);
 
         SC2EnvFieldGui.SectionLabel("Map Preview");
-        SC2TerrainShell.DrawUnifiedNote("Shown in a real map-select list — framed by hand: navigate the viewport to the angle you want, then Capture. Stored on the map and reused at every export until re-captured.");
+        SC2TerrainShell.DrawUnifiedNote("Shown in the game's map selection. Frame it by hand: move the viewport to the view you want, then click Capture. It is saved with the map and reused at every export until you capture it again.");
 
         RefreshMapShotThumbnail();
         if (_mapShotThumbnail != null)
@@ -287,7 +284,7 @@ public sealed class SC2ScenarioShell
         GUILayout.Space(12);
 
         SC2EnvFieldGui.SectionLabel("Lobby Spawns");
-        SC2TerrainShell.DrawUnifiedNote("Where each army's start marker is drawn on the minimap in the game lobby (_scenario.lua). Only the lobby picture changes — the armies' real spawn positions (_save.lua) stay exactly where they are.");
+        SC2TerrainShell.DrawUnifiedNote("Where each army's start marker is drawn on the minimap in the game lobby. Only the lobby picture changes; the armies' real start positions stay where they are.");
         if (GUILayout.Button("Edit Lobby Spawns...", GUILayout.Width(w), GUILayout.MaxWidth(w)))
             OpenLobbySpawnEditor?.Invoke();
     }
@@ -356,21 +353,6 @@ public sealed class SC2ScenarioShell
         tex.LoadRawTextureData(rgba);
         tex.Apply(false, false);
         _mapShotThumbnail = tex;
-    }
-
-    private void DrawUndoRedoRow(float w)
-    {
-        if (_session == null) return;
-        GUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        // Restores whatever GUI.enabled was BEFORE this row (not hardcode
-        // true) — see SC2ObjectsShell.DrawUndoRedoRow's own comment for why.
-        var guiEnabledBeforeUndoRow = GUI.enabled;
-        GUI.enabled = guiEnabledBeforeUndoRow && _session.History.CanUndo;
-        if (SC2EnvFieldGui.Button("↩ Undo")) Undo();
-        GUI.enabled = guiEnabledBeforeUndoRow && _session.History.CanRedo;
-        if (SC2EnvFieldGui.Button("↪ Redo")) Redo();
-        GUI.enabled = guiEnabledBeforeUndoRow;
-        GUILayout.EndHorizontal();
     }
 
     /// <summary>Mirrors SC2Collision2Shell.LoadFromNewData — syncs the

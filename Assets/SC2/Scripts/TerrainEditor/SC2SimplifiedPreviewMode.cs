@@ -55,7 +55,7 @@ public sealed class SC2SimplifiedPreviewMode
         }
 
         if (_win.IsPairCpuDataStale)
-            SC2TerrainShell.DrawUnifiedNote("CPU pair data is pending GPU readback. Rebuild/export will force a sync.");
+            SC2TerrainShell.DrawUnifiedNote("The terrain is still being read back from the graphics card. Rebuild and export wait for it.");
 
         var sourceTris = _lastBuild != null ? _lastBuild.SourceTriangleCount : 0;
         var builtTris = _lastBuild != null ? _lastBuild.BuiltTriangleCount : 0;

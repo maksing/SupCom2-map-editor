@@ -256,7 +256,7 @@ public sealed class SC2CostsShell
 
         if (!IsReady)
         {
-            SC2TerrainShell.DrawUnifiedNote("Create/load a terrain first (Terrain tab) — costs and terrain types paint over the actual sculpted surface.");
+            SC2TerrainShell.DrawUnifiedNote("Create or load a map first (Terrain tab). Costs and terrain types are painted over its terrain.");
             EditorGUILayout.EndVertical();
             return;
         }

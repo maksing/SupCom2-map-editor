@@ -113,7 +113,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
 
         if (!IsReady)
         {
-            SC2TerrainShell.DrawUnifiedNote("Create/load a terrain first (Terrain tab) — Collision2 is generated from the painted procedural terrain's hfield.");
+            SC2TerrainShell.DrawUnifiedNote("Create or load a map first (Terrain tab). Collision2 is generated from the map's terrain.");
             EditorGUILayout.EndVertical();
             return;
         }
@@ -128,12 +128,9 @@ public sealed class SC2Collision2Shell : System.IDisposable
 
         EditorGUILayout.Space(4);
         DrawPolygonBudgetSlider();
-        SC2TerrainShell.DrawUnifiedNote("Ground TIN triangle budget (default 2500, the vanilla-observed convention — the file format itself has no fixed ceiling here). Raising it lets the error-adaptive refinement spend more triangles on steep/detailed terrain before it runs out of budget.");
+        SC2TerrainShell.DrawUnifiedNote("Triangle budget of the collision mesh (default 2500, as in the original maps). Raising it lets the mesh follow steep and detailed terrain more closely, at the cost of a bigger file.");
 
         DrawExcludedMaterials(w);
-
-        EditorGUILayout.Space(4);
-        DrawUndoRedoRow(w);
 
         EditorGUILayout.Space(4);
         EditorGUI.BeginDisabledGroup(_generating);
@@ -171,7 +168,7 @@ public sealed class SC2Collision2Shell : System.IDisposable
                 // (Triangles <-> Lines) immediately, not just next Generate.
                 RebuildPreviewMesh();
             }
-            SC2TerrainShell.DrawUnifiedNote("Shows the real TIN triangulation (edges only) instead of a filled solid — useful for spotting sliver triangles or where the error-driven refinement spent its 2500-triangle budget.");
+            SC2TerrainShell.DrawUnifiedNote("Shows only the edges of the collision mesh instead of a filled surface: useful for spotting thin triangles and for seeing where the triangle budget was spent.");
 
             // Real fix for "Import Corrected Mesh"/"Import collision2.bdf..."
             // having no effect on the actual exported map — see
@@ -187,12 +184,12 @@ public sealed class SC2Collision2Shell : System.IDisposable
                 if (useCustom) SyncCustomCollision2Bytes();
             }
             SC2TerrainShell.DrawUnifiedNote(Data.UseCustomCollision2
-                ? "Real map export will write THIS mesh as collision2.bdf, unchanged — it will not be regenerated from the terrain. Re-import or re-Generate to replace it; click Generate Collision2 to go back to auto-generation."
-                : "Real map export always auto-generates collision2.bdf fresh from the current terrain, ignoring this preview — check the box above to make export use this exact mesh instead.");
+                ? "Export writes this mesh as collision2.bdf as it is, without generating it again from the terrain. Re-import it, or click Generate Collision2, to replace it."
+                : "Export generates collision2.bdf from the current terrain and ignores this preview. Tick the box above to make export use this exact mesh instead.");
         }
         else
         {
-            SC2TerrainShell.DrawUnifiedNote("Not generated yet this session — click Generate Collision2 above. Export also regenerates it automatically when writing the map, so this button is only needed to preview it beforehand.");
+            SC2TerrainShell.DrawUnifiedNote("Not generated yet. Click Generate Collision2 above. Export also generates it when it writes the map, so this is only needed to preview it first.");
         }
 
         EditorGUILayout.EndVertical();
@@ -517,19 +514,6 @@ public sealed class SC2Collision2Shell : System.IDisposable
         _session.History.Execute(document, new SC2SetCollision2PolygonBudgetCommand(finalValue));
         // See CommitOffsetChange's own comment — same bug, same fix.
         _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
-    }
-
-    private void DrawUndoRedoRow(float w)
-    {
-        if (_session == null) return;
-        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
-        EditorGUI.BeginDisabledGroup(!_session.History.CanUndo);
-        if (GUILayout.Button("↩ Undo")) Undo();
-        EditorGUI.EndDisabledGroup();
-        EditorGUI.BeginDisabledGroup(!_session.History.CanRedo);
-        if (GUILayout.Button("↪ Redo")) Redo();
-        EditorGUI.EndDisabledGroup();
-        EditorGUILayout.EndHorizontal();
     }
 
     /// <summary>Public so the shared undo dispatch can call it — see SC2EnvironmentShell.Undo's

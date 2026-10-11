@@ -63,8 +63,8 @@ public sealed class SC2EnvironmentShell
     /// <summary>The "set all/selected fields to default" reference —
     /// distinct from `_original`. `_original` is whatever THIS map's own
     /// EnvironmentHeader held at load time (for an imported map, that's the
-    /// map's own real authored values; "Reset All" undoes edits back to it,
-    /// which is correct there). `_defaults` is always the same universal
+    /// map's own real authored values, which the per-field reset marks of the
+    /// drawer go back to). `_defaults` is always the same universal
     /// reference profile (SC2EnvironmentDefaults) regardless of what map is
     /// loaded, so "Set All to Default" can force a sensible baseline onto
     /// ANY map, imported or not — not just undo unsaved edits on a
@@ -163,7 +163,7 @@ public sealed class SC2EnvironmentShell
 
         if (!IsReady)
         {
-            SC2TerrainShell.DrawUnifiedNote("Create/load a terrain first (Terrain tab) — Environment edits the procedural map's own info.bdf fields.");
+            SC2TerrainShell.DrawUnifiedNote("Create or load a map first (Terrain tab). Environment sets the sun, water, fog and the other lighting settings of the map.");
             GUILayout.EndVertical();
             return;
         }
@@ -212,39 +212,9 @@ public sealed class SC2EnvironmentShell
 
     private void DrawToolbar()
     {
-        // No step-count label anymore — SC2CommandHistory (unlike the old
-        // local List<EnvSnapshot>) doesn't expose stack depth, only
-        // CanUndo/CanRedo. A minor, visible side effect of this cutover.
-        //
-        // Each button pair on its own row, not squeezed together with
-        // GUILayout.FlexibleSpace() — that push-to-the-right pattern (like
-        // the slider/color-row overflow fixed earlier) is unreliable once
-        // this panel renders inside a scroll view, and even before that a
-        // 5th button on one row pushed later buttons off the right edge
-        // entirely (GUILayout doesn't wrap a horizontal group, it just
-        // overflows the container). Sequential buttons with no expand/
-        // flexible siblings size to their own content width and never
-        // fight for space, so simple rows are the robust fix here.
-        GUILayout.BeginHorizontal();
-        // Restore whatever GUI.enabled was BEFORE this row (not hardcode
-        // true) — a caller can legitimately disable the
-        // whole panel around this call (SC2GameViewEditorUI does this while
-        // a top-panel dropdown is open, to stop clicks reaching panel
-        // content underneath it), and unconditionally re-enabling here
-        // silently undid that for everything drawn after this row, letting
-        // a dropdown click "fall through" to whatever was underneath it.
-        var guiEnabledBeforeUndoRow = GUI.enabled;
-        GUI.enabled = guiEnabledBeforeUndoRow && _session.History.CanUndo;
-        if (SC2EnvFieldGui.Button("↩ Undo")) Undo();
-        GUI.enabled = guiEnabledBeforeUndoRow && _session.History.CanRedo;
-        if (SC2EnvFieldGui.Button("↪ Redo")) Redo();
-        GUI.enabled = guiEnabledBeforeUndoRow;
-        GUILayout.EndHorizontal();
-
-        GUILayout.BeginHorizontal();
-        if (SC2EnvFieldGui.Button("⟲ Reset All")) ResetAllToOriginal();
+        // Plain full-width buttons, one per row: a push-to-the-right FlexibleSpace row is unreliable inside the panel's scroll view.
+        // Undo and Redo are reached from the Edit menu and Ctrl+Z / Ctrl+Y, not from buttons in this panel.
         if (SC2EnvFieldGui.Button("Set All to Default")) SetAllToDefault();
-        GUILayout.EndHorizontal();
 
         if (SC2EnvFieldGui.Button("Import from info.bdf...")) ImportFromInfoBdfFile();
     }
@@ -252,7 +222,7 @@ public sealed class SC2EnvironmentShell
     /// <summary>Direct one-click equivalent of SC2InfoBdfEditorPanel's "Open
     /// .bdf... -&gt; Save to Map" 2-step flow, integrated right into this tab.
     /// Parses a real info.bdf off disk and applies it to `_m` via the same
-    /// EnvSnapshot/MaybeSnapshot mechanism ResetAllToOriginal/SetAllToDefault
+    /// EnvSnapshot/MaybeSnapshot mechanism SetAllToDefault
     /// already use, so the import goes through undo/redo like any other
     /// edit — it does not touch SC2TerrainData directly (the save path copies
     /// the document into it).</summary>
@@ -344,7 +314,7 @@ public sealed class SC2EnvironmentShell
     /// real command per field family that actually changed — a header edit
     /// and a texture-path edit can't both happen in the same frame in
     /// practice (only one tab is visible/edited at a time), but this handles
-    /// it correctly either way (e.g. Reset All, which can touch several
+    /// it correctly either way (e.g. Set All to Default, which can touch several
     /// fields from different tabs at once) by checking each independently.</summary>
     private void MaybeSnapshot()
     {
@@ -390,24 +360,10 @@ public sealed class SC2EnvironmentShell
         _session.History.Execute(document, new SC2SetEnvironmentTexturePathCommand(slot, current));
     }
 
-    /// <summary>Applies Original to `_m`, then reuses MaybeSnapshot's own
-    /// diff logic to fire however many field-level commands are actually
-    /// needed to reach it — e.g. if only WaterColor had been touched since
-    /// load, Reset All now records one command, not a blanket snapshot for
-    /// fields that were never dirty. Slightly more granular than the old
-    /// unconditional PushSnapshot(), which always recorded one step
-    /// regardless of what (if anything) actually changed.</summary>
-    private void ResetAllToOriginal()
-    {
-        new EnvSnapshot(_original).ApplyTo(_m);
-        MaybeSnapshot();
-        RepaintHost?.Invoke();
-    }
-
     /// <summary>Forces every field to the universal
-    /// reference default (SC2EnvironmentDefaults), same diff-then-command
-    /// mechanism as ResetAllToOriginal above, just sourced from `_defaults`
-    /// instead of `_original`.</summary>
+    /// reference default (SC2EnvironmentDefaults): applies it to `_m`, then
+    /// MaybeSnapshot's own diff fires however many field-level commands are
+    /// actually needed to reach it.</summary>
     private void SetAllToDefault()
     {
         new EnvSnapshot(_defaults).ApplyTo(_m);

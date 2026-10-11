@@ -527,7 +527,7 @@ public sealed class SC2LobbySpawnPanel
         Dictionary<string, Vector3> stored, Dictionary<string, Vector3> game, float worldW, float worldH)
     {
         GUILayout.BeginArea(area);
-        GUILayout.Label("Only the lobby minimap changes (_scenario.lua). The armies' real spawns (_save.lua) are not touched.", _noteStyle);
+        GUILayout.Label("Only the lobby minimap changes. The armies' real start positions are not touched.", _noteStyle);
         GUILayout.Space(6);
 
         SC2EnvFieldGui.SectionLabel("Armies");

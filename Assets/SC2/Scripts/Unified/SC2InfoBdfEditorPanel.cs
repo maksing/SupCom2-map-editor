@@ -168,7 +168,7 @@ public sealed class SC2InfoBdfEditorPanel
 
             if (!string.IsNullOrEmpty(_status)) GUILayout.Label(_status);
 
-            if (GUILayout.Button("⟲ Reset All", GUILayout.Height(SC2UiScale.Pxf(22f))))
+            if (GUILayout.Button("↩ Reset All", GUILayout.Height(SC2UiScale.Pxf(22f))))
             {
                 Array.Copy(_original.Header, _m.Header, 508);
                 _m.EnvironmentMap = _original.EnvironmentMap;
@@ -258,7 +258,7 @@ public sealed class SC2InfoBdfEditorPanel
             var exePath = Path.Combine(exeDir, "InfoBdfEditor", "SC2InfoBdfEditorApp.exe");
             if (!File.Exists(exePath))
             {
-                _status = $"External editor not found at '{exePath}'. Publish Tools~/InfoBdfEditor and copy the exe there (see that project's README/header comment).";
+                _status = $"The external info.bdf editor was not found at '{exePath}'.";
                 ReportStatus?.Invoke(_status);
                 return;
             }
