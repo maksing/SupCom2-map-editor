@@ -518,7 +518,8 @@ public sealed class SC2ObjectsShell
         // catalog lookup — would otherwise only run once the Objects tab is drawn.
         // See OnGameViewGUI's own comment for the preserved gating logic.
 
-        DrawImportAndValidation(w);
+        using (SC2FramePerf.Measure("objects.p.validation"))
+            DrawImportAndValidation(w);
         if (!string.IsNullOrEmpty(_missingPreviewWarning) && (subTab == TabProps || subTab == TabUnits))
             SC2EnvFieldGui.WrapLabel(_missingPreviewWarning, w);
         switch (subTab)
@@ -526,7 +527,9 @@ public sealed class SC2ObjectsShell
             case TabArmies: DrawArmies(w); break;
             case TabUnits: DrawUnits(w); break;
             case TabProps: DrawProps(w); break;
-            case TabMarkers: DrawMarkers(w); break;
+            case TabMarkers:
+                using (SC2FramePerf.Measure("objects.p.markers")) DrawMarkers(w);
+                break;
             case TabPaths: DrawPaths(w); break;
             case TabZones: DrawZones(w); break;
             default: DrawChains(w); break;
@@ -542,7 +545,7 @@ public sealed class SC2ObjectsShell
         if (subTab == TabProps || subTab == TabUnits || subTab == TabMarkers || subTab == TabArmies)
         {
             GUILayout.Space(8);
-            DrawPlacementHeightMode(subTab);
+            using (SC2FramePerf.Measure("objects.p.heightMode")) DrawPlacementHeightMode(subTab);
         }
 
         GUILayout.EndVertical();
@@ -1057,6 +1060,101 @@ public sealed class SC2ObjectsShell
             }, m.Id))
             m.Position = projected;
     }
+    /// <summary>Whether the user typed into the number fields drawn by <paramref name="draw"/> since the call. The fields show a value
+    /// rounded to three decimals and hand that rounded value back every frame, so comparing it with the exact one finds a difference
+    /// (the rounding) in every frame: an edit has to be told apart by the keyboard, not by the number.</summary>
+    private bool TypedInto(Action draw)
+    {
+        var before = GUI.changed;
+        GUI.changed = false;
+        draw();
+        // A field that still holds the caret answers with the text it had before the drag, which would drag the object back.
+        var typed = GUI.changed && !_dragActive && !_moveGestureActive;
+        GUI.changed = before || typed;
+        return typed;
+    }
+
+    /// <summary>The "Height" block of a prop or marker inspector: the object's own height mode (Heightmap, 3D model or Free) and, while it
+    /// follows the ground, how far above it it stands - relative to the heightmap (or the 3D model), not an absolute Y. A free object has
+    /// its absolute Y instead. Whatever changes is carried over to the other members of the object's symmetry group.</summary>
+    private void DrawHeightBlock(int id, ref bool anchorToTerrain, ref bool anchorToModel, ref float offset, float currentY, Action reproject, Action<float> setAbsoluteY)
+    {
+        SC2EnvFieldGui.SectionLabel("Height");
+        var modes = new[] { SC2HeightMode.Heightmap, SC2HeightMode.Model, SC2HeightMode.Free };
+        var labels = new[] { SC2HeightModes.Label(modes[0]), SC2HeightModes.Label(modes[1]), SC2HeightModes.Label(modes[2]) };
+        var current = SC2HeightModes.From(anchorToTerrain, anchorToModel);
+        var picked = modes[Mathf.Clamp(SC2TerrainShell.DrawUnifiedSegmentGrid(Array.IndexOf(modes, current), labels, 3), 0, modes.Length - 1)];
+        var changed = false;
+        if (picked != current)
+        {
+            PushUndo();
+            SC2HeightModes.Apply(picked, out anchorToTerrain, out anchorToModel);
+            if (anchorToTerrain) reproject();
+            changed = true;
+        }
+
+        if (anchorToTerrain)
+        {
+            var edited = offset;
+            var offsetNow = offset;
+            var offsetLabel = anchorToModel ? "Height above 3D model" : "Height above heightmap";
+            var typedOffset = TypedInto(() => edited = SC2EnvFieldGui.FloatField(offsetLabel, offsetNow, "anchor_offset"));
+            if (typedOffset && !Mathf.Approximately(edited, offset))
+            {
+                PushUndo();
+                offset = edited;
+                reproject();
+                changed = true;
+            }
+        }
+        else
+        {
+            var y = currentY;
+            var typedY = TypedInto(() => y = SC2EnvFieldGui.FloatField("Y", currentY, "anchor_absy"));
+            if (typedY && !Mathf.Approximately(y, currentY))
+            {
+                PushUndo();
+                setAbsoluteY(y);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            PropagateHeight(id, anchorToTerrain, anchorToModel, offset);
+            MarkObjectsDirty();
+        }
+    }
+
+    /// <summary>Gives the other members of an object's symmetry group the same height mode and offset, and puts them on the ground again.</summary>
+    private void PropagateHeight(int sourceId, bool anchorToTerrain, bool anchorToModel, float offset)
+    {
+        var group = FindSymmetryGroup(sourceId);
+        if (group == null) return;
+        foreach (var member in group.Members)
+        {
+            if (member.ObjectId == sourceId) continue;
+            var prop = LookupProp(member.ObjectId);
+            if (prop != null)
+            {
+                prop.AnchorToTerrain = anchorToTerrain; prop.AnchorToModel = anchorToModel; prop.HeightOffset = offset;
+                if (anchorToTerrain) ReprojectProp(prop);
+                continue;
+            }
+            var marker = LookupMarker(member.ObjectId);
+            if (marker != null)
+            {
+                marker.AnchorToTerrain = anchorToTerrain; marker.AnchorToModel = anchorToModel; marker.HeightOffset = offset;
+                if (anchorToTerrain) ReprojectMarker(marker);
+            }
+        }
+    }
+
+    /// <summary>The offset above the ground an anchored object has when it stands at <paramref name="position"/>: a Y typed into the
+    /// Position field is kept as height above the heightmap (or the 3D model), so the next reprojection puts it back there.</summary>
+    private float OffsetFor(Vector3 position, bool anchorToModel, bool aboveWater) =>
+        position.y - AnchoredHeight(position.x, position.z, anchorToModel, position.y, 0f, aboveWater);
+
     private void ReprojectUnit(SC2ObjUnitNode u) => u.Position = new Vector3(u.Position.x, AnchoredUnitHeight(u.Position.x, u.Position.z, u.Type, u.AnchorToModel, u.Position.y, u.HeightOffset, u.OnWaterSurface), u.Position.z);
 
     /// <summary>Wired to SC2TerrainShell.HeightBrushApplied (see its own doc
@@ -3708,8 +3806,21 @@ public sealed class SC2ObjectsShell
             MarkObjectsDirty();
         }
 
-        var editedPos = SC2EnvFieldGui.Vector3Field("Position", p.Position, "propi_pos");
-        if (editedPos != p.Position) SetPropPosition(p, editedPos);
+        DrawHeightBlock(p.Id, ref p.AnchorToTerrain, ref p.AnchorToModel, ref p.HeightOffset, p.Position.y,
+            () => { ReprojectProp(p); PropagateSymmetryMove(p.Id, p.Position); },
+            y => SetPropPosition(p, new Vector3(p.Position.x, y, p.Position.z)));
+        var editedPos = p.Position;
+        var typedPos = TypedInto(() => editedPos = SC2EnvFieldGui.Vector3Field("Position", p.Position, "propi_pos"));
+        if (typedPos && editedPos != p.Position)
+        {
+            // A Y typed here is height above the ground for an object that follows it.
+            if (p.AnchorToTerrain && !Mathf.Approximately(editedPos.y, p.Position.y))
+            {
+                p.HeightOffset = OffsetFor(editedPos, p.AnchorToModel, p.OnWaterSurface);
+                PropagateHeight(p.Id, p.AnchorToTerrain, p.AnchorToModel, p.HeightOffset);
+            }
+            SetPropPosition(p, editedPos);
+        }
         if (p.BlueprintPath != prevBlueprint || p.Scale != prevScale || p.Position != prevPos ||
             p.AnchorToTerrain != prevAnchor || p.HeightOffset != prevOffset) MarkObjectsDirty();
 
@@ -4108,10 +4219,14 @@ public sealed class SC2ObjectsShell
         if (_selMarkers.Count == 1)
         {
             var item = Data.ObjMarkers.FirstOrDefault(m => m.Id == _selMarkers.First());
-            if (item != null) { DrawMarkerInspector(w, item); return; }
+            if (item != null)
+            {
+                using (SC2FramePerf.Measure("objects.m.inspector")) DrawMarkerInspector(w, item);
+                return;
+            }
             _selMarkers.Clear();
         }
-        DrawMarkersBrowser(w);
+        using (SC2FramePerf.Measure("objects.m.browser")) DrawMarkersBrowser(w);
     }
 
     private void DrawMarkersBrowser(float w)
@@ -4120,7 +4235,7 @@ public sealed class SC2ObjectsShell
         // Type picker first, on-map list after — pick what you're about to
         // place before scrolling through what's already placed, rather than
         // the other way around.
-        DrawMarkerPlacementPicker(w);
+        using (SC2FramePerf.Measure("objects.m.picker")) DrawMarkerPlacementPicker(w);
         GUILayout.Space(6);
 
         if (_hiddenMarkerIds.Count > 0)
@@ -4130,18 +4245,21 @@ public sealed class SC2ObjectsShell
             if (SC2EnvFieldGui.Button("Show All", GUILayout.Height(SC2UiScale.Pxf(18f)), GUILayout.Width(SC2UiScale.Pxf(90f)))) _hiddenMarkerIds.Clear();
             GUILayout.EndHorizontal();
         }
-        DrawMarkersByTypePanel(w);
+        using (SC2FramePerf.Measure("objects.m.byType")) DrawMarkersByTypePanel(w);
         GUILayout.Space(6);
 
         SC2EnvFieldGui.SectionLabel($"On map ({Data.ObjMarkers.Count})");
-        _searchMarkers = SC2EnvFieldGui.TextField("Search (name/type)", _searchMarkers, "markers_search");
-        DrawSystemFilterRow(w, ref _filterMarkers);
+        using (SC2FramePerf.Measure("objects.m.search"))
+        {
+            _searchMarkers = SC2EnvFieldGui.TextField("Search (name/type)", _searchMarkers, "markers_search");
+            DrawSystemFilterRow(w, ref _filterMarkers);
+        }
 
-        RefreshVisibleMarkersIfNeeded();
+        using (SC2FramePerf.Measure("objects.m.visible")) RefreshVisibleMarkersIfNeeded();
         var visible = _cachedVisibleMarkers;
         var visibleIds = _cachedVisibleMarkerIds;
 
-        DrawBatchBar(w, _selMarkers, new List<(string, Action)>
+        using (SC2FramePerf.Measure("objects.m.batch")) DrawBatchBar(w, _selMarkers, new List<(string, Action)>
         {
             ("Anchor selected", () => { PushUndo(); foreach (var m in visible.Where(x => _selMarkers.Contains(x.Id))) { m.AnchorToTerrain = true; ReprojectMarker(m); } MarkObjectsDirty(); }),
             ("Duplicate w/ symmetry", () => { PushUndo(); foreach (var m in visible.Where(x => _selMarkers.Contains(x.Id)).ToList()) DuplicateMarkerWithSymmetry(m); }),
@@ -4164,7 +4282,7 @@ public sealed class SC2ObjectsShell
             }
         }
 
-        DrawVirtualizedMarkerRows(visible, visibleIds, w, SC2UiScale.Pxf(280f));
+        using (SC2FramePerf.Measure("objects.m.rows")) DrawVirtualizedMarkerRows(visible, visibleIds, w, SC2UiScale.Pxf(280f));
 
         GUILayout.BeginHorizontal();
         if (SC2EnvFieldGui.Button("Add at camera focus", GUILayout.Height(SC2UiScale.Pxf(24f)), GUILayout.Width(w * 0.48f)))
@@ -4616,8 +4734,23 @@ public sealed class SC2ObjectsShell
         var prevAnchor = m.AnchorToTerrain;
         var prevOffset = m.HeightOffset;
         if (m.AnchorToTerrain != prevAnchor || m.HeightOffset != prevOffset) MarkObjectsDirty();
-        var editedMarkerPos = SC2EnvFieldGui.Vector3Field("Position", m.Position, "mki_pos");
-        if (editedMarkerPos != m.Position) { SetMarkerPosition(m, editedMarkerPos); MarkObjectsDirty(); }
+        using (SC2FramePerf.Measure("objects.mi.height"))
+            DrawHeightBlock(m.Id, ref m.AnchorToTerrain, ref m.AnchorToModel, ref m.HeightOffset, m.Position.y,
+                () => { ReprojectMarker(m); PropagateSymmetryMove(m.Id, m.Position); },
+                y => SetMarkerPosition(m, new Vector3(m.Position.x, y, m.Position.z)));
+        var editedMarkerPos = m.Position;
+        var typedMarkerPos = TypedInto(() => editedMarkerPos = SC2EnvFieldGui.Vector3Field("Position", m.Position, "mki_pos"));
+        if (typedMarkerPos && editedMarkerPos != m.Position)
+        {
+            // A Y typed here is height above the ground for an object that follows it.
+            if (m.AnchorToTerrain && !Mathf.Approximately(editedMarkerPos.y, m.Position.y))
+            {
+                m.HeightOffset = OffsetFor(editedMarkerPos, m.AnchorToModel, m.OnWaterSurface);
+                PropagateHeight(m.Id, m.AnchorToTerrain, m.AnchorToModel, m.HeightOffset);
+            }
+            SetMarkerPosition(m, editedMarkerPos);
+            MarkObjectsDirty();
+        }
         var prevOrientation = m.OrientationEuler;
         m.OrientationEuler = SC2EnvFieldGui.Vector3Field("Orientation", m.OrientationEuler, "mki_rot");
         if (m.OrientationEuler != prevOrientation) MarkObjectsDirty();
@@ -4634,12 +4767,18 @@ public sealed class SC2ObjectsShell
         if (!string.Equals(m.Prop, editedMarkerProp, StringComparison.Ordinal))
             { if (TrySetMarkerPlacementKind(m, m.Type, editedMarkerProp)) MarkObjectsDirty(); }
 
-        if (string.Equals(m.Type, "Sound", StringComparison.OrdinalIgnoreCase) && _soundEventPicker.Draw(m, w, PushUndo))
+        var soundPickerChanged = false;
+        if (string.Equals(m.Type, "Sound", StringComparison.OrdinalIgnoreCase))
+            using (SC2FramePerf.Measure("objects.mi.sound")) soundPickerChanged = _soundEventPicker.Draw(m, w, PushUndo);
+        if (soundPickerChanged)
         {
             PropagateMarkerFields(m, "EventName");
             MarkObjectsDirty();
         }
-        if (string.Equals(m.Type, "Effect", StringComparison.OrdinalIgnoreCase) && _effectMarkerPicker.Draw(m, w, PushUndo))
+        var effectPickerChanged = false;
+        if (string.Equals(m.Type, "Effect", StringComparison.OrdinalIgnoreCase))
+            using (SC2FramePerf.Measure("objects.mi.effect")) effectPickerChanged = _effectMarkerPicker.Draw(m, w, PushUndo);
+        if (effectPickerChanged)
         {
             PropagateMarkerFields(m, SC2EffectMarkerPicker.FieldKeys);
             MarkObjectsDirty();
@@ -4651,7 +4790,8 @@ public sealed class SC2ObjectsShell
         GUILayout.Label("_save.lua Markers: yes");
         GUILayout.Label($"_scenario.lua StartPositions: {(isArmyPos ? "yes" : "no")}");
         if (string.Equals(m.Type, "Auto Path Node", StringComparison.Ordinal))
-            SC2EnvFieldGui.WrapLabel($"Resolves at export to: {SC2ObjectsExport.ResolveEffectiveType(Data, m, Session?.Document?.Environment?.WorkingHeader)}", w);
+            using (SC2FramePerf.Measure("objects.mi.autoPath"))
+                SC2EnvFieldGui.WrapLabel($"Resolves at export to: {SC2ObjectsExport.ResolveEffectiveType(Data, m, Session?.Document?.Environment?.WorkingHeader)}", w);
 
         if (SC2EnvFieldGui.Foldout(ref _markerAdvancedExpanded, $"Advanced / raw fields ({m.ExtraFields.Count})"))
         {
@@ -7055,6 +7195,7 @@ public sealed class SC2ObjectsShell
 
         if (_boxSelectActive)
         {
+            if (_dragDiagBudget > 0) Debug.Log($"[SC2DragDiag] box select is active, event={e?.type}");
             if (e != null && e.type == EventType.MouseDrag && e.button == 0) { e.Use(); RepaintHost?.Invoke(); return; }
             if (e != null && (e.type == EventType.MouseUp || e.type == EventType.Ignore))
             {
@@ -7199,10 +7340,25 @@ public sealed class SC2ObjectsShell
         ReportStatus?.Invoke(_lastActionSummary);
     }
 
+    private int _dragDiagBudget;
+    public bool DragDiagWanted => _dragDiagBudget > 0 || _dragActive || _boxSelectActive;
+    private static string FocusDiag() => $"kbd={GUIUtility.keyboardControl} hot={GUIUtility.hotControl} focused='{GUI.GetNameOfFocusedControl()}'";
+
     private void HandleViewportDrag(Camera camera, Rect viewportRect, Vector2 mousePosition, bool canMove, ViewportPick pick)
     {
         var e = Event.current;
         if (e == null) return;
+
+        if (e.type == EventType.MouseDown && e.button == 0)
+        {
+            _dragDiagBudget = 6;
+            Debug.Log($"[SC2DragDiag] MouseDown canMove={canMove} dragActive={_dragActive} pick={pick.Kind}#{pick.Id} gesture={_propsGestureKind} move={_moveGestureActive} {FocusDiag()}");
+        }
+        else if (e.type == EventType.MouseDrag && e.button == 0 && _dragDiagBudget > 0)
+        {
+            _dragDiagBudget--;
+            Debug.Log($"[SC2DragDiag] MouseDrag dragActive={_dragActive} items={_dragItems.Count} {FocusDiag()}");
+        }
 
         if (canMove && !_dragActive && e.type == EventType.MouseDown && e.button == 0)
         {
@@ -7262,6 +7418,7 @@ public sealed class SC2ObjectsShell
             if (TryGetDragPoint(camera, viewportRect, mousePosition, out var currentWorld))
             {
                 var delta = currentWorld - _dragStartWorld;
+                if (_dragDiagBudget > 0) Debug.Log($"[SC2DragDiag] delta={delta} start={_dragStartWorld} now={currentWorld} summary='{_lastActionSummary}'");
                 BeginBulkLookup();
                 try
                 {

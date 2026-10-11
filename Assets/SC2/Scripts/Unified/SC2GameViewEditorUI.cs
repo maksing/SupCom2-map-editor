@@ -1756,6 +1756,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         SC2BusyOverlay.Draw();
         GUI.skin = previousSkin;
 
+        if (Event.current != null && Event.current.type == EventType.Used && Event.current.rawType == EventType.MouseDrag && _mainTab == 3)
+            Debug.Log($"[SC2DragDiag] MouseDrag was used before the viewport handlers: kbd={GUIUtility.keyboardControl} hot={GUIUtility.hotControl} focused='{GUI.GetNameOfFocusedControl()}'");
         if (Event.current == null || Event.current.type != EventType.Used)
         {
             // Viewport overlays (Objects' Areas/Chains/Graph lines, Terrain's
@@ -4139,6 +4141,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
         var mousePos = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
         var allowInput = objectsTabActive && Event.current != null && !IsMouseOverUi(mousePos);
+        if (Event.current != null && objectsTabActive && (Event.current.rawType == EventType.MouseDrag || Event.current.rawType == EventType.MouseUp) && _objectsShell.DragDiagWanted)
+            Debug.Log($"[SC2DragDiag] {Event.current.rawType} reaches the objects handler: type={Event.current.type} allowInput={allowInput} hot={GUIUtility.hotControl} tool={_tool}");
         // Same contain-the-exception reasoning as HandleCostsGameViewInput —
         // a bug in the viewport dot-picking code shouldn't blank the rest of
         // the GameView UI for every subsequent frame.
@@ -7529,7 +7533,28 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// text/numeric field in this project registers its own on-screen rect with while focused —
     /// covers a click ANYWHERE (viewport or elsewhere in the same panel), not just the viewport,
     /// while a click back into the SAME field (to reposition the caret) is unaffected.</summary>
-    private void ReleaseStuckNumericFocusOnViewportClick() => SC2TerrainShell.ClearFocusIfClickMissedField();
+    private void ReleaseStuckNumericFocusOnViewportClick()
+    {
+        // A click on the bare viewport never belongs to a text field, so whatever holds the keyboard goes, named or not: a field
+        // that was removed from the panel while it had the caret (a mode switch swaps "Height above" for "Y") keeps the focus id
+        // with an empty name, which the per-field check below cannot match.
+        var e = Event.current;
+        if (e != null && e.type == EventType.MouseDown && !IsMouseOverUi(e.mousePosition))
+        {
+            if (GUIUtility.hotControl != 0)
+            {
+                Debug.Log($"[SC2DragDiag] released a stuck hotControl={GUIUtility.hotControl} on a viewport click");
+                GUIUtility.hotControl = 0;
+            }
+            if (GUIUtility.keyboardControl != 0)
+            {
+                GUI.FocusControl(null);
+                GUIUtility.keyboardControl = 0;
+                return;
+            }
+        }
+        SC2TerrainShell.ClearFocusIfClickMissedField();
+    }
 
     private bool IsMouseOverUi(Vector2 mouse)
     {

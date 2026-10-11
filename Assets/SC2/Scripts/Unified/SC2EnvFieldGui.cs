@@ -245,6 +245,20 @@ public static class SC2EnvFieldGui
     /// keystroke, and the very next repaint saw a "mismatch" and snapped the
     /// display straight back to the pre-edit number — reading as "a value
     /// set by dragging in the viewport can't be typed over at all."</summary>
+    /// <summary>Lets a click elsewhere take the caret out of a field, and Enter or Esc leave it. Unity never moves the keyboard focus away
+    /// from a text field by itself, and the editor's "click missed the field" release (SC2TerrainShell.ClearFocusIfClickMissedField) only
+    /// knows the fields that tell it where they are: a field that did not left the caret in place for good, with every hotkey and the
+    /// marker moves that wait for the keyboard switched off until the field was clicked out of some other way.</summary>
+    private static void TrackFocus(string controlName, Rect rect)
+    {
+        var e = Event.current;
+        if (e == null || e.type == EventType.Layout) return;
+        SC2TerrainShell.RegisterFocusedFieldRect(controlName, rect);
+        if (GUI.GetNameOfFocusedControl() == controlName && (e.type == EventType.KeyDown || e.type == EventType.Used) &&
+            (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter || e.keyCode == KeyCode.Escape))
+            GUI.FocusControl(null);
+    }
+
     private static bool IsFieldFocused(string key) => GUI.GetNameOfFocusedControl() == "SC2EnvNum_" + key;
 
     // ---- Numeric fields ----
@@ -284,7 +298,9 @@ public static class SC2EnvFieldGui
     {
         GUILayout.Label(label, Label);
         GUI.SetNextControlName("SC2EnvText_" + key);
-        return GUILayout.TextField(value ?? "", TextFieldStyle);
+        var typed = GUILayout.TextField(value ?? "", TextFieldStyle);
+        TrackFocus("SC2EnvText_" + key, GUILayoutUtility.GetLastRect());
+        return typed;
     }
 
     /// <summary>Label on its own line, then a horizontal-drag slider paired
@@ -385,6 +401,7 @@ public static class SC2EnvFieldGui
         GUI.SetNextControlName("SC2EnvNum_" + key);
         var next = GUI.TextField(rect, text, NumberFieldStyle);
         _text[key] = next;
+        TrackFocus("SC2EnvNum_" + key, rect);
 
         var parsedOk = float.TryParse(next, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed);
         var result = parsedOk ? parsed : value;
@@ -401,6 +418,7 @@ public static class SC2EnvFieldGui
         GUI.SetNextControlName("SC2EnvNum_" + key);
         var next = GUI.TextField(rect, text, NumberFieldStyle);
         _text[key] = next;
+        TrackFocus("SC2EnvNum_" + key, rect);
 
         var parsedOk = int.TryParse(next, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed);
         var result = parsedOk ? parsed : value;
@@ -417,6 +435,7 @@ public static class SC2EnvFieldGui
         GUI.SetNextControlName("SC2EnvNum_" + key);
         var next = GUILayout.TextField(text, NumberFieldStyle, GUILayout.Width(width));
         _text[key] = next;
+        TrackFocus("SC2EnvNum_" + key, GUILayoutUtility.GetLastRect());
 
         var parsedOk = int.TryParse(next, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed);
         var result = parsedOk ? parsed : value;
@@ -433,6 +452,7 @@ public static class SC2EnvFieldGui
         GUI.SetNextControlName("SC2EnvNum_" + key);
         var next = GUILayout.TextField(text, NumberFieldStyle, GUILayout.Width(width));
         _text[key] = next;
+        TrackFocus("SC2EnvNum_" + key, GUILayoutUtility.GetLastRect());
 
         var parsedOk = float.TryParse(next, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed);
         var result = parsedOk ? parsed : value;
@@ -455,6 +475,7 @@ public static class SC2EnvFieldGui
         GUI.SetNextControlName("SC2EnvNum_" + key);
         var next = GUILayout.TextField(text, NumberFieldStyle, GUILayout.MinWidth(30f), GUILayout.ExpandWidth(true));
         _text[key] = next;
+        TrackFocus("SC2EnvNum_" + key, GUILayoutUtility.GetLastRect());
 
         var parsedOk = float.TryParse(next, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed);
         var result = parsedOk ? parsed : value;
@@ -715,6 +736,7 @@ public static class SC2EnvFieldGui
         GUI.SetNextControlName("SC2EnvNum_" + key);
         var next = GUI.TextField(boxRect, text, TextFieldStyle);
         _text[key] = next;
+        TrackFocus("SC2EnvNum_" + key, boxRect);
 
         if (ColorUtility.TryParseHtmlString(next.StartsWith("#") ? next : "#" + next, out var parsed))
             value = parsed;
