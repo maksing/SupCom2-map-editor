@@ -107,6 +107,7 @@
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaField.cs" Link="Source\SC2LuaField.cs" />
     <!-- Pure symmetry/lobby-spawn math (Vector3 + System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LobbySpawnMath.cs" Link="Source\SC2LobbySpawnMath.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2MassSymmetryCheck.cs" Link="Source\SC2MassSymmetryCheck.cs" />
     <!-- Vanilla-measured navmesh rules (cross growth, wall ring, water gradient), System only. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2CostsNavmeshRules.cs" Link="Source\SC2CostsNavmeshRules.cs" />
     <!-- Per-axis UV1 stretch profiles (Mathf/Vector2 only). -->

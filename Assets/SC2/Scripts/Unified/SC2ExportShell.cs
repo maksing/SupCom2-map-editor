@@ -173,6 +173,11 @@ public sealed class SC2ExportShell
         }
 
         var doc = _session.Document;
+        // The Objects checks, and with them the Mass symmetry: read from the live map, like the Objects tab itself.
+        var objectsReport = SC2ObjectsValidator.Validate(doc.Objects);
+        var live = _terrainShell.Data;
+        if (live != null)
+            objectsReport.Messages.AddRange(SC2MassSymmetryValidator.Validate(live.ObjMarkers, live.Symmetry, live.SymmetryCenter, live.RadialCount).Messages);
         _lastValidationDomainNames = new[] { "Terrain", "Hfield", "Costs", "Collision2", "Objects", "Objects (map checks)", "Environment", "Scenario", "Decals" };
         _lastValidationReports = new[]
         {
@@ -180,7 +185,7 @@ public sealed class SC2ExportShell
             SC2HfieldValidator.Validate(doc.Hfield),
             SC2CostsValidator.Validate(doc.Costs),
             SC2CollisionValidator.Validate(doc.Collision2),
-            SC2ObjectsValidator.Validate(doc.Objects),
+            objectsReport,
             ObjectsTabReport(),
             SC2EnvironmentValidator.Validate(doc.Environment),
             SC2ScenarioValidator.Validate(doc.Scenario),
