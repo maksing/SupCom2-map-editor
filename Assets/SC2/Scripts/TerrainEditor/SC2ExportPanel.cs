@@ -328,7 +328,7 @@ public sealed class SC2ExportPanel
             };
         }, ex =>
         {
-            _lastExportResult = "Export failed: " + ex.Message;
+            _lastExportResult = "Export failed: " + SC2TerrainExporter.DescribeFailure(ex);
             onFinished?.Invoke(_lastExportResult);
         });
     }

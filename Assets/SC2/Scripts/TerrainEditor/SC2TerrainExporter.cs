@@ -42,6 +42,19 @@ public static class SC2TerrainExporter
             ? EditorUtility.DisplayDialog(title, message, ok)
             : EditorUtility.DisplayDialog(title, message, ok, cancel), System.Threading.Timeout.Infinite);
 
+    /// <summary>The message an export failure is shown with. A file the game still has mapped (Win32 error 1224) or open (32, 33)
+    /// cannot be overwritten, and the raw message only says "Win32 IO returned 1224", so the usual cause is named.</summary>
+    public static string DescribeFailure(Exception ex)
+    {
+        if (ex is IOException io)
+        {
+            var code = io.HResult & 0xFFFF;
+            if (code == 1224 || code == 32 || code == 33)
+                return ex.Message + "\n\nThe file is in use by another program, most likely Supreme Commander 2 with this map loaded. Close the game and export again.";
+        }
+        return ex.Message;
+    }
+
     // EditorUtility.DisplayDialog is a silent no-op in a standalone build
     // (UnityEditorRuntimeShim's version just returns true, shows nothing) —
     // every error/status message this used to communicate purely through
@@ -89,8 +102,9 @@ public static class SC2TerrainExporter
         {
             ClearProgress();
             SC2Log.LogException(ex);
-            ExportDialog("Error", ex.Message, "OK");
-            return "Export failed: " + ex.Message;
+            var failure = DescribeFailure(ex);
+            ExportDialog("Error", failure, "OK");
+            return "Export failed: " + failure;
         }
         finally
         {
@@ -1784,8 +1798,9 @@ public static class SC2TerrainExporter
         {
             ClearProgress();
             SC2Log.LogException(ex);
-            ExportDialog("Error", ex.Message, "OK");
-            return "Export failed: " + ex.Message;
+            var failure = DescribeFailure(ex);
+            ExportDialog("Error", failure, "OK");
+            return "Export failed: " + failure;
         }
         finally
         {
