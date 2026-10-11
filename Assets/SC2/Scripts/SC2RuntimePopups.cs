@@ -306,8 +306,16 @@ internal static class SC2RuntimeConfirm
         if (!_open)
             return;
 
-        const float width = 320f;
-        const float height = 140f;
+        // Sized from the text: the labels grow with the UI scale and the font, and a fixed rect cut the buttons off.
+        var width = Mathf.Min(SC2UiScale.Pxf(360f), Screen.width - 24f);
+        var pad = SC2UiScale.Pxf(12f);
+        var gap = SC2UiScale.Pxf(8f);
+        var inner = width - 2f * pad;
+        var buttonHeight = SC2UiScale.Pxf(26f);
+        var messageStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
+        var titleHeight = GUI.skin.label.CalcHeight(new GUIContent(_title), inner);
+        var messageHeight = messageStyle.CalcHeight(new GUIContent(_message), inner);
+        var height = Mathf.Min(pad + titleHeight + gap + messageHeight + gap + buttonHeight + pad, Screen.height - 24f);
         var rect = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
 
         var previousDepth = GUI.depth;
@@ -320,29 +328,25 @@ internal static class SC2RuntimeConfirm
         GUI.color = previousColor;
 
         GUI.Box(rect, GUIContent.none, GUI.skin.box);
-        GUILayout.BeginArea(rect);
-        GUILayout.Space(8f);
-        GUILayout.Label(_title, GUI.skin.label);
-        GUILayout.Space(4f);
-        var messageStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
-        GUILayout.Label(_message, messageStyle, GUILayout.Height(SC2UiScale.Pxf(56f)));
-        GUILayout.FlexibleSpace();
-        GUILayout.BeginHorizontal();
-        GUILayout.FlexibleSpace();
-        if (GUILayout.Button("Cancel", GUILayout.Width(SC2UiScale.Pxf(90f)), GUILayout.Height(SC2UiScale.Pxf(26f))))
+        GUI.Label(new Rect(rect.x + pad, rect.y + pad, inner, titleHeight), _title, GUI.skin.label);
+        GUI.Label(new Rect(rect.x + pad, rect.y + pad + titleHeight + gap, inner, messageHeight), _message, messageStyle);
+
+        var buttonWidth = SC2UiScale.Pxf(90f);
+        var buttonY = rect.yMax - pad - buttonHeight;
+        var confirmRect = new Rect(rect.xMax - pad - buttonWidth, buttonY, buttonWidth, buttonHeight);
+        var cancelRect = new Rect(confirmRect.x - gap - buttonWidth, buttonY, buttonWidth, buttonHeight);
+        if (GUI.Button(cancelRect, "Cancel"))
         {
             _open = false;
             _onConfirm = null;
         }
-        if (GUILayout.Button(_confirmLabel, GUILayout.Width(SC2UiScale.Pxf(90f)), GUILayout.Height(SC2UiScale.Pxf(26f))))
+        if (GUI.Button(confirmRect, _confirmLabel))
         {
             _open = false;
             var callback = _onConfirm;
             _onConfirm = null;
             callback?.Invoke();
         }
-        GUILayout.EndHorizontal();
-        GUILayout.EndArea();
 
         GUI.depth = previousDepth;
 
