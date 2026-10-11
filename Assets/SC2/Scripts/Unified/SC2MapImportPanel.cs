@@ -292,7 +292,7 @@ public sealed class SC2MapImportPanel
         {
             GUILayout.BeginHorizontal();
             var was = _siblingChecked.TryGetValue(sib.Path, out var v) && v;
-            var now = GUILayout.Toggle(was, "", GUILayout.Width(SC2UiScale.Pxf(46f)));
+            var now = GUILayout.Toggle(was, "", GUILayout.Width(SC2UiScale.Pxf(54f)));
             if (now != was) _siblingChecked[sib.Path] = now;
             GUILayout.Label(sib.Stem, GUILayout.Width(SC2UiScale.Pxf(160f)));
             GUILayout.Label(sib.Path, "label");

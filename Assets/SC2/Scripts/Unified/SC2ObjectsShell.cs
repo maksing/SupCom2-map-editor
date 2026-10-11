@@ -500,7 +500,7 @@ public sealed class SC2ObjectsShell
 
         if (!IsReady)
         {
-            SC2TerrainShell.DrawUnifiedNote("Create or load a terrain first (Terrain tab) — Objects edits the procedural map's props, markers, armies, units, zones and chains, all stored on that same terrain asset.");
+            SC2TerrainShell.DrawUnifiedNote("Create or load a map first (Terrain tab). Objects edits the props, markers, armies, units, areas and chains of the map.");
             GUILayout.EndVertical();
             _assetBrowser.DrawModal();
             return;
@@ -1949,6 +1949,20 @@ public sealed class SC2ObjectsShell
             _validationCombinedMass = _massBuildIssues;
         }
         return _validationCombined;
+    }
+
+    /// <summary>The problems the Objects tab lists (the structure of the map's objects, and the Mass markers the extractor cannot be
+    /// built on), worked out now, for Export > Validation. The Mass check needs the unit data; while that is still loading, the
+    /// list says so instead of silently showing no problem.</summary>
+    public List<string> CollectValidationIssues()
+    {
+        _assetBrowser.PollLoadTask();
+        _assetBrowser.EnsureIndexed();
+        _massBuildAt = double.MinValue;
+        var issues = new List<string>(Validate());
+        if (_assetBrowser.IsIndexing)
+            issues.Add("Note: the unit data is still loading, so the Mass marker checks were skipped. Run the validation again in a moment.");
+        return issues;
     }
 
     private void RefreshMassBuildability()
@@ -3972,9 +3986,9 @@ public sealed class SC2ObjectsShell
         else if (hasRoot && _assetBrowser.IsIndexing)
             _missingPreviewWarning = "Indexing blueprints... models will appear once this finishes.";
         else if (failedProps > 0 || failedUnits > 0)
-            _missingPreviewWarning = $"⚠ {failedProps} prop(s) / {failedUnits} unit(s) resolved to a catalog entry but failed to load a model" + (lastLoadError != null ? $": {lastLoadError}" : ".");
+            _missingPreviewWarning = $"⚠ {failedProps} prop(s) / {failedUnits} unit(s) could not load their 3D model" + (lastLoadError != null ? $": {lastLoadError}" : ".");
         else if (unresolvedProps > 0 || unresolvedUnits > 0)
-            _missingPreviewWarning = $"⚠ {unresolvedProps} prop(s) / {unresolvedUnits} unit(s) reference a blueprint not found in the indexed game data — their models can't show.";
+            _missingPreviewWarning = $"⚠ {unresolvedProps} prop(s) / {unresolvedUnits} unit(s) use a blueprint that is not in the game data, so their models cannot be shown.";
         else
             _missingPreviewWarning = null;
 

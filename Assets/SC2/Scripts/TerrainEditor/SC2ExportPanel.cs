@@ -121,7 +121,7 @@ public sealed class SC2ExportPanel
     {
         SC2TerrainShell.DrawUnifiedSectionLabel("Export");
         if (_win.IsPairCpuDataStale)
-            SC2TerrainShell.DrawUnifiedNote("CPU pair data is pending GPU readback. Export will force sync before building geometry.");
+            SC2TerrainShell.DrawUnifiedNote("The terrain is still being read back from the graphics card. Export waits for it before building the map.");
 
         // Map Name is edited on Scenario → Info (SC2ScenarioShell) — shown here read-only so the export summary is still
         // self-contained without a second editable copy of the same SC2TerrainData.MapName.
@@ -185,6 +185,7 @@ public sealed class SC2ExportPanel
             _win.RecordUndoCheckpoint("Change Export Folder");
             SetExportDir(nextExportDir);
         }
+        GUILayout.Space(SC2UiScale.Pxf(6f));
         if (GUILayout.Button("Choose folder...", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
         {
 #if UNITY_EDITOR

@@ -1781,6 +1781,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 SC2ObjectsShell.OverlayOccluder = AnyMenuOpen() && _openMenuRect.width > 0f
                     ? new Rect(_openMenuRect.x - 2f, _openMenuRect.y - 2f, _openMenuRect.width + 4f, _openMenuRect.height + 4f)
                     : Rect.zero;
+#if !UNITY_EDITOR
+                // The colour picker of the materials and pairs floats over the viewport the same way.
+                var picker = SC2RuntimeColorPalette.PanelRect;
+                if (picker.width > 0f)
+                {
+                    var pad = new Rect(picker.x - 2f, picker.y - 2f, picker.width + 4f, picker.height + 4f);
+                    var current = SC2ObjectsShell.OverlayOccluder;
+                    SC2ObjectsShell.OverlayOccluder = current.width > 0f
+                        ? Rect.MinMaxRect(Mathf.Min(current.xMin, pad.xMin), Mathf.Min(current.yMin, pad.yMin), Mathf.Max(current.xMax, pad.xMax), Mathf.Max(current.yMax, pad.yMax))
+                        : pad;
+                }
+#endif
 
                 // Same reasoning as the reset before DrawNavigationGizmo above:
                 // HandleTerrainGameViewInput below is what actually calls
@@ -2079,6 +2091,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         {
             fontSize = SC2Type.Body,
             alignment = TextAnchor.MiddleLeft,
+            // One line only: the box style wraps, and a status of several lines (an export's report) showed just its middle line.
+            wordWrap = false,
             border = new RectOffset(9, 9, 9, 9),
             padding = new RectOffset(SC2UiScale.Px(24), SC2UiScale.Px(10), SC2UiScale.Px(2), SC2UiScale.Px(2)),
             // Clipping as a deliberate safety net (same reasoning as _subtabStyle/_activeSubtabStyle above) — a status
@@ -2304,7 +2318,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (showMouseCoordinates)
             GUILayout.Label(_mouseMapCoordinates, _coordsPillStyle, GUILayout.Width(SC2UiScale.Pxf(190f)), GUILayout.Height(SC2UiScale.Pxf(20f)));
         GUILayout.Space(SC2UiScale.Pxf(6f));
-        GUILayout.Label(Status, _statusPillStyle, GUILayout.Width(Mathf.Min(SC2UiScale.Pxf(320f), Mathf.Max(SC2UiScale.Pxf(110f), width * 0.18f))), GUILayout.Height(SC2UiScale.Pxf(20f)));
+        var statusWidth = Mathf.Min(SC2UiScale.Pxf(320f), Mathf.Max(SC2UiScale.Pxf(110f), width * 0.18f));
+        // The status on one line, cut with "..." where it does not fit (a report of several lines is joined).
+        var statusLine = (Status ?? "").Replace("\r\n", " · ").Replace("\n", " · ");
+        GUILayout.Label(SC2StartupUi.Fit(statusLine, _statusPillStyle, statusWidth - _statusPillStyle.padding.horizontal), _statusPillStyle, GUILayout.Width(statusWidth), GUILayout.Height(SC2UiScale.Pxf(20f)));
         if (Event.current.type == EventType.Repaint && _statusDotTexture != null)
         {
             var pill = GUILayoutUtility.GetLastRect();
@@ -2632,7 +2649,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // Load/Delete Saved Terrain in the File menu.
             SC2SaveSettings.MaxBackupsPerMap = Mathf.Max(0, SC2EnvFieldGui.IntField("Backups to keep", SC2SaveSettings.MaxBackupsPerMap, "MaxBackupsPerMap"));
             // The whole-map JSON copy is the fallback when the document cannot be read, and the biggest file of a save.
-            var writeLegacyJson = GUILayout.Toggle(SC2SaveSettings.WriteLegacyJson, "Write legacy JSON copy", _dropdownToggleStyle);
+            var writeLegacyJson = GUILayout.Toggle(SC2SaveSettings.WriteLegacyJson, "Also save a fallback copy (.json)", _dropdownToggleStyle);
             if (writeLegacyJson != SC2SaveSettings.WriteLegacyJson) SC2SaveSettings.WriteLegacyJson = writeLegacyJson;
 #endif
         });
@@ -2933,8 +2950,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             for (var i = 0; i < tabs.Length; i++)
             {
                 var style = i == _subTab ? _activeSubtabStyle : _subtabStyle;
-                var label = CompactSubtabLabel(tabs[i]);
                 var btnRect = new Rect(i * compactTabWidth + 2f, 0f, compactTabWidth - 4f, rect.height);
+                // A label wider than its button is cut with "..." instead of being clipped on both sides of the centre.
+                var label = SC2StartupUi.Fit(CompactSubtabLabel(tabs[i]), style, btnRect.width - style.padding.horizontal);
                 if (GUI.Button(btnRect, label, style))
                     _subTab = i;
                 if (i == _subTab) DrawSubtabLine(btnRect);
@@ -2948,7 +2966,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             {
                 var style = i == _subTab ? _activeSubtabStyle : _subtabStyle;
                 var requestedWidth = Mathf.Clamp(tabs[i].Length * SC2UiScale.Pxf(9f) + SC2UiScale.Pxf(28f), SC2UiScale.Pxf(78f), SC2UiScale.Pxf(148f));
-                if (GUILayout.Button(tabs[i], style, GUILayout.Width(requestedWidth)))
+                var fitted = new GUIContent(SC2StartupUi.Fit(tabs[i], style, requestedWidth - style.padding.horizontal), tabs[i]);
+                if (GUILayout.Button(fitted, style, GUILayout.Width(requestedWidth)))
                     _subTab = i;
                 if (i == _subTab && Event.current.type == EventType.Repaint) DrawSubtabLine(GUILayoutUtility.GetLastRect());
             }
@@ -3634,7 +3653,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawCollisionInspector()
     {
         DrawInspectorHeader("Collision2",
-            "Collision2 is auto-generated from the current terrain's hfield — an error-adaptive Delaunay TIN mesh, simplified to a user-adjustable triangle budget (default 2500, up to 10000 — see the Polygon Budget slider below).");
+            "Collision2 is the collision mesh the game uses for the ground. It is generated from the terrain and simplified to a triangle budget you set with the Polygon Budget slider below (default 2500, up to 10000).");
         EnsureCollision2Shell();
         // Same reasoning as the try/catch in DrawCostsInspector — an
         // exception here would otherwise abort the rest of OnGUI for the
@@ -3728,7 +3747,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawEnvironmentInspector()
     {
         DrawInspectorHeader("Environment",
-            "Environment (info.bdf) — Sun, Water, Fog, Glow and related fields for the current procedural terrain.");
+            "Sun, water, fog, glow and the other lighting and atmosphere settings of the map (saved as info.bdf).");
         EnsureEnvironmentShell();
         // Same reasoning as the try/catch around Costs/Collision2's embedded
         // GUI — an exception here shouldn't blank the rest of the panel.
@@ -3755,7 +3774,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawScenarioInspector()
     {
         DrawInspectorHeader("Scenario",
-            "Scenario — map name used by Save/Export for the current procedural terrain.");
+            "The map's name, its scripts, and the minimap and preview pictures the game shows for it.");
         EnsureScenarioShell();
         try
         {
@@ -3799,7 +3818,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         EnsureTerrainShell();
         if (_exportShell == null)
-            _exportShell = new SC2ExportShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView };
+            _exportShell = new SC2ExportShell(_terrainShell, _mapSession)
+            {
+                RepaintHost = RepaintGameView,
+                ObjectsIssues = () =>
+                {
+                    EnsureObjectsShell();
+                    return _objectsShell.CollectValidationIssues();
+                },
+            };
     }
 
     private void DrawObjectsInspector()

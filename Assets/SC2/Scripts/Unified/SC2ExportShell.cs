@@ -17,6 +17,9 @@ public sealed class SC2ExportShell
     private readonly SC2MapSession _session;
     public System.Action RepaintHost;
 
+    /// <summary>The problems the Objects tab lists (set by the editor, which owns that tab); they are validated with the rest.</summary>
+    public System.Func<System.Collections.Generic.IReadOnlyList<string>> ObjectsIssues;
+
     private SC2TerrainData Data => _terrainShell?.Data;
     public bool IsReady => Data != null && Data.IsInitialized;
 
@@ -44,7 +47,7 @@ public sealed class SC2ExportShell
 
         if (!IsReady)
         {
-            SC2TerrainShell.DrawUnifiedNote("Create/load a terrain first (Terrain tab) — Export writes the procedural map to real .bdf/.lua files.");
+            SC2TerrainShell.DrawUnifiedNote("Create or load a map first (Terrain tab). Export writes the map as the game's .bdf and .lua files.");
             GUILayout.EndVertical();
             return;
         }
@@ -134,6 +137,31 @@ public sealed class SC2ExportShell
         }
     }
 
+    /// <summary>What the Objects tab lists as problems, as a report: a Mass marker that cannot take the extractor is a warning, a
+    /// note about the checks that could not run is information, everything else (a missing start position, a broken reference) an error.</summary>
+    private SC2ValidationReport ObjectsTabReport()
+    {
+        var report = new SC2ValidationReport();
+        var issues = ObjectsIssues?.Invoke();
+        if (issues == null) return report;
+        foreach (var text in issues)
+        {
+            if (text.StartsWith("Note:", System.StringComparison.Ordinal))
+                report.Add(SC2ValidationSeverity.Info, "objects.checks.pending", "Objects", null, text);
+            else if (text.StartsWith("Mass marker", System.StringComparison.Ordinal))
+                report.Add(SC2ValidationSeverity.Warning, "objects.mass.not_buildable", "Objects", null, text);
+            else
+                report.Add(SC2ValidationSeverity.Error, "objects.structure", "Objects", null, text);
+        }
+        return report;
+    }
+
+    // Findings about values the export fills in itself, so an empty one in the editor is not a problem: the map's own paths in
+    // _scenario.lua (made from the Map Name), the default terrain types, and the environment and sky textures the Environment tab
+    // leaves to the game when they are empty.
+    private static readonly System.Collections.Generic.HashSet<string> ExportWritesItself =
+        new System.Collections.Generic.HashSet<string> { "SCN002", "SCN003", "SCN004", "HFD001", "ENV001", "ENV002" };
+
     private void RunValidation()
     {
         _terrainShell.SaveTerrainState(writeAssets: false);
@@ -145,7 +173,7 @@ public sealed class SC2ExportShell
         }
 
         var doc = _session.Document;
-        _lastValidationDomainNames = new[] { "Terrain", "Hfield", "Costs", "Collision2", "Objects", "Environment", "Scenario", "Decals" };
+        _lastValidationDomainNames = new[] { "Terrain", "Hfield", "Costs", "Collision2", "Objects", "Objects (map checks)", "Environment", "Scenario", "Decals" };
         _lastValidationReports = new[]
         {
             SC2TerrainValidator.Validate(doc.Terrain),
@@ -153,10 +181,13 @@ public sealed class SC2ExportShell
             SC2CostsValidator.Validate(doc.Costs),
             SC2CollisionValidator.Validate(doc.Collision2),
             SC2ObjectsValidator.Validate(doc.Objects),
+            ObjectsTabReport(),
             SC2EnvironmentValidator.Validate(doc.Environment),
             SC2ScenarioValidator.Validate(doc.Scenario),
             SC2DecalsValidator.Validate(doc.Decals),
         };
+        foreach (var report in _lastValidationReports)
+            report?.Messages.RemoveAll(m => ExportWritesItself.Contains(m.Code));
         _lastValidationTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         RepaintHost?.Invoke();
     }

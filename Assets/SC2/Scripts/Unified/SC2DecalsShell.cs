@@ -174,7 +174,7 @@ public sealed class SC2DecalsShell : IDisposable
         // decal via the same atlas UV rects), not a per-decal normal map —
         // this note plus the two atlas-path labels above spell that out;
         // the two buttons themselves are relabeled to say "atlas" too.
-        GUILayout.Label("Diffuse/Normal atlases below are each ONE whole texture, shared by every decal in this catalog via the same UV rect.", GUI.skin.box, GUILayout.Width(w - 8));
+        GUILayout.Label("The Diffuse and Normal atlases below are each one whole texture. Every decal in the catalog uses a part of them.", GUI.skin.box, GUILayout.Width(w - 8));
         // Routed through the same shared texture browser every material
         // Diffuse/Normal/Mask slot already uses (catalog-aware: vanilla/
         // archive/custom sources, not just a raw local file picker) instead
@@ -283,7 +283,7 @@ public sealed class SC2DecalsShell : IDisposable
         _placeThroughWater = GUILayout.Toggle(_placeThroughWater, "Place through water (click reaches the real floor beneath water instead of stopping at the water surface)", GUILayout.Width(w));
         if (_mode == InteractionMode.Place)
         {
-            GUILayout.Label("Click the final terrain surface to place. Imported BDF and runtime terrain use the same raycast/projector path.", GUI.skin.box, GUILayout.Width(w - 8));
+            GUILayout.Label("Click the terrain to place a decal. It works on an imported terrain and on the painted terrain alike.", GUI.skin.box, GUILayout.Width(w - 8));
             // Without this button, there is no way to leave Place mode
             // without either clicking an existing decal (which switches to
             // Edit as a side effect) or placing another one first.
@@ -440,8 +440,9 @@ public sealed class SC2DecalsShell : IDisposable
         DrawPlacementList(w);
     }
 
-    private const float PlacementRowHeight = 36f;
-    private const float PlacementListMaxHeight = 360f;
+    // Scaled with the interface: a row holds two lines of text, which grow with UI Scale.
+    private static float PlacementRowHeight => SC2UiScale.Pxf(36f);
+    private static float PlacementListMaxHeight => SC2UiScale.Pxf(360f);
     private Vector2 _placementListScroll;
     private List<int> _placementListOrder;
     private long _placementListOrderRevision = -1;
@@ -491,7 +492,8 @@ public sealed class SC2DecalsShell : IDisposable
             var i = order[row];
             var p = Doc.Placements[i];
             var rowRect = new Rect(content.x, content.y + row * PlacementRowHeight, content.width, PlacementRowHeight - 2f);
-            var thumb = new Rect(rowRect.x, rowRect.y, 32f, 32f);
+            var thumbSize = SC2UiScale.Pxf(32f);
+            var thumb = new Rect(rowRect.x, rowRect.y, thumbSize, thumbSize);
             var entry = Doc.Entries.FirstOrDefault(e => e.Id == p.AtlasEntryId);
             if (entry != null && _diffuseAtlas != null) GUI.DrawTextureWithTexCoords(thumb, _diffuseAtlas, AtlasUv(entry), true);
             else GUI.Box(thumb, "");
@@ -499,7 +501,8 @@ public sealed class SC2DecalsShell : IDisposable
             var label = $"{(i == _selectedPlacement || _groupSelection.Contains(p.Id) ? "● " : "○ ")}{p.Name}\n({pos[0]:0.#}, {pos[2]:0.#})  {p.Width:0.#}x{p.Length:0.#}" + (p.Enabled ? "" : "  [disabled]") + (_hiddenPlacementIds.Contains(p.Id) ? "  [hidden]" : "");
             // Selecting a placement arms Edit mode — see the Mode field's
             // own doc comment.
-            if (GUI.Button(new Rect(rowRect.x + 36f, rowRect.y, rowRect.width - 36f, 32f), label)) { _selectedPlacement = i; _mode = InteractionMode.Edit; }
+            var labelOffset = thumbSize + SC2UiScale.Pxf(4f);
+            if (GUI.Button(new Rect(rowRect.x + labelOffset, rowRect.y, rowRect.width - labelOffset, thumbSize), label, SC2UnifiedSkin.SmallButtonStyle)) { _selectedPlacement = i; _mode = InteractionMode.Edit; }
         }
         GUILayout.EndScrollView();
     }
@@ -1785,7 +1788,7 @@ public sealed class SC2DecalsShell : IDisposable
         var previousColor = GUI.color;
         if (tooDense) GUI.color = new Color(1f, 0.55f, 0.4f);
         GUILayout.Label($"Authored decals in the preview: {triangles:N0} triangles (the export clips against the simplified terrain instead)" +
-                        (tooDense ? $" - above {SC2DecalsExportService.WarnTriangleCount / 1000}k" : ""), GUILayout.Width(w - 8));
+                        (tooDense ? $" - above {SC2DecalsExportService.WarnTriangleCount / 1000}k" : ""), WrappingLabelStyle(), GUILayout.Width(w - 8));
         GUI.color = previousColor;
         var last = SC2DecalsExportService.LastStats;
         if (last.Triangles <= 0) return;
@@ -1793,8 +1796,22 @@ public sealed class SC2DecalsShell : IDisposable
         if (exportTooDense) GUI.color = new Color(1f, 0.55f, 0.4f);
         GUILayout.Label($"Last export: {last.Triangles:N0} triangles, {last.Vertices:N0} vertices" +
                         (exportTooDense ? $" - above {SC2DecalsExportService.WarnTriangleCount / 1000}k, vanilla maps ship about 15-40k in total" : ""),
-                        GUILayout.Width(w - 8));
+                        WrappingLabelStyle(), GUILayout.Width(w - 8));
         GUI.color = previousColor;
+    }
+
+    private GUIStyle _wrappingLabelStyle;
+    private GUISkin _wrappingLabelSkin;
+
+    /// <summary>The skin's label that wraps to the width it is given, for the longer texts of this panel.</summary>
+    private GUIStyle WrappingLabelStyle()
+    {
+        if (_wrappingLabelStyle == null || _wrappingLabelSkin != GUI.skin)
+        {
+            _wrappingLabelSkin = GUI.skin;
+            _wrappingLabelStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
+        }
+        return _wrappingLabelStyle;
     }
 
     private IEnumerable<(Mesh Mesh, Matrix4x4 LocalToWorld)> RuntimeTerrainMeshes()

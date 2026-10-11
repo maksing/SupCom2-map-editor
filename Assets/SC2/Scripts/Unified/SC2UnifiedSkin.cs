@@ -68,6 +68,11 @@ public static class SC2UnifiedSkin
     private static GUIStyle _selectRow;
     private static GUIStyle _radio;
     private static GUIStyle _smallButton;
+    private static GUIStyle _iconButton;
+
+    /// <summary>A button that holds only a symbol (a reset arrow, a cross): no side padding, so the glyph is centred in a narrow button
+    /// instead of being pushed to one side of it.</summary>
+    public static GUIStyle IconButtonStyle { get { Ensure(); return _iconButton; } }
 
     /// <summary>A compact button for dense rows (filter chips): caption-sized text and tight padding.</summary>
     public static GUIStyle SmallButtonStyle { get { Ensure(); return _smallButton; } }
@@ -114,6 +119,7 @@ public static class SC2UnifiedSkin
         _pillSelected     = Rounded(24, 10, SC2Theme.SelectedFillOver(Surface), SC2Theme.SelectedBorderOver(Surface), 1.25f);
         _fieldNormal      = Rounded(20, 6, SC2Theme.FieldFill, Border, 1f);
         _fieldFocused     = Rounded(20, 6, SC2Theme.FieldFill, SC2Theme.AccentHover, 1.25f);
+        MeasureSwitch();
         _toggleOff        = SwitchTexture(on: false, hover: false);
         _toggleOffHover   = SwitchTexture(on: false, hover: true);
         _toggleOn         = SwitchTexture(on: true, hover: false);
@@ -200,13 +206,17 @@ public static class SC2UnifiedSkin
         _skin.toggle = new GUIStyle()
         {
             fontSize = FontSizeBody,
-            alignment = TextAnchor.MiddleLeft,
-            // The switch is baked into the left of the texture and kept unstretched by the left border; the rest of the
-            // control (the label) stays transparent.
-            border = new RectOffset(SwitchWidth + 4, 2, 12, 12),
-            // The control has to be at least as tall as the switch texture (24 px, kept unstretched by its 12 px top and bottom
-            // borders), or Unity squeezes the borders and the switch comes out flat.
-            padding = new RectOffset(SwitchWidth + SC2UiScale.Px(10), SC2UiScale.Px(4), SC2UiScale.Px(5), SC2UiScale.Px(5)),
+            // The first line of the label sits level with the switch; a label that wraps to more lines grows the control downwards.
+            alignment = TextAnchor.UpperLeft,
+            // A label longer than the control is wide wraps instead of running out of it.
+            wordWrap = true,
+            // The switch is baked into the upper left of the texture and kept unstretched by the left and top borders; the rest
+            // of the control (the label) stays transparent. The texture has one more, clear row under the switch, which is what a
+            // taller control (a label on several lines) stretches, so the switch keeps its shape and stays at the top.
+            border = new RectOffset(_switchLeftBorder, _switchRightBorder, _switchHeight, 0),
+            // The control has to be at least as tall as the switch texture (kept unstretched by its top and bottom borders), or
+            // Unity squeezes the borders and the switch comes out flat.
+            padding = new RectOffset(_switchLeftBorder + SC2UiScale.Px(6), SC2UiScale.Px(4), SwitchVerticalPadding(), SwitchVerticalPadding()),
             margin = new RectOffset(2, 2, 2, 2),
             normal   = { background = _toggleOff,      textColor = SC2Theme.TextPrimary },
             hover    = { background = _toggleOffHover, textColor = SC2Theme.TextBright },
@@ -235,6 +245,12 @@ public static class SC2UnifiedSkin
         {
             fontSize = FontSizeMini,
             padding = new RectOffset(SC2UiScale.Px(3), SC2UiScale.Px(3), SC2UiScale.Px(2), SC2UiScale.Px(2)),
+        };
+
+        _iconButton = new GUIStyle(_skin.button)
+        {
+            padding = new RectOffset(0, 0, 0, 0),
+            clipping = TextClipping.Overflow,
         };
 
         _radio = new GUIStyle()
@@ -279,6 +295,8 @@ public static class SC2UnifiedSkin
         _skin.box = new GUIStyle()
         {
             fontSize = FontSizeMini,
+            // Help and note texts are drawn as labels in this style: they wrap to the width they are given.
+            wordWrap = true,
             border = CardBorder,
             padding = boxPadding,
             normal = { background = _card, textColor = TextSecondary }
@@ -303,12 +321,36 @@ public static class SC2UnifiedSkin
         }
     }
 
-    private const int SwitchWidth = 32;
+    // The switch is baked at its real size, so it follows UI Scale (the skin is rebuilt when the scale changes). Its track is
+    // 38 x 18 design pixels, about twice as long as high.
+    private const float SwitchTrackDesignWidth = 38f, SwitchTrackDesignHeight = 18f;
+    private static int _switchTrackWidth, _switchTrackHeight, _switchPad, _switchGap;
+    private static int _switchWidth, _switchHeight, _switchLeftBorder, _switchRightBorder;
 
-    /// <summary>The on/off switch of a toggle: a 32 x 16 pill with a knob, at the left of a 44 x 24 texture (the rest is clear).</summary>
+    private static void MeasureSwitch()
+    {
+        _switchTrackWidth = Mathf.Max(20, SC2UiScale.Px((int)SwitchTrackDesignWidth));
+        _switchTrackHeight = Mathf.Max(10, SC2UiScale.Px((int)SwitchTrackDesignHeight));
+        _switchPad = Mathf.Max(1, SC2UiScale.Px(2));
+        _switchGap = Mathf.Max(2, SC2UiScale.Px(4));
+        _switchRightBorder = 2;
+        _switchLeftBorder = _switchPad + _switchTrackWidth + _switchGap;
+        _switchWidth = _switchLeftBorder + 6 + _switchRightBorder;
+        _switchHeight = _switchTrackHeight + 2 * _switchPad;
+        if ((_switchHeight & 1) != 0) _switchHeight++;
+    }
+
+    /// <summary>Vertical padding that makes a toggle at least as tall as the switch texture.</summary>
+    private static int SwitchVerticalPadding()
+    {
+        var line = Mathf.CeilToInt(FontSizeBody * 1.3f);
+        return Mathf.Max(SC2UiScale.Px(5), Mathf.CeilToInt((_switchHeight - line) * 0.5f) + 1);
+    }
+
+    /// <summary>The on/off switch of a toggle: a pill with a knob at the left of a texture whose rest is clear (see MeasureSwitch for sizes).</summary>
     private static Texture2D SwitchTexture(bool on, bool hover)
     {
-        const int width = SwitchWidth + 12, height = 24;
+        int width = _switchWidth, height = _switchHeight + 1;
         var tex = new Texture2D(width, height, TextureFormat.RGBA32, false)
         {
             hideFlags = HideFlags.HideAndDontSave,
@@ -318,8 +360,12 @@ public static class SC2UnifiedSkin
         var trackFill = on ? (hover ? SC2Theme.AccentHover : Accent) : (hover ? SC2Theme.Bg1 : SC2Theme.FieldFill);
         var trackBorder = on ? trackFill : SC2Theme.LineStrong;
         var knobColor = on ? Color.white : SC2Theme.TextSecondary;
-        const float trackLeft = 2f, trackWidth = SwitchWidth - 2f, trackHeight = 16f, trackBottom = 4f, knobRadius = 5.5f;
-        var knobCenterX = on ? trackLeft + trackWidth - 8f : trackLeft + 8f;
+        float trackLeft = _switchPad, trackWidth = _switchTrackWidth, trackHeight = _switchTrackHeight;
+        // Row 0 (the bottom one, clear) is the stretching row; the switch fills the rows above it.
+        var trackBottom = 1f + (_switchHeight - trackHeight) * 0.5f;
+        var knobInset = Mathf.Max(2f, trackHeight * 0.16f);
+        var knobRadius = trackHeight * 0.5f - knobInset;
+        var knobCenterX = on ? trackLeft + trackWidth - trackHeight * 0.5f : trackLeft + trackHeight * 0.5f;
         for (var y = 0; y < height; y++)
         {
             for (var x = 0; x < width; x++)

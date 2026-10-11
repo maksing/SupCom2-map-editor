@@ -1250,7 +1250,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (_data == null)
         {
-            DrawUnifiedNote("Create/load a terrain first — the water plane is generated relative to it.");
+            DrawUnifiedNote("Create or load a map first: the water plane is generated for it.");
             return;
         }
 
@@ -1262,14 +1262,14 @@ public class SC2TerrainShell : ScriptableObject
 
         if (importedHasWater)
         {
-            DrawUnifiedNote("An imported terrain.bdf already carries water geometry; its material stays bound to the live water values, so Plane Size does not apply.");
+            DrawUnifiedNote("An imported terrain.bdf already carries its own water, so Plane Size does not apply. Its water still follows the water settings of this map.");
         }
         else
         {
             var info = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true);
             DrawUnifiedNote(info.WaterEnabled == 0
                 ? "Water is off (Environment > Water): no plane is generated."
-                : "A generated plane covers this map (32x32 grid with a BSP tree).");
+                : "A water plane is generated to cover this map.");
 
             var newSize = Mathf.RoundToInt(DrawCompactSlider("Plane size", _data.WaterPlaneSize, 128f, 8192f,
                 onValueChangeStart: () => RecordUndoCheckpoint("Change Water Plane Size")));
@@ -1619,7 +1619,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (_data == null)
         {
-            DrawUnifiedNote("Create/load a terrain first — the background is generated relative to it.");
+            DrawUnifiedNote("Create or load a map first: the background is generated for it.");
             return;
         }
 
@@ -1707,7 +1707,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (_data == null)
         {
-            DrawUnifiedNote("Create/load a terrain first — the bake needs real geometry to sample.");
+            DrawUnifiedNote("Create or load a map first: the lighting bake needs the terrain.");
             return;
         }
 
@@ -1864,7 +1864,7 @@ public class SC2TerrainShell : ScriptableObject
     {
         if (_data == null)
         {
-            DrawUnifiedNote("Create/load a terrain first - the point cloud is baked from its geometry.");
+            DrawUnifiedNote("Create or load a map first: the point cloud is baked from its terrain.");
             return;
         }
 
@@ -2597,12 +2597,20 @@ public class SC2TerrainShell : ScriptableObject
         return expanded;
     }
 
-    /// <summary>How to change the brush without the sliders, as the keys are bound right now (both are rebindable): shown under
+    /// <summary>How to change the brush without the sliders, as the keys are bound right now (all are rebindable): shown under
     /// the brush sliders of Geometry and Paint. The radius has the hold-and-move gesture only (there is no scroll modifier for
-    /// it); the strength is the one that scrolls.</summary>
-    public static void DrawBrushHint()
+    /// it); the strength scrolls, and so does the hardness of a Geometry brush (<paramref name="withHardness"/>), which takes
+    /// a row of its own.</summary>
+    public static void DrawBrushHint(bool withHardness = false)
     {
-        // F + move: radius      Ctrl + Scroll: strength   (keys as they are bound right now; both are rebindable)
+        // F + move: radius      Ctrl + Scroll: strength      Alt + Scroll: hardness   (keys as they are bound right now)
+        if (withHardness)
+        {
+            DrawKeyHintRow("Brush.RadiusResizeGesture", " + move: radius", null);
+            DrawKeyHintRow("Brush.StrengthScrollModifier", " +", " : strength");
+            DrawKeyHintRow("Brush.HardnessScrollModifier", " +", " : hardness");
+            return;
+        }
         GUILayout.BeginHorizontal();
         SC2ForgeUi.KeyChip(SC2Hotkeys.Label("Brush.RadiusResizeGesture"));
         SC2ForgeUi.ChipText(" + move: radius");
@@ -2612,6 +2620,23 @@ public class SC2TerrainShell : ScriptableObject
         GUILayout.Space(SC2UiScale.Pxf(3f));
         SC2ForgeUi.KeyChip("Scroll");
         SC2ForgeUi.ChipText(" : strength");
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
+    }
+
+    /// <summary>One line of the brush hint: the chip of a key, then either its text (a key held while the mouse moves) or " +", a
+    /// Scroll chip and what it changes.</summary>
+    private static void DrawKeyHintRow(string actionId, string afterKey, string afterScroll)
+    {
+        GUILayout.BeginHorizontal();
+        SC2ForgeUi.KeyChip(SC2Hotkeys.Label(actionId));
+        SC2ForgeUi.ChipText(afterKey);
+        if (afterScroll != null)
+        {
+            GUILayout.Space(SC2UiScale.Pxf(3f));
+            SC2ForgeUi.KeyChip("Scroll");
+            SC2ForgeUi.ChipText(afterScroll);
+        }
         GUILayout.FlexibleSpace();
         GUILayout.EndHorizontal();
     }
@@ -4275,9 +4300,7 @@ public class SC2TerrainShell : ScriptableObject
         // shared Resources asset wasn't created (and thus baked into the build),
         // say so instead of inventing empty data.
         DrawUnifiedNote(
-            "No terrain data is baked into this build.\n" +
-            $"Create it in the Unity Editor first (it will be saved to Resources as '{SC2GameViewEditorUI.SharedTerrainDataResourceName}'), " +
-            "then rebuild — the Editor and this build will then load the same asset.");
+            "No map is open. Create a new map or open a saved one from the start screen.");
 #endif
     }
 

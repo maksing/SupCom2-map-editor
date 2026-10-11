@@ -26,7 +26,7 @@ using SC2.MapEditor.Document;
 public sealed class SC2InfoModelFieldDrawer
 {
     /// <summary>Set by the host before drawing each frame — the reset-to-
-    /// original comparison target for every per-field ⟲ button below.</summary>
+    /// original comparison target for every per-field ↩ button below.</summary>
     public InfoModel Original;
 
     // _fSun/_fShadow/_fPointCloud/_fFogOfWar/_fIntel/_fDoF/_fSharpen/
@@ -59,12 +59,12 @@ public sealed class SC2InfoModelFieldDrawer
     {
         SC2EnvFieldGui.SectionLabel("sun", "Sun (@4..28)");
         var dir = new Vector3(m.SunDirectionX, m.SunDirectionY, m.SunDirectionZ);
-        dir = SC2EnvFieldGui.Vector3Field("SunDirection", dir, "sun.dir");
+        dir = Vector3R("SunDirection", dir, "sun.dir", new Vector3(Original.SunDirectionX, Original.SunDirectionY, Original.SunDirectionZ));
         if (SC2EnvFieldGui.Button("Normalize", GUILayout.Width(SC2UiScale.Pxf(90f)))) dir = dir.normalized;
         m.SunDirectionX = dir.x; m.SunDirectionY = dir.y; m.SunDirectionZ = dir.z;
 
         var col = new Color(m.SunColorR, m.SunColorG, m.SunColorB);
-        col = SC2EnvFieldGui.ColorField("SunColor (HDR)", col, "sun.color", hdr: true, showAlpha: false);
+        col = ColorR("SunColor (HDR)", col, "sun.color", new Color(Original.SunColorR, Original.SunColorG, Original.SunColorB), hdr: true, showAlpha: false);
         m.SunColorR = col.r; m.SunColorG = col.g; m.SunColorB = col.b;
 
         m.SunIntensity = SliderR("SunIntensity", m.SunIntensity, InfoFieldLimits.SunIntensity.Min, InfoFieldLimits.SunIntensity.Max, Original.SunIntensity);
@@ -199,7 +199,7 @@ public sealed class SC2InfoModelFieldDrawer
     {
         SC2EnvFieldGui.SectionLabel("moon", "ShadowColor (@32..44)");
         var c = new Color(m.ShadowColorR, m.ShadowColorG, m.ShadowColorB, m.ShadowColorA);
-        c = SC2EnvFieldGui.ColorField("ShadowColor", c, "shadow.color");
+        c = ColorR("ShadowColor", c, "shadow.color", new Color(Original.ShadowColorR, Original.ShadowColorG, Original.ShadowColorB, Original.ShadowColorA));
         m.ShadowColorR = c.r; m.ShadowColorG = c.g; m.ShadowColorB = c.b; m.ShadowColorA = c.a;
 
         // ShadowCastDistance(@492) moved here from the former "Unverified"
@@ -213,48 +213,46 @@ public sealed class SC2InfoModelFieldDrawer
     // two separate top-level tabs. ----
     public void DrawWaterTab(InfoModel m)
     {
+        // Restores whatever GUI.enabled was BEFORE the water fields (not hardcode true) — a caller can legitimately disable the
+        // whole panel around this call (e.g. SC2GameViewEditorUI while a top-panel dropdown is open, to stop clicks reaching panel
+        // content underneath it); unconditionally re-enabling here silently undid that for every field drawn after this group.
+        // While water is off every water setting is locked, not only the first group's.
+        var guiEnabledBeforeWaterFields = GUI.enabled;
         if (SC2EnvFieldGui.Foldout("water", ref _fWater, "Water (@48, @212..220)"))
         {
             m.WaterEnabled = ToggleR("WaterEnabled", m.WaterEnabled, Original.WaterEnabled);
-            // Restores whatever GUI.enabled was BEFORE this field group
-            // (not hardcode true) — a caller can legitimately disable the
-            // whole panel around this call (e.g. SC2GameViewEditorUI while
-            // a top-panel dropdown is open, to stop clicks reaching panel
-            // content underneath it); unconditionally re-enabling here
-            // silently undid that for every field drawn after this group.
-            var guiEnabledBeforeWaterFields = GUI.enabled;
             GUI.enabled = guiEnabledBeforeWaterFields && m.WaterEnabled != 0;
             m.MaxWaterDepth = SliderR("MaxWaterDepth", m.MaxWaterDepth, InfoFieldLimits.MaxWaterDepth.Min, InfoFieldLimits.MaxWaterDepth.Max, Original.MaxWaterDepth);
             m.WaterElevation = SliderR("WaterElevation", m.WaterElevation, InfoFieldLimits.WaterElevation.Min, InfoFieldLimits.WaterElevation.Max, Original.WaterElevation);
             m.WaterRenderElevationOverride = SliderR("WaterRenderElevationOverride", m.WaterRenderElevationOverride, InfoFieldLimits.WaterRenderElevationOverride.Min, InfoFieldLimits.WaterRenderElevationOverride.Max, Original.WaterRenderElevationOverride);
-            GUI.enabled = guiEnabledBeforeWaterFields;
         }
+        GUI.enabled = guiEnabledBeforeWaterFields && m.WaterEnabled != 0;
 
         if (SC2EnvFieldGui.Foldout("water", ref _fWColor, "WaterColor (@100..112)"))
         {
             var c = new Color(m.WaterColorR, m.WaterColorG, m.WaterColorB, m.WaterColorA);
-            c = SC2EnvFieldGui.ColorField("WaterColor", c, "water.color");
+            c = ColorR("WaterColor", c, "water.color", new Color(Original.WaterColorR, Original.WaterColorG, Original.WaterColorB, Original.WaterColorA));
             m.WaterColorR = c.r; m.WaterColorG = c.g; m.WaterColorB = c.b; m.WaterColorA = c.a;
         }
 
         if (SC2EnvFieldGui.Foldout("water", ref _fWMove, "WaterDiffuse/NormalMovement (@52..96)"))
         {
-            (m.WaterDiffuse1MovementX, m.WaterDiffuse1MovementY) = MoveXY("WaterDiffuse1Movement", m.WaterDiffuse1MovementX, m.WaterDiffuse1MovementY);
-            (m.WaterDiffuse2MovementX, m.WaterDiffuse2MovementY) = MoveXY("WaterDiffuse2Movement", m.WaterDiffuse2MovementX, m.WaterDiffuse2MovementY);
-            (m.WaterNormal1MovementX, m.WaterNormal1MovementY) = MoveXY("WaterNormal1Movement", m.WaterNormal1MovementX, m.WaterNormal1MovementY);
-            (m.WaterNormal2MovementX, m.WaterNormal2MovementY) = MoveXY("WaterNormal2Movement", m.WaterNormal2MovementX, m.WaterNormal2MovementY);
-            (m.WaterNormal3MovementX, m.WaterNormal3MovementY) = MoveXY("WaterNormal3Movement", m.WaterNormal3MovementX, m.WaterNormal3MovementY);
-            (m.WaterNormal4MovementX, m.WaterNormal4MovementY) = MoveXY("WaterNormal4Movement", m.WaterNormal4MovementX, m.WaterNormal4MovementY);
+            (m.WaterDiffuse1MovementX, m.WaterDiffuse1MovementY) = MoveXY("WaterDiffuse1Movement", m.WaterDiffuse1MovementX, m.WaterDiffuse1MovementY, Original.WaterDiffuse1MovementX, Original.WaterDiffuse1MovementY);
+            (m.WaterDiffuse2MovementX, m.WaterDiffuse2MovementY) = MoveXY("WaterDiffuse2Movement", m.WaterDiffuse2MovementX, m.WaterDiffuse2MovementY, Original.WaterDiffuse2MovementX, Original.WaterDiffuse2MovementY);
+            (m.WaterNormal1MovementX, m.WaterNormal1MovementY) = MoveXY("WaterNormal1Movement", m.WaterNormal1MovementX, m.WaterNormal1MovementY, Original.WaterNormal1MovementX, Original.WaterNormal1MovementY);
+            (m.WaterNormal2MovementX, m.WaterNormal2MovementY) = MoveXY("WaterNormal2Movement", m.WaterNormal2MovementX, m.WaterNormal2MovementY, Original.WaterNormal2MovementX, Original.WaterNormal2MovementY);
+            (m.WaterNormal3MovementX, m.WaterNormal3MovementY) = MoveXY("WaterNormal3Movement", m.WaterNormal3MovementX, m.WaterNormal3MovementY, Original.WaterNormal3MovementX, Original.WaterNormal3MovementY);
+            (m.WaterNormal4MovementX, m.WaterNormal4MovementY) = MoveXY("WaterNormal4Movement", m.WaterNormal4MovementX, m.WaterNormal4MovementY, Original.WaterNormal4MovementX, Original.WaterNormal4MovementY);
         }
 
         if (SC2EnvFieldGui.Foldout("water", ref _fWTile, "WaterFoam/NormalRepeatRate (@116..136)"))
         {
             var fr = new Vector2(m.WaterFoamRepeatRateX, m.WaterFoamRepeatRateY);
-            fr = SC2EnvFieldGui.Vector2Field("WaterFoamRepeatRate", fr, "water.foamrate");
+            fr = Vector2R("WaterFoamRepeatRate", fr, "water.foamrate", new Vector2(Original.WaterFoamRepeatRateX, Original.WaterFoamRepeatRateY));
             m.WaterFoamRepeatRateX = fr.x; m.WaterFoamRepeatRateY = fr.y;
 
             var nr = new Vector4(m.WaterNormalRepeatRateX, m.WaterNormalRepeatRateY, m.WaterNormalRepeatRateZ, m.WaterNormalRepeatRateW);
-            nr = SC2EnvFieldGui.Vector4Field("WaterNormalRepeatRate", nr, "water.normalrate");
+            nr = Vector4R("WaterNormalRepeatRate", nr, "water.normalrate", new Vector4(Original.WaterNormalRepeatRateX, Original.WaterNormalRepeatRateY, Original.WaterNormalRepeatRateZ, Original.WaterNormalRepeatRateW));
             m.WaterNormalRepeatRateX = nr.x; m.WaterNormalRepeatRateY = nr.y;
             m.WaterNormalRepeatRateZ = nr.z; m.WaterNormalRepeatRateW = nr.w;
         }
@@ -280,13 +278,14 @@ public sealed class SC2InfoModelFieldDrawer
         if (SC2EnvFieldGui.Foldout("water", ref _fWMisc, "WaterDepthOrigin / WaterDepthBoundsSize (@196..208)"))
         {
             var off = new Vector2(m.WaterDepthOriginX, m.WaterDepthOriginY);
-            off = SC2EnvFieldGui.Vector2Field("WaterDepthOrigin", off, "water.depthorigin");
+            off = Vector2R("WaterDepthOrigin", off, "water.depthorigin", new Vector2(Original.WaterDepthOriginX, Original.WaterDepthOriginY));
             m.WaterDepthOriginX = off.x; m.WaterDepthOriginY = off.y;
 
             var bs = new Vector2(m.WaterDepthBoundsSizeX, m.WaterDepthBoundsSizeY);
-            bs = SC2EnvFieldGui.Vector2Field("WaterDepthBoundsSize", bs, "water.depthbounds");
+            bs = Vector2R("WaterDepthBoundsSize", bs, "water.depthbounds", new Vector2(Original.WaterDepthBoundsSizeX, Original.WaterDepthBoundsSizeY));
             m.WaterDepthBoundsSizeX = bs.x; m.WaterDepthBoundsSizeY = bs.y;
         }
+        GUI.enabled = guiEnabledBeforeWaterFields;
     }
 
     // ---- Fog tab: split into Core/Horizon foldouts (was one undifferentiated
@@ -296,7 +295,7 @@ public sealed class SC2InfoModelFieldDrawer
         if (SC2EnvFieldGui.Foldout("fog", ref _fFogCore, "Core (@260..296)"))
         {
             var cc = new Color(m.CoreFogColorR, m.CoreFogColorG, m.CoreFogColorB, m.CoreFogColorA);
-            cc = SC2EnvFieldGui.ColorField("CoreFogColor", cc, "fog.core.color");
+            cc = ColorR("CoreFogColor", cc, "fog.core.color", new Color(Original.CoreFogColorR, Original.CoreFogColorG, Original.CoreFogColorB, Original.CoreFogColorA));
             m.CoreFogColorR = cc.r; m.CoreFogColorG = cc.g; m.CoreFogColorB = cc.b; m.CoreFogColorA = cc.a;
 
             m.CoreFogAmount1 = SliderR("CoreFogAmount1", m.CoreFogAmount1, InfoFieldLimits.CoreFogAmount1.Min, InfoFieldLimits.CoreFogAmount1.Max, Original.CoreFogAmount1);
@@ -309,7 +308,7 @@ public sealed class SC2InfoModelFieldDrawer
         if (SC2EnvFieldGui.Foldout("fog", ref _fFogHorizon, "Horizon (@296..328)"))
         {
             var hc = new Color(m.HorizonFogColorR, m.HorizonFogColorG, m.HorizonFogColorB, m.HorizonFogColorA);
-            hc = SC2EnvFieldGui.ColorField("HorizonFogColor", hc, "fog.horizon.color");
+            hc = ColorR("HorizonFogColor", hc, "fog.horizon.color", new Color(Original.HorizonFogColorR, Original.HorizonFogColorG, Original.HorizonFogColorB, Original.HorizonFogColorA));
             m.HorizonFogColorR = hc.r; m.HorizonFogColorG = hc.g; m.HorizonFogColorB = hc.b; m.HorizonFogColorA = hc.a;
 
             m.HorizonFogAmount1 = SliderR("HorizonFogAmount1", m.HorizonFogAmount1, InfoFieldLimits.HorizonFogAmount1.Min, InfoFieldLimits.HorizonFogAmount1.Max, Original.HorizonFogAmount1);
@@ -328,10 +327,10 @@ public sealed class SC2InfoModelFieldDrawer
         SC2EnvFieldGui.SectionLabel("sparkles", "PointCloud (@332..352)");
         SC2EnvFieldGui.WrapLabel("When a point cloud is baked in the map editor (Environment > Point Clouds > Bake Point Cloud), its own box replaces Origin and Size at export.", SC2UiScale.Pxf(240f));
         var origin = new Vector3(m.PointCloudOriginX, m.PointCloudOriginY, m.PointCloudOriginZ);
-        origin = SC2EnvFieldGui.Vector3Field("PointCloudOrigin", origin, "pointcloud.origin");
+        origin = Vector3R("PointCloudOrigin", origin, "pointcloud.origin", new Vector3(Original.PointCloudOriginX, Original.PointCloudOriginY, Original.PointCloudOriginZ));
         m.PointCloudOriginX = origin.x; m.PointCloudOriginY = origin.y; m.PointCloudOriginZ = origin.z;
         var sz = new Vector3(m.PointCloudSizeX, m.PointCloudSizeY, m.PointCloudSizeZ);
-        sz = SC2EnvFieldGui.Vector3Field("PointCloudSize", sz, "pointcloud.size");
+        sz = Vector3R("PointCloudSize", sz, "pointcloud.size", new Vector3(Original.PointCloudSizeX, Original.PointCloudSizeY, Original.PointCloudSizeZ));
         m.PointCloudSizeX = sz.x; m.PointCloudSizeY = sz.y; m.PointCloudSizeZ = sz.z;
         m.PointCloudLightAmount = SliderR("PointCloudLightAmount", m.PointCloudLightAmount, InfoFieldLimits.PointCloudLightAmount.Min, InfoFieldLimits.PointCloudLightAmount.Max, Original.PointCloudLightAmount);
     }
@@ -568,9 +567,64 @@ public sealed class SC2InfoModelFieldDrawer
     {
         var prevEnabled = GUI.enabled;
         GUI.enabled = prevEnabled && changed;
-        var clicked = SC2EnvFieldGui.Button("⟲", GUILayout.Width(ResetButtonWidth));
+        var clicked = GUILayout.Button("↩", SC2UnifiedSkin.IconButtonStyle, GUILayout.Width(ResetButtonWidth), GUILayout.Height(SC2UiScale.Pxf(20f)));
         GUI.enabled = prevEnabled;
         return clicked && changed;
+    }
+
+    /// <summary>The reset button in a column of its own beside a field that has a label line above its control: at the bottom of the
+    /// column it is level with the control (the slider, the X/Y/Z boxes), at the top level with the label line (a colour's swatch).</summary>
+    private static bool ResetColumn(bool changed, bool levelWithControl)
+    {
+        GUILayout.BeginVertical(GUILayout.Width(ResetButtonWidth + SC2UiScale.Pxf(4f)));
+        if (levelWithControl) GUILayout.FlexibleSpace();
+        var clicked = ResetButton(changed);
+        GUILayout.EndVertical();
+        return clicked;
+    }
+
+    private static Vector2 Vector2R(string label, Vector2 v, string key, Vector2 original)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.BeginVertical();
+        var next = SC2EnvFieldGui.Vector2Field(label, v, key);
+        GUILayout.EndVertical();
+        var reset = ResetColumn(v != original, true);
+        GUILayout.EndHorizontal();
+        return reset ? original : next;
+    }
+
+    private static Vector3 Vector3R(string label, Vector3 v, string key, Vector3 original)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.BeginVertical();
+        var next = SC2EnvFieldGui.Vector3Field(label, v, key);
+        GUILayout.EndVertical();
+        var reset = ResetColumn(v != original, true);
+        GUILayout.EndHorizontal();
+        return reset ? original : next;
+    }
+
+    private static Vector4 Vector4R(string label, Vector4 v, string key, Vector4 original)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.BeginVertical();
+        var next = SC2EnvFieldGui.Vector4Field(label, v, key);
+        GUILayout.EndVertical();
+        var reset = ResetColumn(v != original, true);
+        GUILayout.EndHorizontal();
+        return reset ? original : next;
+    }
+
+    private static Color ColorR(string label, Color c, string key, Color original, bool hdr = false, bool showAlpha = true)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.BeginVertical();
+        var next = SC2EnvFieldGui.ColorField(label, c, key, hdr, showAlpha);
+        GUILayout.EndVertical();
+        var reset = ResetColumn(c != original, false);
+        GUILayout.EndHorizontal();
+        return reset ? original : next;
     }
 
     private static float SliderR(string l, float v, float min, float max, float original)
@@ -580,7 +634,7 @@ public sealed class SC2InfoModelFieldDrawer
         var changed = !Mathf.Approximately(v, original);
         var newV = SC2EnvFieldGui.Slider(l, v, min, max, l);
         GUILayout.EndVertical();
-        if (ResetButton(changed)) newV = original;
+        if (ResetColumn(changed, true)) newV = original;
         GUILayout.EndHorizontal();
         return newV;
     }
@@ -596,7 +650,7 @@ public sealed class SC2InfoModelFieldDrawer
         var changed = v != original;
         var newV = SC2EnvFieldGui.IntSlider(l, v, min, max, l);
         GUILayout.EndVertical();
-        if (ResetButton(changed)) newV = original;
+        if (ResetColumn(changed, true)) newV = original;
         GUILayout.EndHorizontal();
         return newV;
     }
@@ -619,9 +673,9 @@ public sealed class SC2InfoModelFieldDrawer
     /// Vector2Field instead: same compact "label above, X/Y boxes below"
     /// layout already used (and confirmed non-overflowing) for
     /// PointCloudOrigin/WaterDepthOrigin/etc.</summary>
-    private static (float x, float y) MoveXY(string label, float x, float y)
+    private static (float x, float y) MoveXY(string label, float x, float y, float originalX, float originalY)
     {
-        var v = SC2EnvFieldGui.Vector2Field(label, new Vector2(x, y), label);
+        var v = Vector2R(label, new Vector2(x, y), label, new Vector2(originalX, originalY));
         return (v.x, v.y);
     }
 }

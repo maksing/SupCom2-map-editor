@@ -40,13 +40,15 @@ public sealed class SC2UnitPropBrowser
     private const string AllPropFolders = "All folders";
     private static readonly Dictionary<string, SC2GameAssetDiscoveryResult> SharedIndexes = new Dictionary<string, SC2GameAssetDiscoveryResult>(StringComparer.OrdinalIgnoreCase);
 
-    // Favorite props (the prop browser only), shared by every browser instance and kept across sessions. A prop is identified like
-    // the browser identifies it everywhere else (AssetIdentity), so the copy of a prop under mods/<mod>/base|shadow/ is the same favorite.
+    // Favorite props and units, shared by every browser instance and kept across sessions. An asset is identified like the browser
+    // identifies it everywhere else (AssetIdentity, which starts with its kind), so the copy of a prop under mods/<mod>/base|shadow/ is
+    // the same favorite, and a unit and a prop never share one.
     private const string FavoritePropsPrefsKey = "SC2.PropBrowserFavorites";
     private static HashSet<string> _favoriteProps;
-    // Where the prop browser was left (the Favorites switch, the folder and the scroll position), so reopening it - in the same session
-    // or the next - lands on the same page of the grid instead of starting again at All folders.
+    // Where each browser was left (the Favorites switch, the folder of props or the faction of units, and the scroll position), so
+    // reopening it - in the same session or the next - lands on the same page of the grid instead of starting again at the top.
     private const string PropViewPrefsKey = "SC2.PropBrowserView";
+    private const string UnitViewPrefsKey = "SC2.UnitBrowserView";
     private bool _favoritesOnly;
     private GUIStyle _favoriteStarStyle;
     private GUISkin _favoriteStarSkin;
@@ -87,6 +89,7 @@ public sealed class SC2UnitPropBrowser
     private List<string> _unitCategoryOptions = new List<string>();
     private string _unitCategorySignature;
     private bool _unitCategoriesExpanded;
+    private Vector2 _categoriesScroll;
     private int _thumbnailLoadsThisRepaint;
 
     // Prop 3D preview: the card under the cursor is remembered across frames (the panel keeps
@@ -161,7 +164,7 @@ public sealed class SC2UnitPropBrowser
         _selectedUnitCategories.Clear();
         _unitCategoriesExpanded = false;
         _scroll = Vector2.zero;
-        if (kind == AssetKind.Prop) RestorePropView();
+        RestoreView();
         var root = GameDataRoot;
         bool rootChanged = string.IsNullOrWhiteSpace(root) || !string.Equals(_loadedRoot, root, StringComparison.OrdinalIgnoreCase);
         if ((_result == null || rootChanged) && _loadTask == null && !string.IsNullOrWhiteSpace(root)) StartLoad(false);
@@ -208,7 +211,7 @@ public sealed class SC2UnitPropBrowser
 
     public void Close()
     {
-        if (IsOpen && _kind == AssetKind.Prop) SavePropView();
+        if (IsOpen) SaveView();
         _onPick = null;
         _search = string.Empty;
         _hoveredEntry = null;
@@ -218,15 +221,25 @@ public sealed class SC2UnitPropBrowser
 
     private void DrawWindow(int windowId)
     {
+        // A window's callback runs after the host's own OnGUI has handed the skin back, so the editor's skin is put on again here:
+        // without it the buttons and fields of this window come out in Unity's stock look.
+        var previousSkin = GUI.skin;
+        GUI.skin = SC2UnifiedSkin.Get();
+        try { DrawWindowBody(); }
+        finally { GUI.skin = previousSkin; }
+    }
+
+    private void DrawWindowBody()
+    {
         _thumbnailLoadsThisRepaint = 0;
         _modelThumbnailsThisRepaint = 0;
 
         float windowWidth = _contentWidth + WindowPadding * 2f;
         float windowHeight = Mathf.Min(740f, Mathf.Max(520f, Screen.height - 110f));
         var windowRect = new Rect(0f, 0f, windowWidth, windowHeight);
-        DrawRect(windowRect, new Color(0.075f, 0.082f, 0.098f, 1f));
-        DrawBorder(windowRect, new Color(0.25f, 0.28f, 0.34f, 1f));
-        DrawRect(new Rect(0f, 0f, windowWidth, HeaderHeight), new Color(0.105f, 0.115f, 0.135f, 1f));
+        DrawRect(windowRect, SC2Theme.Bg2);
+        DrawBorder(windowRect, SC2Theme.LineStrong);
+        DrawRect(new Rect(0f, 0f, windowWidth, HeaderHeight), SC2Theme.Bg1);
         GUI.Label(new Rect(14f, 10f, 220f, 22f), _kind == AssetKind.Unit ? "Unit Browser" : "Prop Browser", TitleStyle);
         if (GUI.Button(new Rect(windowWidth - 82f, 8f, 68f, 26f), "Close")) { Close(); GUIUtility.ExitGUI(); }
 
@@ -238,28 +251,6 @@ public sealed class SC2UnitPropBrowser
     private void DrawWindowContent()
     {
         GUILayout.BeginVertical();
-        // The prop browser is kept to its favorites switch and the folder filter; the unit browser keeps its full header
-        // (description, game data root, Reindex, search, incomplete toggle, count).
-        bool fullHeader = _kind == AssetKind.Unit;
-        if (fullHeader)
-        {
-        GUILayout.Label("Blueprint -> SCM -> DDS. Unit cards use the game's UI icon when it exists.");
-
-        GUILayout.BeginHorizontal();
-        // Read-only: the gamedata root is configured once, on the startup
-        // screen (SC2GameInstallSettings.RootPath) — every archive-aware
-        // system in the editor shares it, this browser included, instead of
-        // asking the user to paste the same path again here.
-        GUILayout.Label("Game data root: " + (string.IsNullOrWhiteSpace(GameDataRoot) ? "(not configured — set on the startup screen)" : GameDataRoot), GUILayout.ExpandWidth(true));
-        // Restores whatever GUI.enabled was BEFORE this button (not
-        // hardcode true) — see SC2ObjectsShell.DrawUndoRedoRow's own
-        // comment for why.
-        var guiEnabledBeforeIndexButton = GUI.enabled;
-        GUI.enabled = guiEnabledBeforeIndexButton && _loadTask == null && !string.IsNullOrWhiteSpace(GameDataRoot);
-        if (GUILayout.Button(_result == null ? "Index" : "Reindex", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
-        GUI.enabled = guiEnabledBeforeIndexButton;
-        GUILayout.EndHorizontal();
-        }
 
         if (_loadTask != null)
         {
@@ -274,40 +265,31 @@ public sealed class SC2UnitPropBrowser
         {
             GUILayout.FlexibleSpace();
             GUILayout.Label("Set the gamedata root on the startup screen, then press Index.", GUI.skin.box, GUILayout.Height(SC2UiScale.Pxf(42f)));
-            // Without the header's Reindex button the prop browser still needs a way to retry a failed index.
-            if (!fullHeader && !string.IsNullOrWhiteSpace(GameDataRoot) && GUILayout.Button("Index", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
+            if (!string.IsNullOrWhiteSpace(GameDataRoot) && GUILayout.Button("Index", GUILayout.Width(SC2UiScale.Pxf(82f)))) StartLoad(true);
             GUILayout.FlexibleSpace();
             GUILayout.EndVertical();
             return;
         }
 
-        if (fullHeader)
+        // Units have a name search above the filters; the prop browser is kept to its favorites switch and the folder filter.
+        if (_kind == AssetKind.Unit)
         {
-        GUILayout.BeginHorizontal();
-        string nextSearch = GUILayout.TextField(_search ?? string.Empty, GUI.skin.textField, GUILayout.ExpandWidth(true));
-        if (!string.Equals(nextSearch, _search, StringComparison.Ordinal)) { _search = nextSearch; InvalidateVisibleEntries(); }
-        bool nextShowUnavailable = GUILayout.Toggle(_showUnavailable, "Show incomplete", GUILayout.Width(SC2UiScale.Pxf(126f)));
-        if (nextShowUnavailable != _showUnavailable) { _showUnavailable = nextShowUnavailable; InvalidateVisibleEntries(); }
-        GUILayout.Label(GetVisibleEntries().Count + " assets", GUILayout.Width(SC2UiScale.Pxf(76f)));
-        GUILayout.EndHorizontal();
+            string nextSearch = GUILayout.TextField(_search ?? string.Empty, GUI.skin.textField, GUILayout.ExpandWidth(true));
+            if (!string.Equals(nextSearch, _search, StringComparison.Ordinal)) { _search = nextSearch; InvalidateVisibleEntries(false); }
         }
 
-        if (_kind == AssetKind.Prop) { DrawFavoritesSwitch(); DrawPropFolderFilter(); }
-        if (_kind == AssetKind.Unit) DrawUnitFilterRow();
+        DrawFavoritesSwitch();
+        if (_kind == AssetKind.Prop) DrawPropFolderFilter(); else DrawUnitFilterRow();
         var entries = GetVisibleEntries();
-        if (_kind == AssetKind.Prop)
-        {
-            if (Event.current.type == EventType.Repaint) _hoveredEntry = null;
-            float cardsAreaWidth = _contentWidth - PropPreviewPanelWidth - PanelGap;
-            GUILayout.BeginHorizontal();
-            GUILayout.BeginVertical(GUILayout.Width(cardsAreaWidth));
-            DrawCards(entries, cardsAreaWidth);
-            GUILayout.EndVertical();
-            GUILayout.Space(PanelGap);
-            DrawPropPreviewPanel();
-            GUILayout.EndHorizontal();
-        }
-        else DrawCards(entries, _contentWidth);
+        if (Event.current.type == EventType.Repaint) _hoveredEntry = null;
+        float cardsAreaWidth = _contentWidth - PropPreviewPanelWidth - PanelGap;
+        GUILayout.BeginHorizontal();
+        GUILayout.BeginVertical(GUILayout.Width(cardsAreaWidth));
+        DrawCards(entries, cardsAreaWidth);
+        GUILayout.EndVertical();
+        GUILayout.Space(PanelGap);
+        DrawPropPreviewPanel();
+        GUILayout.EndHorizontal();
         GUILayout.EndVertical();
     }
 
@@ -493,7 +475,7 @@ public sealed class SC2UnitPropBrowser
         if (!_showUnavailable) candidates = candidates.Where(entry => entry.IsReady);
         if (_kind == AssetKind.Prop && !string.Equals(_selectedPropFolder, AllPropFolders, StringComparison.OrdinalIgnoreCase))
             candidates = candidates.Where(entry => string.Equals(GetPropFolder(entry), _selectedPropFolder, StringComparison.OrdinalIgnoreCase));
-        if (_kind == AssetKind.Prop && _favoritesOnly)
+        if (_favoritesOnly)
             candidates = candidates.Where(IsFavorite);
         if (_kind == AssetKind.Unit)
         {
@@ -549,7 +531,7 @@ public sealed class SC2UnitPropBrowser
         _selectedPropFolder = options[next].Name;
         _scroll = Vector2.zero;
         InvalidateVisibleEntries(false);
-        SavePropView();
+        SaveView();
     }
 
     private List<PropFolderOption> GetPropFolderOptions()
@@ -585,7 +567,6 @@ public sealed class SC2UnitPropBrowser
     /// user asked for those as the primary grouping.</summary>
     private void DrawUnitFilterRow()
     {
-        float w = Mathf.Min(1120f, Mathf.Max(680f, Screen.width - 80f));
         GUILayout.Label("Faction");
         var factionOptions = GetUnitFactionOptions();
         int selected = Array.IndexOf(factionOptions, _selectedUnitFaction);
@@ -594,7 +575,9 @@ public sealed class SC2UnitPropBrowser
         if (nextFaction != selected)
         {
             _selectedUnitFaction = factionOptions[nextFaction];
+            _scroll = Vector2.zero;
             InvalidateVisibleEntries(false);
+            SaveView();
         }
 
         var categoryOptions = GetUnitCategoryOptions();
@@ -604,14 +587,22 @@ public sealed class SC2UnitPropBrowser
             GUI.skin.button);
         if (!_unitCategoriesExpanded) return;
 
-        int columns = Mathf.Clamp(Mathf.FloorToInt((w - 8f) / 130f), 2, 8);
+        // The tags are many (a hundred or so), so they sit in a short scrolling area with compact chips instead of a grid that
+        // covers the whole window; a tag too long for its chip is cut with "...".
+        var chipStyle = SC2UnifiedSkin.SmallButtonStyle;
+        float areaWidth = _contentWidth - SC2UiScale.Pxf(18f);
+        int columns = Mathf.Clamp(Mathf.FloorToInt(areaWidth / SC2UiScale.Pxf(118f)), 3, 10);
+        float cellWidth = Mathf.Floor(areaWidth / columns) - SC2UiScale.Pxf(4f);
+        _categoriesScroll = GUILayout.BeginScrollView(_categoriesScroll, false, false, GUIStyle.none, GUI.skin.verticalScrollbar,
+            GUILayout.Height(SC2UiScale.Pxf(104f)));
         GUILayout.BeginHorizontal();
         for (int i = 0; i < categoryOptions.Count; i++)
         {
             if (i > 0 && i % columns == 0) { GUILayout.EndHorizontal(); GUILayout.BeginHorizontal(); }
             string category = categoryOptions[i];
             bool wasOn = _selectedUnitCategories.Contains(category);
-            bool nowOn = GUILayout.Toggle(wasOn, category, GUI.skin.button, GUILayout.Width(SC2UiScale.Pxf(126f)));
+            var content = new GUIContent(SC2StartupUi.Fit(category, chipStyle, cellWidth - chipStyle.padding.horizontal), category);
+            bool nowOn = GUILayout.Toggle(wasOn, content, chipStyle, GUILayout.Width(cellWidth), GUILayout.Height(SC2UiScale.Pxf(22f)));
             if (nowOn != wasOn)
             {
                 if (nowOn) _selectedUnitCategories.Add(category); else _selectedUnitCategories.Remove(category);
@@ -619,6 +610,7 @@ public sealed class SC2UnitPropBrowser
             }
         }
         GUILayout.EndHorizontal();
+        GUILayout.EndScrollView();
         if (_selectedUnitCategories.Count > 0 && GUILayout.Button("Clear category filters"))
         {
             _selectedUnitCategories.Clear();
@@ -783,9 +775,9 @@ public sealed class SC2UnitPropBrowser
         _propPreview.Draw(modelRect);
 
         var entry = _previewedEntry;
-        GUILayout.Label(entry == null ? "Hover a prop to preview it" : entry.Asset.DisplayName ?? entry.Asset.Id, CardLabelStyle, GUILayout.Height(20f));
-        GUILayout.Label(entry == null ? string.Empty : GetPropFolderBreadcrumb(entry), CardLabelStyle, GUILayout.Height(18f));
-        if (entry != null)
+        GUILayout.Label(entry == null ? (_kind == AssetKind.Unit ? "Hover a unit to preview it" : "Hover a prop to preview it") : entry.Asset.DisplayName ?? entry.Asset.Id, CardLabelStyle, GUILayout.Height(20f));
+        GUILayout.Label(entry == null ? string.Empty : _kind == AssetKind.Unit ? entry.Asset.Id : GetPropFolderBreadcrumb(entry), CardLabelStyle, GUILayout.Height(18f));
+        if (entry != null && _kind == AssetKind.Prop)
             GUILayout.Label(entry.Asset.Destructable ? "Destructible: breaks when hit" : "Not destructible: stays standing",
                 entry.Asset.Destructable ? CardStateIssueStyle : CardLabelStyle, GUILayout.Height(18f));
         string status = entry == null || _propPreview.HasModel ? "Drag to rotate, wheel to zoom" : "No 3D model: " + (_propPreview.Error ?? "not loaded");
@@ -851,18 +843,19 @@ public sealed class SC2UnitPropBrowser
 
     private void DrawCard(Rect rect, SC2GameAssetDiscoveryEntry entry, bool mayBuildThumbnail)
     {
-        if (_kind == AssetKind.Prop && Event.current.type == EventType.Repaint && rect.Contains(Event.current.mousePosition))
+        if (Event.current.type == EventType.Repaint && rect.Contains(Event.current.mousePosition))
             _hoveredEntry = entry;
         var cardInner = new Rect(rect.x + 2f, rect.y + 2f, rect.width - 4f, rect.height - 4f);
-        bool highlighted = _kind == AssetKind.Prop && entry == _previewedEntry;
-        DrawRect(cardInner, highlighted ? new Color(0.18f, 0.31f, 0.52f, 1f) : new Color(0.11f, 0.12f, 0.145f, 1f));
+        bool highlighted = entry == _previewedEntry;
+        DrawRect(cardInner, highlighted ? Color.Lerp(SC2Theme.Bg1, SC2Theme.Accent, 0.35f) : SC2Theme.Bg1);
         var previewRect = new Rect(rect.x + 8, rect.y + 8, rect.width - 16, 96);
-        Texture preview = _kind == AssetKind.Prop ? GetModelThumbnail(entry, mayBuildThumbnail) : GetPreview(entry);
+        // A unit card shows the unit's game icon (its model is in the preview panel at the right); a prop card shows a render of the prop.
+        Texture preview = _kind == AssetKind.Unit ? GetPreview(entry) : GetModelThumbnail(entry, mayBuildThumbnail);
         if (preview != null) DrawFittedTexture(previewRect, preview);
         else
         {
             Color old = GUI.color;
-            GUI.color = _kind == AssetKind.Unit ? new Color(0.16f, 0.35f, 0.62f) : GetPropColor(entry.Asset.Id);
+            GUI.color = _kind == AssetKind.Unit ? SC2Theme.Accent : GetPropColor(entry.Asset.Id);
             GUI.DrawTexture(previewRect, Texture2D.whiteTexture);
             GUI.color = old;
             GUI.Label(previewRect, _kind == AssetKind.Unit ? "UNIT" : "PROP", FallbackLabelStyle);
@@ -873,24 +866,33 @@ public sealed class SC2UnitPropBrowser
         string state = !entry.IsReady ? entry.Issues.First(issue => issue.IsBlocking).Kind : entry.Issues.Count == 0 ? "Ready" : "Ready (fallback)";
         GUI.Label(new Rect(rect.x + 5, rect.y + 144, rect.width - 10, 17), state, entry.IsReady ? CardStateReadyStyle : CardStateIssueStyle);
         // Before the card-sized button below, so a click on the star toggles the favorite instead of picking the prop.
-        if (_kind == AssetKind.Prop) { DrawDestructibleBadge(previewRect, entry.Asset.Destructable); DrawFavoriteStar(previewRect, entry); }
+        if (_kind == AssetKind.Prop) DrawDestructibleBadge(previewRect, entry.Asset.Destructable);
+        DrawFavoriteStar(previewRect, entry);
         if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Select(entry);
     }
 
-    private void SavePropView()
+    private string ViewPrefsKey => _kind == AssetKind.Unit ? UnitViewPrefsKey : PropViewPrefsKey;
+
+    private void SaveView()
     {
-        PlayerPrefs.SetString(PropViewPrefsKey,
-            (_favoritesOnly ? "1" : "0") + "\n" + (_selectedPropFolder ?? AllPropFolders) + "\n" + _scroll.y.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        var second = _kind == AssetKind.Unit ? _selectedUnitFaction : _selectedPropFolder ?? AllPropFolders;
+        PlayerPrefs.SetString(ViewPrefsKey,
+            (_favoritesOnly ? "1" : "0") + "\n" + second + "\n" + _scroll.y.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
         PlayerPrefs.Save();
     }
 
-    /// <summary>Puts back what SavePropView stored. A folder that no longer exists falls back to All folders in DrawPropFolderFilter.</summary>
-    private void RestorePropView()
+    /// <summary>Puts back what SaveView stored. A folder that no longer exists falls back to All folders in DrawPropFolderFilter; a
+    /// faction that is not one of the options is ignored.</summary>
+    private void RestoreView()
     {
-        var parts = PlayerPrefs.GetString(PropViewPrefsKey, string.Empty).Split('\n');
+        var parts = PlayerPrefs.GetString(ViewPrefsKey, string.Empty).Split('\n');
         if (parts.Length != 3) return;
         _favoritesOnly = parts[0] == "1";
-        if (!string.IsNullOrEmpty(parts[1])) _selectedPropFolder = parts[1];
+        if (!string.IsNullOrEmpty(parts[1]))
+        {
+            if (_kind == AssetKind.Prop) _selectedPropFolder = parts[1];
+            else if (Array.IndexOf(GetUnitFactionOptions(), parts[1]) >= 0) _selectedUnitFaction = parts[1];
+        }
         if (float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scrollY) && scrollY > 0f)
             _scroll = new Vector2(0f, scrollY);
     }
@@ -898,12 +900,12 @@ public sealed class SC2UnitPropBrowser
     /// <summary>The favorites filter, placed with the folder filter it combines with.</summary>
     private void DrawFavoritesSwitch()
     {
-        bool next = GUILayout.Toggle(_favoritesOnly, "Favorites (" + FavoriteProps.Count + ")", GUI.skin.button, GUILayout.Width(SC2UiScale.Pxf(140f)), GUILayout.Height(SC2UiScale.Pxf(26f)));
+        bool next = GUILayout.Toggle(_favoritesOnly, "Favorites (" + FavoriteCount() + ")", GUI.skin.button, GUILayout.Width(SC2UiScale.Pxf(140f)), GUILayout.Height(SC2UiScale.Pxf(26f)));
         if (next == _favoritesOnly) return;
         _favoritesOnly = next;
         _scroll = Vector2.zero;
         InvalidateVisibleEntries(false);
-        SavePropView();
+        SaveView();
     }
 
     private static HashSet<string> FavoriteProps
@@ -919,6 +921,13 @@ public sealed class SC2UnitPropBrowser
     }
 
     private static bool IsFavorite(SC2GameAssetDiscoveryEntry entry) => FavoriteProps.Contains(AssetIdentity(entry));
+
+    /// <summary>How many favorites there are among the assets of the kind this browser shows (the set also holds the other kind's).</summary>
+    private int FavoriteCount()
+    {
+        var prefix = (_kind == AssetKind.Unit ? "UnitBlueprint" : "PropBlueprint") + ":";
+        return FavoriteProps.Count(id => id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
 
     private void ToggleFavorite(SC2GameAssetDiscoveryEntry entry)
     {
@@ -958,7 +967,7 @@ public sealed class SC2UnitPropBrowser
 
     private void Select(SC2GameAssetDiscoveryEntry entry)
     {
-        if (_kind == AssetKind.Prop) SavePropView();
+        SaveView();
         var callback = _onPick;
         _onPick = null;
         callback?.Invoke(new SC2UnitPropBrowserSelection(entry.Asset, ToGamePath(entry.Asset.SourcePath), entry.IsReady));

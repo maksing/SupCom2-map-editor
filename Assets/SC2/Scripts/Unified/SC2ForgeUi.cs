@@ -126,7 +126,10 @@ public static class SC2ForgeUi
         GUI.color = SC2Theme.Accent;
         GUI.DrawTexture(new Rect(rect.x, rect.y + 2f, Mathf.Max(2f, SC2UiScale.Pxf(2.4f)), rect.height - 4f), White);
         GUI.color = previous;
-        GUI.Label(new Rect(rect.x + SC2UiScale.Pxf(10f), rect.y, rect.width - SC2UiScale.Pxf(10f), rect.height), (text ?? "").ToUpperInvariant(), _sectionStyle);
+        // A long title (a Costs block's name, say) is cut with "..." where it would run into the hint or past the edge.
+        var hintWidth = string.IsNullOrEmpty(hint) ? 0f : _hintStyle.CalcSize(new GUIContent(hint)).x + SC2UiScale.Pxf(8f);
+        var titleWidth = rect.width - SC2UiScale.Pxf(10f) - hintWidth;
+        GUI.Label(new Rect(rect.x + SC2UiScale.Pxf(10f), rect.y, titleWidth, rect.height), SC2StartupUi.Fit((text ?? "").ToUpperInvariant(), _sectionStyle, titleWidth), _sectionStyle);
         if (!string.IsNullOrEmpty(hint))
             GUI.Label(rect, hint, _hintStyle);
     }

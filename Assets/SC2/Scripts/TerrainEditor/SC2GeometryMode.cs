@@ -208,7 +208,7 @@ public class SC2GeometryMode
             _strengthScalesWithRadius = newScalesWithRadius;
         }
         EditorGUILayout.Space(SC2UiScale.Pxf(3f));
-        SC2TerrainShell.DrawBrushHint();
+        SC2TerrainShell.DrawBrushHint(withHardness: true);
         SC2TerrainShell.EndUnifiedPanelBox();
 
         // Irregular stamp brushes (World
@@ -295,7 +295,7 @@ public class SC2GeometryMode
         EditorGUILayout.Space(SC2UiScale.Pxf(6f));
         _heightRaiseOffset = SC2TerrainShell.DrawCompactSlider("Raise / lower amount", _heightRaiseOffset, -SC2TerrainData.MaxHeight, SC2TerrainData.MaxHeight);
         EditorGUI.BeginDisabledGroup(_win.ActiveRuntime == null);
-        if (SC2EnvFieldGui.PrimaryButton("Apply raise / lower"))
+        if (GUILayout.Button("Apply raise / lower"))
             ApplyHeightTransform(h => h + _heightRaiseOffset, "Raise/Lower Terrain");
         EditorGUI.EndDisabledGroup();
         SC2TerrainShell.EndUnifiedPanelBox();
