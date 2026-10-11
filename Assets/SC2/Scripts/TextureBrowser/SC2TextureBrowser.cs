@@ -320,8 +320,8 @@ public static class SC2TextureBrowser
         DrawRect(screen, new Color(0f, 0f, 0f, 0.72f));
 
         var window = WindowRect;
-        DrawRect(window, new Color(0.075f, 0.082f, 0.098f, 1f));
-        DrawBorder(window, new Color(0.25f, 0.28f, 0.34f, 1f));
+        DrawRect(window, SC2Theme.Bg2);
+        DrawBorder(window, SC2Theme.LineStrong);
 
         // While the Build's own confirm dialog (Delete imported texture) is
         // open, this browser is still drawn behind it but must not react:
@@ -353,7 +353,7 @@ public static class SC2TextureBrowser
 
     private static void DrawHeader(Rect rect)
     {
-        DrawRect(rect, new Color(0.105f, 0.115f, 0.135f, 1f));
+        DrawRect(rect, SC2Theme.Bg1);
         GUI.Label(new Rect(rect.x + 14f, rect.y + 10f, 132f, 22f), "Texture Browser", Bold());
         var search = new Rect(rect.x + 150f, rect.y + 8f, rect.width - 310f, 26f);
         GUI.SetNextControlName("SC2TextureBrowserSearch");
@@ -383,8 +383,8 @@ public static class SC2TextureBrowser
 
     private static void DrawSidebar(Rect rect)
     {
-        DrawRect(rect, new Color(0.085f, 0.092f, 0.108f, 1f));
-        DrawBorder(rect, new Color(0.16f, 0.18f, 0.22f, 1f));
+        DrawRect(rect, SC2Theme.Bg1);
+        DrawBorder(rect, SC2Theme.Line);
         var y = rect.y + 10f;
         GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 20f), "SOURCE", MiniBold()); y += 24f;
         // Four groups, not the raw SC2TextureSource enum (Map/Generated never
@@ -483,14 +483,14 @@ public static class SC2TextureBrowser
     private static void DrawFilterButton(ref float y, Rect parent, string label, bool active, Action action)
     {
         var rect = new Rect(parent.x + 8f, y, parent.width - 16f, 24f);
-        if (active) DrawRect(rect, new Color(0.22f, 0.40f, 0.68f, 1f));
+        if (active) DrawRect(rect, SC2Theme.Accent);
         if (GUI.Button(rect, label, active ? ActiveButton() : FlatButton())) { action(); InvalidateQuery(); }
         y += 26f;
     }
 
     private static void DrawGrid(Rect rect)
     {
-        DrawRect(rect, new Color(0.065f, 0.07f, 0.083f, 1f));
+        DrawRect(rect, SC2Theme.Bg0);
         // Fit as many CellWidth-wide columns as the view holds, then stretch
         // the cells to share the whole width — rather than leaving whatever
         // is left over after the last column as a wide empty strip on the
@@ -553,8 +553,8 @@ public static class SC2TextureBrowser
     {
         var selected = entry.Id == _selectedId;
         var isSuggested = TryGetSuggestionUsage(entry.Id, out var suggestionUsage);
-        DrawRect(rect, selected ? new Color(0.18f, 0.31f, 0.52f, 1f) : new Color(0.11f, 0.12f, 0.145f, 1f));
-        DrawBorder(rect, selected ? new Color(0.36f, 0.65f, 1f, 1f) : isSuggested ? new Color(0.95f, 0.65f, 0.15f, 1f) : new Color(0.20f, 0.22f, 0.27f, 1f));
+        DrawRect(rect, selected ? Color.Lerp(SC2Theme.Bg1, SC2Theme.Accent, 0.35f) : SC2Theme.Bg1);
+        DrawBorder(rect, selected ? SC2Theme.SelectedBorder : isSuggested ? SC2Theme.Amber : SC2Theme.Line);
         var preview = new Rect(rect.x + 7f, rect.y + 7f, rect.width - 14f, rect.width - 14f);
         DrawChecker(preview);
         var heavyLoadsBefore = Cache.HeavyLoadCount;
@@ -589,7 +589,7 @@ public static class SC2TextureBrowser
             const string badgeText = "Suggested";
             var badgeWidth = Mathf.Clamp(MiniBold().CalcSize(new GUIContent(badgeText)).x + 10f, 26f, rect.width - 14f);
             var badgeRect = new Rect(rect.x + 7f, rect.y + 7f, badgeWidth, 16f);
-            DrawRect(badgeRect, new Color(0.95f, 0.65f, 0.15f, 0.92f));
+            DrawRect(badgeRect, new Color(SC2Theme.Amber.r, SC2Theme.Amber.g, SC2Theme.Amber.b, 0.92f));
             var badgeStyle = MiniBold();
             var previousColor = badgeStyle.normal.textColor;
             badgeStyle.normal.textColor = Color.black;
@@ -611,8 +611,8 @@ public static class SC2TextureBrowser
 
     private static void DrawDetails(Rect rect)
     {
-        DrawRect(rect, new Color(0.085f, 0.092f, 0.108f, 1f));
-        DrawBorder(rect, new Color(0.16f, 0.18f, 0.22f, 1f));
+        DrawRect(rect, SC2Theme.Bg1);
+        DrawBorder(rect, SC2Theme.Line);
         var entry = SC2TextureCatalog.Instance.Find(_selectedId);
         var y = rect.y + 12f;
         GUI.Label(new Rect(rect.x + 12f, y, rect.width - 24f, 22f), "DETAILS", MiniBold()); y += 28f;
@@ -630,7 +630,7 @@ public static class SC2TextureBrowser
         for (var i = 0; i < channelLabels.Length; i++)
         {
             var channelRect = new Rect(rect.x + 14f + i * channelWidth, y, channelWidth - 2f, 22f);
-            if (_channel == i) DrawRect(channelRect, new Color(0.22f, 0.40f, 0.68f, 1f));
+            if (_channel == i) DrawRect(channelRect, SC2Theme.Accent);
             if (GUI.Button(channelRect, channelLabels[i], _channel == i ? ActiveButton() : FlatButton()))
             {
                 _channel = i;
@@ -665,7 +665,7 @@ public static class SC2TextureBrowser
 
     private static void DrawFooter(Rect rect)
     {
-        DrawRect(rect, new Color(0.105f, 0.115f, 0.135f, 1f));
+        DrawRect(rect, SC2Theme.Bg1);
         GUI.Label(new Rect(rect.x + 12f, rect.y + 12f, 170f, 20f), _results.Count + " textures", CenterDim());
         var previousEnabled = GUI.enabled;
         if (GUI.Button(new Rect(rect.x + 180f, rect.y + 7f, 112f, 28f), "Import...")) ImportCustom();
