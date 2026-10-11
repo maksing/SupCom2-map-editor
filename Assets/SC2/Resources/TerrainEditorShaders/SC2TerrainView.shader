@@ -560,11 +560,12 @@ Shader "Hidden/SC2/TerrainView"
             }
 
             // The tangent-space normal and the mask of the pair's two materials at uv, blended like the diffuse. Without the arrays the normal
-            // is flat and the mask is what terrain.hlsl uses for a material with no Mask texture: no environment, no glow, full specular.
+            // is flat and the mask is black, which is what the export gives a material with no Mask texture (black_d.dds): no environment,
+            // no glow, no specular.
             void SampleSurfaceNormalMask(int pIdx, float2 uv, half blend, out half3 tn, out half4 mask)
             {
                 tn = half3(0, 0, 1);
-                mask = half4(0, 0, 1, 0);
+                mask = half4(0, 0, 0, 0);
                 if (_UseArrayTextures != 0 && _HasNormalMaskArr != 0)
                 {
                     half4 n1 = UNITY_SAMPLE_TEX2DARRAY(_NormalArr, float3(uv, (float)(pIdx * 2)));
@@ -627,7 +628,7 @@ Shader "Hidden/SC2/TerrainView"
                 if ((flags & kFlagEnvironment) == 0 || (flags & kFlagRamp) == 0 || _HasEnvCube == 0 || _HasRampArr == 0)
                     return half3(0, 0, 0);
                 half3 fresnel = SampleRamp(pIdx, dot(viewDir, nWorld), 2.0);
-                return UNITY_SAMPLE_TEXCUBE_SAMPLER(_EnvCube, _MaskArr, reflView).rgb * (fresnel * envLevel);
+                return LinearToGammaSpace(UNITY_SAMPLE_TEXCUBE_SAMPLER(_EnvCube, _MaskArr, reflView).rgb) * (fresnel * envLevel);
             }
 
             // What the mask adds to a lit surface: the sun's specular (blue, times the baked sun occlusion and the share of the surface that is
@@ -767,12 +768,16 @@ Shader "Hidden/SC2/TerrainView"
                     half3 tn2; half4 mask2;
                     SampleSurfaceNormalMask(pIdx, uv1_tiled, blend, tn2, mask2);
                     float3 nrm2 = ApplyTangentNormal(normalize(i.nrm), tn2);
-                    half ndl2 = abs(dot(nrm2, kPreviewLight)) * 0.3 + 0.7;
-                    // Only the RNM view reaches here (every other view has returned above), so the pair is lit like the baked ones are.
-                    half3 lit2 = albedo * PreviewGlow(pairFlags, GameLight((half3)ndl2, 1.0h), mask2.g, (half)_GlowGain)
-                               + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedo)
+                    // Only the RNM view reaches here (every other view has returned above). An unbaked pair exports three neutral 128 slices
+                    // (SC2TerrainExporter), which the game lights with the same RNM formula: 0.5 in each slice, weighted by the normal.
+                    half rnmN = 0.5h * (saturate(dot(tn2, half3(0.8165, 0.0, 0.5774)))
+                                      + saturate(dot(tn2, half3(-0.4082, 0.7071, 0.5774)))
+                                      + saturate(dot(tn2, half3(-0.4082, -0.7071, 0.5774))));
+                    half3 albedoG2 = lerp(LinearToGammaSpace(d1), LinearToGammaSpace(d2), blend);
+                    half3 lit2 = albedoG2 * PreviewGlow(pairFlags, GameLight(half3(rnmN, rnmN, rnmN), 1.0h), mask2.g, (half)_GlowGain)
+                               + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedoG2)
                                + PreviewMaskExtras(pIdx, pairFlags, nrm2, i.worldPos, mask2, 1.0h, (half)(1.0 - _ShadowAmount));
-                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit2), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
+                    return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(GammaToLinearSpace(saturate(lit2)), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
                 }
 
                 // Real baked RNM lighting (SC2RnmBakeService) instead of a
@@ -820,12 +825,16 @@ Shader "Hidden/SC2/TerrainView"
                 // green of a shadow to zero and leaves a saturated blue, where the game's shadow is a dull blue-grey. The game's own
                 // darkness (its exposure and dynamic shadows) comes from the Game look settings, applied to the light just below.
                 rnmColor = saturate(rnmColor);
-                half3 lit = albedo * rnmColor;
+                // The game does this arithmetic in the gamma space of its files: the raw bytes of the diffuse times the light, the specular
+                // added to that, and the sum written to the screen as it is. The same product in Unity's linear space comes out much brighter
+                // (a light of 0.6 is 0.6 here, but 0.8 once the diffuse is decoded to linear and the result encoded back), so the light, its
+                // glow, specular and environment are worked out on the gamma colours, and only the result is brought to linear.
+                half3 albedoG = lerp(LinearToGammaSpace(d1), LinearToGammaSpace(d2), blend);
                 // Glow lifts the light term, then the sun's specular and the environment reflection are added on top, each by its own flag.
-                lit = albedo * PreviewGlow(pairFlags, GameLight(rnmColor, sunOcclusion), maskR.g, (half)_GlowGain)
-                    + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedo);
+                half3 lit = albedoG * PreviewGlow(pairFlags, GameLight(rnmColor, sunOcclusion), maskR.g, (half)_GlowGain)
+                          + PreviewBloom(pIdx, pairFlags, uv1_tiled, blend, albedoG);
                 lit += PreviewMaskExtras(pIdx, pairFlags, ApplyTangentNormal(normalize(i.nrm), tnR), i.worldPos, maskR, sunOcclusion, (half)(1.0 - _ShadowAmount));
-                return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(saturate(lit), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
+                return ApplyReference(ApplyWireframe(ApplyHeightGrid(ApplyCostsOverlay(ApplyHeightGradient(half4(GammaToLinearSpace(saturate(lit)), 1), i.worldY), i.uv1, i.worldY), i.uv0), i.uv0), refCol);
             }
             ENDCG
         }

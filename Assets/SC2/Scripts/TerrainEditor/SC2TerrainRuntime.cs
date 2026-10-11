@@ -1756,8 +1756,9 @@ public partial class SC2TerrainRuntime : IDisposable
         _maskArray = new Texture2DArray(MaskArraySize, MaskArraySize, maskLayers, TextureFormat.RGBA32, true, true)
             { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, name = "SC2_MaskArr" };
         var flatNormal = new Color32(128, 128, 255, 255);
-        // terrain.hlsl's mask for a material with no Mask texture: no environment, no glow, full specular level.
-        var noMask = new Color32(0, 0, 255, 0);
+        // A material with no Mask texture is exported with the black /textures/Engine/black_d.dds (SC2TerrainExporter), so the game has no
+        // environment, no glow and no specular there.
+        var noMask = new Color32(0, 0, 0, 0);
         for (var i = 0; i < Mathf.Max(n, 1); i++)
         {
             var p = pairs != null && i < pairs.Length ? pairs[i] : default;

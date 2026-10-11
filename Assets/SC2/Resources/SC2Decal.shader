@@ -203,8 +203,15 @@ Shader "SC2/Decal"
                 return tex2Dlod(tilingLut, float4((idx + 0.5) / 72.0, 0.5, 0, 0)).a > 0.5;
             }
 
-            // The baked light as the terrain under the decal shows it: as it is, times the light level, in the RNM game look; with the
-            // contrast stretch the other views have always used otherwise.
+            // The terrain's RNM view works in the game's gamma arithmetic (SC2TerrainView.shader): the raw diffuse times the light, then brought
+            // to linear. A decal under it is lit the same way, or it would come out lighter than the ground it lies on.
+            half3 DecalLit(half3 diffuse, half3 light)
+            {
+                if (_SC2DecalGameLook > 0.5)
+                    return GammaToLinearSpace(LinearToGammaSpace(diffuse) * light);
+                return diffuse * light;
+            }
+
             // The baked light as the terrain under the decal shows it: lerp towards ShadowColor like SC2TerrainView.shader's GameLight in the RNM
             // game look; with the contrast stretch the other views have always used otherwise.
             half3 DecalBakedLight(half3 baked)
@@ -259,7 +266,7 @@ Shader "SC2/Decal"
                                 half3 m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 1))).rgb;
                                 half3 m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 2))).rgb;
                                 half3 rnm = DecalBakedLight((m0 + m1 + m2) * 0.5774);
-                                lit = diffuseColor.rgb * rnm;
+                                lit = DecalLit(diffuseColor.rgb, rnm);
                                 resolved = true;
                             }
                         }
@@ -281,7 +288,7 @@ Shader "SC2/Decal"
                                 half3 m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 1))).rgb;
                                 half3 m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 2))).rgb;
                                 half3 rnm = DecalBakedLight((m0 + m1 + m2) * 0.5774);
-                                lit = diffuseColor.rgb * rnm;
+                                lit = DecalLit(diffuseColor.rgb, rnm);
                                 resolved = true;
                             }
                         }
