@@ -135,10 +135,13 @@ public class SC2MaterialsMode
         var materialColor = EditorGUILayout.ColorField(new GUIContent("", $"material-color-{mat.Id}"), mat.Color, false, false, false, GUILayout.Width(SC2UiScale.Pxf(42f)), GUILayout.Height(rowHeight));
         if (materialColor != mat.Color)
         {
-            _win.RecordUndoCheckpointFor(Data, "Change Material Color");
+            // One checkpoint for the whole drag in the picker, and no geometry change: a colour does not move the terrain, and
+            // announcing one made the decals preview rebuild the live height grid on every frame of the drag.
+            if (SC2ColorEditGesture.IsFirstChange("material-color-" + mat.Id))
+                _win.RecordUndoCheckpointFor(Data, "Change Material Color");
             mat.Color = materialColor;
             EditorUtility.SetDirty(Data);
-            _win.MarkDirtyAndRepaint();
+            _win.MarkDirtyAndRepaint(geometryChanged: false);
         }
         if (GUILayout.Button("x", GUILayout.Width(rowHeight), GUILayout.Height(rowHeight)) &&
             EditorUtility.DisplayDialog("Delete", $"Delete '{mat.Name}'?", "Yes", "Cancel"))
@@ -346,7 +349,9 @@ public class SC2MaterialsMode
                     _win.ExecuteCommand(new SC2SetMaterialTextureCommand(material.Id, TextureSlot(label), BuildTextureReference(next, forceExport)));
                 }
                 EditorUtility.SetDirty(Data);
-                _win.MarkDirtyAndRepaint();
+                // Only the export reads this flag. Announcing a geometry change made the decals preview rebuild the live height grid
+                // (hundreds of milliseconds on a large map) after every click.
+                _win.MarkDirtyAndRepaint(geometryChanged: false);
             }
         }
     }
@@ -707,10 +712,11 @@ public class SC2PairsMode
         var pairColor = EditorGUILayout.ColorField(new GUIContent("Pair Color", $"pair-color-{pair.Id}"), pair.PairColor, false, false, false, GUILayout.Height(SC2UiScale.Pxf(24f)));
         if (pairColor != pair.PairColor)
         {
-            _win.RecordUndoCheckpointFor(Data, "Change Pair Color");
+            if (SC2ColorEditGesture.IsFirstChange("pair-color-" + pair.Id))
+                _win.RecordUndoCheckpointFor(Data, "Change Pair Color");
             pair.PairColor = pairColor;
             EditorUtility.SetDirty(Data);
-            _win.MarkDirtyAndRepaint();
+            _win.MarkDirtyAndRepaint(geometryChanged: false);
         }
         if (GUILayout.Button("Assign unassigned polygons") &&
             EditorUtility.DisplayDialog("Assign", $"Assign every currently-unassigned polygon to '{pair.Name}'?", "Yes", "Cancel"))

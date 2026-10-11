@@ -890,4 +890,147 @@ public static class SC2EnvFieldGui
         _valueBarSat = sat;
         return _valueBarTex;
     }
+
+    // ---- The picker in a floating panel (the runtime ColorField of the materials and pairs) ----
+
+    /// <summary>What a floating colour picker remembers between frames: the colour as hue, saturation and value (kept apart, so
+    /// dragging to black or white does not lose the hue), the alpha it started with, and the text of the hex field.</summary>
+    internal sealed class PickerState
+    {
+        public float H, S, V, A = 1f;
+        public string HexText = "";
+
+        public Color Color
+        {
+            get
+            {
+                var rgb = Color.HSVToRGB(Mathf.Repeat(H, 1f), Mathf.Clamp01(S), Mathf.Clamp01(V));
+                return new Color(rgb.r, rgb.g, rgb.b, A);
+            }
+        }
+
+        public void Set(Color color)
+        {
+            A = color.a;
+            Color.RGBToHSV(new Color(Mathf.Clamp01(color.r), Mathf.Clamp01(color.g), Mathf.Clamp01(color.b)), out var h, out var s, out var v);
+            // A grey has no hue of its own; keep the one the wheel was showing.
+            if (s > 0.0001f && v > 0.0001f) H = h;
+            S = s;
+            V = v;
+        }
+    }
+
+    private const int PickerPresetColumns = 10;
+
+    /// <summary>Width and height of <see cref="DrawPickerBody"/> for a list of <paramref name="presetCount"/> preset swatches.</summary>
+    internal static Vector2 PickerSize(int presetCount)
+    {
+        var pad = SC2UiScale.Pxf(8f);
+        var wheel = SC2UiScale.Pxf(124f);
+        var width = pad * 3f + wheel + SC2UiScale.Pxf(20f);
+        var rows = Mathf.CeilToInt(presetCount / (float)PickerPresetColumns);
+        var swatch = (width - pad * 2f) / PickerPresetColumns;
+        var height = pad + wheel + pad                       // wheel and value bar
+                     + SC2UiScale.Pxf(24f) + pad * 0.5f      // preview and hex
+                     + 3f * SC2UiScale.Pxf(22f) + pad * 0.5f // R G B
+                     + rows * swatch + pad;
+        return new Vector2(width, height);
+    }
+
+    /// <summary>The whole picker inside <paramref name="area"/>: the hue and saturation wheel with its value bar, the colour as a
+    /// hex field and as red, green and blue sliders, and a row of preset swatches. Returns true when the colour changed (by a
+    /// drag, a typed value or a preset); read it from <paramref name="state"/>.</summary>
+    internal static bool DrawPickerBody(Rect area, PickerState state, Color[] presets)
+    {
+        var changed = false;
+        var e = Event.current;
+        var pad = SC2UiScale.Pxf(8f);
+        var wheelSize = SC2UiScale.Pxf(124f);
+
+        var wheelRect = new Rect(area.x + pad, area.y + pad, wheelSize, wheelSize);
+        GUI.DrawTexture(wheelRect, GetWheelTexture());
+        DrawWheelMarker(wheelRect, state.H, state.S);
+        if (DragInWheel(wheelRect, out var hue, out var saturation)) { state.H = hue; state.S = saturation; changed = true; }
+
+        var barRect = new Rect(wheelRect.xMax + pad, wheelRect.y, SC2UiScale.Pxf(20f), wheelSize);
+        GUI.DrawTexture(barRect, GetValueBarTexture(state.H, state.S));
+        DrawBorder(barRect, BorderColor);
+        DrawValueBarMarker(barRect, state.V);
+        if (DragInRect(barRect, out var t)) { state.V = 1f - t.y; changed = true; }
+
+        // preview and hex
+        var y = wheelRect.yMax + pad;
+        var rowHeight = SC2UiScale.Pxf(24f);
+        var preview = new Rect(area.x + pad, y, SC2UiScale.Pxf(30f), rowHeight);
+        var current = state.Color;
+        FillRect(preview, new Color(current.r, current.g, current.b, 1f));
+        DrawBorder(preview, BorderColor);
+        var hexRect = new Rect(preview.xMax + pad, y, area.xMax - pad - preview.xMax - pad, rowHeight);
+        const string hexControl = "SC2PickerHex";
+        GUI.SetNextControlName(hexControl);
+        var focused = GUI.GetNameOfFocusedControl() == hexControl;
+        var typed = GUI.TextField(hexRect, focused ? state.HexText : "#" + ColorUtility.ToHtmlStringRGB(current), 9);
+        if (focused)
+        {
+            state.HexText = typed;
+            var digits = typed.StartsWith("#") ? typed.Substring(1) : typed;
+            if ((digits.Length == 6 || digits.Length == 8) && ColorUtility.TryParseHtmlString("#" + digits, out var parsed)
+                && (Mathf.Abs(parsed.r - current.r) > 0.002f || Mathf.Abs(parsed.g - current.g) > 0.002f || Mathf.Abs(parsed.b - current.b) > 0.002f))
+            {
+                parsed.a = state.A;
+                state.Set(parsed);
+                changed = true;
+            }
+        }
+        else
+        {
+            state.HexText = typed;
+        }
+
+        // red, green, blue
+        y += rowHeight + pad * 0.5f;
+        var sliderHeight = SC2UiScale.Pxf(22f);
+        var labelWidth = SC2UiScale.Pxf(16f);
+        var numberWidth = SC2UiScale.Pxf(34f);
+        var channels = new[] { current.r, current.g, current.b };
+        var names = new[] { "R", "G", "B" };
+        for (var i = 0; i < 3; i++)
+        {
+            var row = new Rect(area.x + pad, y + i * sliderHeight, area.width - pad * 2f, sliderHeight);
+            GUI.Label(new Rect(row.x, row.y, labelWidth, row.height), names[i]);
+            var slider = new Rect(row.x + labelWidth, row.y, row.width - labelWidth - numberWidth, row.height);
+            var value = GUI.HorizontalSlider(slider, channels[i] * 255f, 0f, 255f);
+            GUI.Label(new Rect(slider.xMax + pad * 0.5f, row.y, numberWidth, row.height), Mathf.RoundToInt(value).ToString());
+            if (Mathf.Abs(value - channels[i] * 255f) > 0.5f)
+            {
+                channels[i] = Mathf.Round(value) / 255f;
+                state.Set(new Color(channels[0], channels[1], channels[2], state.A));
+                changed = true;
+                current = state.Color;
+            }
+        }
+        y += 3f * sliderHeight + pad * 0.5f;
+
+        // presets
+        if (presets != null)
+        {
+            var swatch = (area.width - pad * 2f) / PickerPresetColumns;
+            for (var i = 0; i < presets.Length; i++)
+            {
+                var cell = new Rect(area.x + pad + (i % PickerPresetColumns) * swatch, y + (i / PickerPresetColumns) * swatch, swatch - 2f, swatch - 2f);
+                FillRect(cell, presets[i]);
+                if (e != null && e.type == EventType.MouseDown && e.button == 0 && cell.Contains(e.mousePosition))
+                {
+                    var picked = presets[i];
+                    picked.a = state.A;
+                    state.Set(picked);
+                    state.HexText = "#" + ColorUtility.ToHtmlStringRGB(picked);
+                    GUI.FocusControl(null);
+                    changed = true;
+                    e.Use();
+                }
+            }
+        }
+        return changed;
+    }
 }

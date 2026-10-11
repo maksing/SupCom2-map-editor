@@ -466,7 +466,7 @@ namespace UnityEditor
                     SC2RuntimeColorPalette.UpdateAnchor(fieldKey, GUIToScreenRect(swatchRect));
             }
             if (clicked)
-                SC2RuntimeColorPalette.Toggle(fieldKey, GUIToScreenRect(GUILayoutUtility.GetLastRect()));
+                SC2RuntimeColorPalette.Toggle(fieldKey, GUIToScreenRect(GUILayoutUtility.GetLastRect()), value);
 
             return SC2RuntimeColorPalette.ConsumePendingResult(fieldKey, value);
         }

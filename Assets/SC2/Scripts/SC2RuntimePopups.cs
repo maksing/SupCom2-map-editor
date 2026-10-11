@@ -151,7 +151,8 @@ internal static class SC2RuntimeDropdown
 
 /// <summary>
 /// Runtime replacement for the Editor's native color-picker window: a small
-/// swatch grid the user clicks to pick from, instead of raw RGB sliders.
+/// full picker: the hue and saturation wheel with a value bar, a hex field, red, green and blue sliders and a row of preset
+/// swatches (SC2EnvFieldGui.DrawPickerBody). The field takes the colour live while it is dragged or typed.
 /// </summary>
 internal static class SC2RuntimeColorPalette
 {
@@ -187,14 +188,25 @@ internal static class SC2RuntimeColorPalette
     private static Rect _anchorRect;
     private static Color _pendingResult;
     private static string _pendingFieldKey;
+    private static readonly SC2EnvFieldGui.PickerState _state = new SC2EnvFieldGui.PickerState();
+
+    /// <summary>Where the open picker is drawn (empty when none is), so what is painted after the overlays (the viewport's overlay
+    /// lines) can leave that area alone.</summary>
+    public static Rect PanelRect { get; private set; }
 
     public static bool IsOpen(string fieldKey) => _openFieldKey == fieldKey;
     public static bool IsAnyOpen => !string.IsNullOrEmpty(_openFieldKey);
 
-    public static void Toggle(string fieldKey, Rect anchorScreenRect)
+    /// <summary>Opens (or closes) the picker of a field, starting from the field's current colour.</summary>
+    public static void Toggle(string fieldKey, Rect anchorScreenRect, Color current)
     {
         _openFieldKey = _openFieldKey == fieldKey ? null : fieldKey;
         _anchorRect = anchorScreenRect;
+        if (_openFieldKey == fieldKey)
+        {
+            _state.Set(current);
+            _state.HexText = "#" + ColorUtility.ToHtmlStringRGB(current);
+        }
     }
 
     public static void UpdateAnchor(string fieldKey, Rect anchorScreenRect)
@@ -215,25 +227,26 @@ internal static class SC2RuntimeColorPalette
     public static void DrawOverlays()
     {
         if (string.IsNullOrEmpty(_openFieldKey))
+        {
+            PanelRect = Rect.zero;
             return;
+        }
 
-        const float swatch = 22f;
-        const int columns = 6;
-        var rows = Mathf.CeilToInt(Palette.Length / (float)columns);
-        var width = columns * swatch + 8f;
-        var height = rows * swatch + 8f;
-
-        var x = Mathf.Clamp(_anchorRect.x, 4f, Mathf.Max(4f, Screen.width - width - 4f));
+        var size = SC2EnvFieldGui.PickerSize(Palette.Length);
+        var x = Mathf.Clamp(_anchorRect.x, 4f, Mathf.Max(4f, Screen.width - size.x - 4f));
         var y = _anchorRect.yMax + 2f;
-        if (y + height > Screen.height - 4f)
-            y = Mathf.Max(4f, _anchorRect.y - height - 2f);
+        if (y + size.y > Screen.height - 4f)
+            y = Mathf.Max(4f, _anchorRect.y - size.y - 2f);
 
-        var panelRect = new Rect(x, y, width, height);
+        var panelRect = new Rect(x, y, size.x, size.y);
+        PanelRect = panelRect;
 
         var e = Event.current;
-        if (e != null && e.type == EventType.MouseDown && !panelRect.Contains(e.mousePosition))
+        if (e != null && ((e.type == EventType.MouseDown && !panelRect.Contains(e.mousePosition))
+                          || (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)))
         {
             _openFieldKey = null;
+            if (e.type == EventType.KeyDown) e.Use();
             return;
         }
 
@@ -241,24 +254,11 @@ internal static class SC2RuntimeColorPalette
         GUI.depth = -2000;
 
         GUI.Box(panelRect, GUIContent.none, GUI.skin.box);
-        for (var i = 0; i < Palette.Length; i++)
+        if (SC2EnvFieldGui.DrawPickerBody(panelRect, _state, Palette))
         {
-            var col = i % columns;
-            var row = i / columns;
-            var rect = new Rect(panelRect.x + 4f + col * swatch, panelRect.y + 4f + row * swatch, swatch - 2f, swatch - 2f);
-            var previousColor = GUI.color;
-            GUI.color = Palette[i];
-            GUI.DrawTexture(rect, Texture2D.whiteTexture);
-            GUI.color = previousColor;
-
-            if (e != null && e.type == EventType.MouseDown && rect.Contains(e.mousePosition))
-            {
-                _pendingFieldKey = _openFieldKey;
-                _pendingResult = Palette[i];
-                _openFieldKey = null;
-                GUI.changed = true;
-                e.Use();
-            }
+            _pendingFieldKey = _openFieldKey;
+            _pendingResult = _state.Color;
+            GUI.changed = true;
         }
 
         GUI.depth = previousDepth;
