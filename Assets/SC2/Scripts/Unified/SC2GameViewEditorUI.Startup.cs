@@ -42,6 +42,13 @@ public sealed partial class SC2GameViewEditorUI
     private string _startupNewMapNameError;
     private float _startupNewMapSizeWu = 1024f;
     private Vector2 _startupScroll;
+    // The width of the start window's content, for cutting the long texts of the list rows to fit.
+    private static float _startupInnerWidth = 600f;
+
+    /// <summary>What a list row's texts may take: the content width less the scroll bar, the row's own padding and what it keeps
+    /// for its buttons and other labels.</summary>
+    private static float StartupRowTextWidth(float reservedForOthers) =>
+        Mathf.Max(80f, _startupInnerWidth - SC2UiScale.PxfRaw(24f + 22f) - reservedForOthers);
 
     // Collapsed by default — a real game install's own archives commonly
     // hold 50+ vanilla/community maps, which used to push "Your custom
@@ -130,6 +137,7 @@ public sealed partial class SC2GameViewEditorUI
         SC2StartupUi.EnsureStyles();
         GUI.Box(rect, GUIContent.none, SC2StartupUi.Panel);
         var innerRect = new Rect(rect.x + 24f, rect.y + 18f, rect.width - 48f, rect.height - 36f);
+        _startupInnerWidth = innerRect.width;
         GUILayout.BeginArea(innerRect);
 
         GUILayout.Label("SupCom2 Map Editor", SC2StartupUi.Title);
@@ -355,7 +363,8 @@ public sealed partial class SC2GameViewEditorUI
         }
         GUILayout.Space(4);
 
-        _startupScroll = GUILayout.BeginScrollView(_startupScroll);
+        // Never sideways: a list that needed it showed a bar at the bottom and moved the content.
+        _startupScroll = GUILayout.BeginScrollView(_startupScroll, false, false, GUIStyle.none, GUI.skin.verticalScrollbar);
 
         DrawLastOpenedMapSection();
         DrawCreateNewMapSection();
@@ -425,10 +434,12 @@ public sealed partial class SC2GameViewEditorUI
                 foreach (var candidate in sorted)
                 {
                     GUILayout.BeginHorizontal(SC2StartupUi.Row, GUILayout.Height(SC2StartupUi.RowHeight));
-                    SC2StartupUi.CenteredLabel(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", SC2StartupUi.RowName);
+                    var fromWidth = StartupRowTextWidth(SC2UiScale.PxfRaw(66f + 24f)) * 0.42f;
+                    var nameWidth = StartupRowTextWidth(SC2UiScale.PxfRaw(66f + 24f)) - fromWidth;
+                    SC2StartupUi.CenteredLabel(SC2StartupUi.Fit(candidate.DisplayName ?? candidate.BdfStem ?? "(unnamed)", SC2StartupUi.RowName, nameWidth), SC2StartupUi.RowName);
                     GUILayout.FlexibleSpace();
                     if (!string.IsNullOrEmpty(candidate.SourceArchivePath))
-                        SC2StartupUi.CenteredLabel("from: " + Path.GetFileName(candidate.SourceArchivePath.TrimEnd('\\', '/')), SC2StartupUi.DimRight, false);
+                        SC2StartupUi.CenteredLabel(SC2StartupUi.Fit("from: " + Path.GetFileName(candidate.SourceArchivePath.TrimEnd('\\', '/')), SC2StartupUi.DimRight, fromWidth), SC2StartupUi.DimRight, false);
                     SC2StartupUi.BeginRowActions();
                     if (SC2StartupUi.PlainButton("Open", 66))
                         OpenArchiveMap(candidate);
@@ -453,7 +464,7 @@ public sealed partial class SC2GameViewEditorUI
     {
         GUILayout.BeginHorizontal(SC2StartupUi.Row, GUILayout.Height(string.IsNullOrEmpty(dates) ? SC2StartupUi.RowHeight : SC2StartupUi.TwoLineRowHeight));
         GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-        GUILayout.Label(name, SC2StartupUi.RowName);
+        GUILayout.Label(SC2StartupUi.Fit(name, SC2StartupUi.RowName, StartupRowTextWidth(SC2UiScale.PxfRaw(84f + 66f + 66f + 40f))), SC2StartupUi.RowName);
         if (!string.IsNullOrEmpty(dates)) GUILayout.Label(dates, SC2StartupUi.Dim);
         GUILayout.EndVertical();
         GUILayout.FlexibleSpace();
@@ -616,7 +627,7 @@ public sealed partial class SC2GameViewEditorUI
     {
         SC2StartupUi.SectionHeading("Last opened");
         GUILayout.BeginHorizontal(SC2StartupUi.Row, GUILayout.Height(SC2StartupUi.RowHeight));
-        SC2StartupUi.CenteredLabel(name, SC2StartupUi.RowName);
+        SC2StartupUi.CenteredLabel(SC2StartupUi.Fit(name, SC2StartupUi.RowName, StartupRowTextWidth(SC2UiScale.PxfRaw(66f + 190f))), SC2StartupUi.RowName);
         GUILayout.FlexibleSpace();
         var modified = GetFileTimeSafe(path, created: false);
         if (modified != DateTime.MinValue) SC2StartupUi.CenteredLabel($"Modified {modified:yyyy-MM-dd}", SC2StartupUi.DimRight, false);

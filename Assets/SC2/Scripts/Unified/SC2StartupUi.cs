@@ -287,6 +287,23 @@ public static class SC2StartupUi
         return result;
     }
 
+    /// <summary>The text cut to fit <paramref name="width"/> pixels in <paramref name="style"/>, with "..." where it was cut. A label
+    /// is as wide as its text, so a long name or file name in a row would widen the whole list past the window and make it scroll
+    /// sideways.</summary>
+    public static string Fit(string text, GUIStyle style, float width)
+    {
+        if (string.IsNullOrEmpty(text) || width <= 0f) return text ?? "";
+        if (style.CalcSize(new GUIContent(text)).x <= width) return text;
+        var low = 0;
+        var high = text.Length;
+        while (low < high)
+        {
+            var middle = (low + high + 1) / 2;
+            if (style.CalcSize(new GUIContent(text.Substring(0, middle) + "...")).x <= width) low = middle; else high = middle - 1;
+        }
+        return text.Substring(0, low) + "...";
+    }
+
     /// <summary>A label centred vertically in a row; with <paramref name="expand"/> it takes the free width, otherwise only what it needs.</summary>
     public static void CenteredLabel(string text, GUIStyle style, bool expand = true)
     {
