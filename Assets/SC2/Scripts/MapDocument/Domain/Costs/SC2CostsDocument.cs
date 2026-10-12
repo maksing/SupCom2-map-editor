@@ -61,6 +61,11 @@ namespace SC2.MapEditor.Document
         /// (SC2CostsBlockData.OutlineOpenMask, 1 = marked). Live-editing bookkeeping, never exported. Empty when no cell is marked,
         /// and in a document written before this field existed.</summary>
         public SC2BlobReference OutlineOpenMask;
+
+        /// <summary>The ACU block of a 5-block set only: the cells marked impassable with the Blocked brush
+        /// (SC2CostsBlockData.BlockedMask, 1 = marked). Live-editing bookkeeping. Empty when no cell is marked, and in a document
+        /// written before this field existed.</summary>
+        public SC2BlobReference BlockedMask;
     }
 
     /// <summary>

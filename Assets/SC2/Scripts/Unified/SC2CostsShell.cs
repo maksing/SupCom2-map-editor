@@ -62,6 +62,13 @@ public sealed class SC2CostsShell
     /// cells. 0 = impassable, 1 = passable, 2 = Shore (block 4 only).</summary>
     private const int OutlineMode = 3;
 
+    /// <summary>Costs paint mode of the Blocked brush (the ACU block of a 5-block set): marks cells impassable, and they stay through
+    /// every resync (SC2CostsBlockData.BlockedMask).</summary>
+    private const int BlockedMode = 4;
+
+    /// <summary>Overlay tint of a cell marked impassable with the Blocked brush.</summary>
+    private static readonly Color BlockedColor = new Color(0.9f, 0.2f, 0.9f, 0.6f);
+
     public sealed class TerrainTypePreset
     {
         public ushort Id;
@@ -146,6 +153,7 @@ public sealed class SC2CostsShell
         public ushort[] TerrainTypes;
         public byte[] CostsShoreHintOverrideMask;
         public byte[][] CostsOutlineOpen;
+        public byte[][] CostsBlocked;
         // Paint tool config below — none of this is exported terrain data,
         // but it's editable state in this panel, so it gets the same
         // "everything editable here is undo-able" treatment SC2GeometryMode's
@@ -208,6 +216,14 @@ public sealed class SC2CostsShell
     /// RecomputeDerivedCostsBlocks. -1 (no such block) for the 3-block
     /// land-only set or any other block count.</summary>
     private int ShoreHintBlockIndex => Data != null && Data.CostsBlocks.Count == 5 ? 4 : -1;
+
+    /// <summary>The ACU block (Land_Large_water_Seafloor) of the 5-block set, the one that gets the Blocked brush. -1 for any other
+    /// block set.</summary>
+    private int AcuBlockIndex => Data != null && Data.CostsBlocks.Count == 5 ? 3 : -1;
+
+    /// <summary>Whether the Blocked brush is offered on <paramref name="block"/>: the ACU block, derived (a block in Manual mode is
+    /// painted directly instead).</summary>
+    private bool BlockedAvailable(int block) => block == AcuBlockIndex && !IsManualBlock(block);
 
     /// <summary>True for a Costs block that is now purely computed from
     /// block 0 (see RecomputeDerivedCostsBlocks) and should never be
@@ -339,7 +355,18 @@ public sealed class SC2CostsShell
             SC2TerrainShell.DrawUnifiedSectionLabel("Painting");
             DrawPaintToggleAndRadius(w);
             EditorGUILayout.Space(SC2UiScale.Pxf(6f));
-            DrawOutlineControls(w);
+            if (BlockedAvailable(_activeBlock))
+            {
+                var picked = SC2TerrainShell.DrawUnifiedSegmentGrid(_costsMode == BlockedMode ? 1 : 0, new[] { "Outline", "Blocked" }, 2) == 1
+                    ? BlockedMode : OutlineMode;
+                if (picked != _costsMode)
+                {
+                    RecordUndo();
+                    _costsMode = picked;
+                }
+            }
+            if (_costsMode == BlockedMode) DrawBlockedControls(w);
+            else DrawOutlineControls(w);
         }
         else
         {
@@ -406,7 +433,7 @@ public sealed class SC2CostsShell
     {
         if (ActiveTarget != PaintTarget.Costs || Data == null) return;
         if (IsAutoManagedCostsBlock(_activeBlock))
-            _costsMode = OutlineMode;
+            _costsMode = BlockedAvailable(_activeBlock) && _costsMode == BlockedMode ? BlockedMode : OutlineMode;
         else if (_activeBlock != ShoreHintBlockIndex)
             _costsMode = Mathf.Min(_costsMode, 1);
         else if (_costsMode == OutlineMode && !OutlineAvailable(_activeBlock))
@@ -424,6 +451,16 @@ public sealed class SC2CostsShell
         GUILayout.Label("Outline marked as unneeded (passable)", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
         EditorGUILayout.EndHorizontal();
         SC2TerrainShell.DrawUnifiedNote("Outline brush: click makes the lighter outline walls around block 0's walls passable (they turn green) and the cost ring is recomputed around what remains. Only outline cells change. Hold Ctrl to restore the outline.");
+    }
+
+    private void DrawBlockedControls(float w)
+    {
+        EditorGUILayout.BeginHorizontal(GUILayout.Width(w), GUILayout.MaxWidth(w));
+        var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(16f), SC2UiScale.Pxf(16f), GUILayout.Width(SC2UiScale.Pxf(16f)));
+        EditorGUI.DrawRect(swatch, BlockedColor);
+        GUILayout.Label("Blocked: every marked cell", GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
+        EditorGUILayout.EndHorizontal();
+        SC2TerrainShell.DrawUnifiedNote("Blocked brush: click makes the cells impassable in this block only, and they stay through every resync; the cost ring is recomputed around them. Hold Ctrl to clear them.");
     }
 
     private void DrawCostsControls(float w)
@@ -867,6 +904,11 @@ public sealed class SC2CostsShell
             _outlineCells = profile.Outline;
             ClearStaleOutlineMarks(profile.Outline);
             var shoreZone = SC2CostsNavmeshRules.ShoreZone(walls[0], walls[1], walls[4], isWaterRaw, overrides, outlineMasks[4]);
+            // The cells marked with the Blocked brush are walls of the ACU block whatever it derives, and its cost ring grows around them.
+            var blocked = Data.CostsBlocks[AcuBlockIndex].BlockedMask;
+            if (blocked != null)
+                for (var i = 0; i < blocked.Length && i < walls[AcuBlockIndex].Length; i++)
+                    if (blocked[i] != 0) walls[AcuBlockIndex][i] = true;
             for (var b = 0; b < 5; b++)
                 if (!IsManualBlock(b))
                     Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 5, walls[b], walls[4], isWaterRaw, gridSize, gridSize, shoreZone);
@@ -1039,7 +1081,9 @@ public sealed class SC2CostsShell
         if (ActiveTarget == PaintTarget.Costs)
         {
             var previewMode = erasingPreview ? 1 - _costsMode : _costsMode;
-            brushColor = _costsMode == OutlineMode
+            brushColor = _costsMode == BlockedMode
+                ? (erasingPreview ? new Color(1f, 0.4f, 0.1f, 0.9f) : new Color(0.9f, 0.2f, 0.9f, 0.9f))
+                : _costsMode == OutlineMode
                 ? (erasingPreview ? new Color(1f, 0.4f, 0.1f, 0.9f) : new Color(0.1f, 0.9f, 0.5f, 0.9f))
                 : previewMode == 0 ? new Color(1f, 0.1f, 0.1f, 0.9f) : new Color(0.1f, 1f, 0.1f, 0.9f);
         }
@@ -1205,7 +1249,18 @@ public sealed class SC2CostsShell
             {
                 if (cell.x < 0 || cell.x >= gridSize || cell.y < 0 || cell.y >= gridSize) continue;
                 var idx = cell.y * gridSize + cell.x;
-                if (ActiveTarget == PaintTarget.Costs && _costsMode == OutlineMode && OutlineAvailable(_activeBlock))
+                if (ActiveTarget == PaintTarget.Costs && _costsMode == BlockedMode && BlockedAvailable(_activeBlock))
+                {
+                    // Marks (or, with Ctrl, clears) a cell as impassable in the ACU block alone; RecomputeDerivedCostsBlocks adds the
+                    // marked cells to the block's walls when the stroke ends.
+                    var blockedBlock = Data.CostsBlocks[_activeBlock];
+                    if (blockedBlock.BlockedMask != null && idx < blockedBlock.BlockedMask.Length)
+                    {
+                        blockedBlock.BlockedMask[idx] = erasing ? (byte)0 : (byte)1;
+                        if (!erasing && idx < blockedBlock.Navmesh.Length) blockedBlock.Navmesh[idx] = 255;
+                    }
+                }
+                else if (ActiveTarget == PaintTarget.Costs && _costsMode == OutlineMode && OutlineAvailable(_activeBlock))
                 {
                     // The Outline brush only ever marks an automatic outline cell as
                     // unneeded (passable); Ctrl restores it. Any other cell is left
@@ -1454,8 +1509,14 @@ public sealed class SC2CostsShell
             var outlineMask = outline != null ? block.OutlineOpenMask : null;
             var outlineTint = Color.Lerp(tint, Color.white, 0.45f);
             outlineTint.a = 0.5f;
+            var blocked = BlockedAvailable(_activeBlock) ? block.BlockedMask : null;
             for (var i = 0; i < _overlayColors.Length; i++)
             {
+                if (blocked != null && i < blocked.Length && blocked[i] != 0)
+                {
+                    _overlayColors[i] = BlockedColor;
+                    continue;
+                }
                 if ((overrides != null && i < overrides.Length && overrides[i] != 0)
                     || (opened != null && i < opened.Length && opened[i]))
                 {
@@ -1550,6 +1611,7 @@ public sealed class SC2CostsShell
         TerrainTypes = (ushort[])Data.TerrainTypes.Clone(),
         CostsShoreHintOverrideMask = (byte[])Data.CostsShoreHintOverrideMask.Clone(),
         CostsOutlineOpen = Data.CostsBlocks.Select(b => (byte[])(b.OutlineOpenMask ?? System.Array.Empty<byte>()).Clone()).ToArray(),
+        CostsBlocked = Data.CostsBlocks.Select(b => (byte[])(b.BlockedMask ?? System.Array.Empty<byte>()).Clone()).ToArray(),
         CostsMode = _costsMode,
         AllBlocks = _allBlocks,
         ManualBlocks = _manualBlocks.ToArray(),
@@ -1745,6 +1807,9 @@ public sealed class SC2CostsShell
         if (s.CostsOutlineOpen != null)
             for (var i = 0; i < Data.CostsBlocks.Count && i < s.CostsOutlineOpen.Length; i++)
                 Data.CostsBlocks[i].OutlineOpenMask = s.CostsOutlineOpen[i];
+        if (s.CostsBlocked != null)
+            for (var i = 0; i < Data.CostsBlocks.Count && i < s.CostsBlocked.Length; i++)
+                Data.CostsBlocks[i].BlockedMask = s.CostsBlocked[i];
         ActiveTarget = s.Target;
         _costsMode = s.CostsMode;
         _allBlocks = s.AllBlocks;

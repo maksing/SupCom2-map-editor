@@ -29,6 +29,11 @@ public class SC2CostsBlockData
     /// unneeded, i.e. passable. 1 = marked. Live-editing bookkeeping, never exported;
     /// see SC2CostsNavmeshRules.</summary>
     public byte[] OutlineOpenMask = Array.Empty<byte>();
+
+    /// <summary>The ACU block of a 5-block set only: cells the user marked impassable with the Blocked brush. 1 = marked. They are
+    /// added to the block's derived walls whenever it is recomputed, so they stay through every resync. Live-editing bookkeeping:
+    /// the exported file only gets the walls themselves.</summary>
+    public byte[] BlockedMask = Array.Empty<byte>();
 }
 
 [Serializable] public class SC2Material

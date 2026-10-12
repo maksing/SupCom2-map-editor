@@ -181,6 +181,7 @@ public class CostsDocumentBridgeTests
         var blocks = PlayableWaterBlocks();
         blocks[1].OutlineOpenMask = new byte[] { 0, 1, 0 };
         blocks[3].OutlineOpenMask = new byte[] { 1, 0, 1 };
+        blocks[3].BlockedMask = new byte[] { 0, 0, 1 };
         return blocks;
     }
 
@@ -206,6 +207,8 @@ public class CostsDocumentBridgeTests
             Assert.Equal(new byte[] { 0, 1, 0 }, costs.Blocks[1].OutlineOpenMask);
             Assert.Equal(new byte[] { 1, 0, 1 }, costs.Blocks[3].OutlineOpenMask);
             Assert.Empty(costs.Blocks[0].OutlineOpenMask);
+            Assert.Equal(new byte[] { 0, 0, 1 }, costs.Blocks[3].BlockedMask);
+            Assert.Empty(costs.Blocks[2].BlockedMask);
         }
         finally
         {
@@ -225,7 +228,13 @@ public class CostsDocumentBridgeTests
             var doc = SC2CostsLegacyBridge.BuildFromLegacy(blocks, store, new byte[3]);
 
             Assert.True(doc.ShoreHintOverrideMask.IsEmpty);
-            foreach (var layer in doc.Layers) Assert.True(layer.OutlineOpenMask.IsEmpty);
+            blocks[3].BlockedMask = new byte[3];
+            doc = SC2CostsLegacyBridge.BuildFromLegacy(blocks, store, new byte[3]);
+            foreach (var layer in doc.Layers)
+            {
+                Assert.True(layer.OutlineOpenMask.IsEmpty);
+                Assert.True(layer.BlockedMask.IsEmpty);
+            }
         }
         finally
         {
@@ -243,11 +252,13 @@ public class CostsDocumentBridgeTests
 
             var older = ThroughTheManifest(built, json => json
                 .Replace("\"shoreHintOverrideMask\"", "\"unknownA\"")
-                .Replace("\"outlineOpenMask\"", "\"unknownB\""));
+                .Replace("\"outlineOpenMask\"", "\"unknownB\"")
+                .Replace("\"blockedMask\"", "\"unknownC\""));
 
             var costs = SC2MapDocumentToLegacyBridge.ReconstructCosts(older, store);
             Assert.Empty(costs.ShoreHintOverrideMask);
             Assert.All(costs.Blocks, block => Assert.Empty(block.OutlineOpenMask));
+            Assert.All(costs.Blocks, block => Assert.Empty(block.BlockedMask));
             Assert.Equal(new byte[] { 1, 5, 1 }, costs.Blocks[1].Navmesh);
         }
         finally

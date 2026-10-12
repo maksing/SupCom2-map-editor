@@ -461,6 +461,7 @@ namespace SC2.MapEditor.Document
             o.Set("paintOverrides", WriteBlobRef(l.PaintOverrides));
             o.Set("finalGrid", WriteBlobRef(l.FinalGrid));
             o.Set("outlineOpenMask", WriteBlobRef(l.OutlineOpenMask));
+            o.Set("blockedMask", WriteBlobRef(l.BlockedMask));
             var islands = SC2JsonValue.NewObject();
             islands.Set("checked", SC2JsonValue.Of(l.Islands.Checked));
             islands.Set("hasUnreachableIslands", SC2JsonValue.Of(l.Islands.HasUnreachableIslands));
@@ -481,6 +482,7 @@ namespace SC2.MapEditor.Document
                 PaintOverrides = ReadBlobRef(o.Get("paintOverrides")),
                 FinalGrid = ReadBlobRef(o.Get("finalGrid")),
                 OutlineOpenMask = ReadBlobRef(o.Get("outlineOpenMask")),
+                BlockedMask = ReadBlobRef(o.Get("blockedMask")),
                 Islands = new SC2IslandValidationResult
                 {
                     Checked = islands.Get("checked").AsBool(false),

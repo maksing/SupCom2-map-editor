@@ -65,6 +65,7 @@ namespace SC2.MapEditor.Document
                     DisplayName = block.Name,
                     FinalGrid = blobStore.Put(new MemoryStream(block.Navmesh ?? Array.Empty<byte>())),
                     OutlineOpenMask = PutMask(blobStore, block.OutlineOpenMask),
+                    BlockedMask = PutMask(blobStore, block.BlockedMask),
                 });
             }
 

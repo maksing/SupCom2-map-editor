@@ -685,6 +685,8 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
             }
             if (block.OutlineOpenMask == null || block.OutlineOpenMask.Length != cells)
                 block.OutlineOpenMask = new byte[cells];
+            if (block.BlockedMask == null || block.BlockedMask.Length != cells)
+                block.BlockedMask = new byte[cells];
         }
 
         if (TerrainTypes == null || TerrainTypes.Length != cells)

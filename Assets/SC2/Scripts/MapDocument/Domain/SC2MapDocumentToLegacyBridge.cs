@@ -338,6 +338,7 @@ namespace SC2.MapEditor.Document
                     Name = layer.FieldName,
                     Navmesh = ReadBytes(blobStore, layer.FinalGrid),
                     OutlineOpenMask = ReadBytes(blobStore, layer.OutlineOpenMask),
+                    BlockedMask = ReadBytes(blobStore, layer.BlockedMask),
                 });
             result.ShoreHintOverrideMask = ReadBytes(blobStore, doc.ShoreHintOverrideMask);
             // Reported bug: after a save/reload, SC2TerrainData.PlayableWater

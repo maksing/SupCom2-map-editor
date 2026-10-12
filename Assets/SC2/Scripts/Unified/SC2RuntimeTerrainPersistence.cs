@@ -846,6 +846,7 @@ public static class SC2RuntimeTerrainPersistence
         public string Name;
         public byte[] Navmesh;
         public byte[] OutlineOpenMask; // absent in older saves
+        public byte[] BlockedMask; // absent in older saves
     }
 
     [Serializable]
@@ -1103,7 +1104,7 @@ public static class SC2RuntimeTerrainPersistence
         var costsBlocks = data.CostsBlocks ?? new List<SC2CostsBlockData>();
         dto.CostsBlocks = new CostsBlockDto[costsBlocks.Count];
         for (var i = 0; i < costsBlocks.Count; i++)
-            dto.CostsBlocks[i] = new CostsBlockDto { Name = costsBlocks[i].Name, Navmesh = costsBlocks[i].Navmesh ?? Array.Empty<byte>(), OutlineOpenMask = costsBlocks[i].OutlineOpenMask ?? Array.Empty<byte>() };
+            dto.CostsBlocks[i] = new CostsBlockDto { Name = costsBlocks[i].Name, Navmesh = costsBlocks[i].Navmesh ?? Array.Empty<byte>(), OutlineOpenMask = costsBlocks[i].OutlineOpenMask ?? Array.Empty<byte>(), BlockedMask = costsBlocks[i].BlockedMask ?? Array.Empty<byte>() };
 
         var terrainTypesCount = data.TerrainTypes?.Length ?? 0;
         var terrainTypesBytes = new byte[terrainTypesCount * sizeof(ushort)];
@@ -1316,7 +1317,7 @@ public static class SC2RuntimeTerrainPersistence
 
         data.CostsBlocks = new List<SC2CostsBlockData>();
         foreach (var b in dto.CostsBlocks ?? Array.Empty<CostsBlockDto>())
-            data.CostsBlocks.Add(new SC2CostsBlockData { Name = b.Name, Navmesh = b.Navmesh ?? Array.Empty<byte>(), OutlineOpenMask = b.OutlineOpenMask ?? Array.Empty<byte>() });
+            data.CostsBlocks.Add(new SC2CostsBlockData { Name = b.Name, Navmesh = b.Navmesh ?? Array.Empty<byte>(), OutlineOpenMask = b.OutlineOpenMask ?? Array.Empty<byte>(), BlockedMask = b.BlockedMask ?? Array.Empty<byte>() });
 
         // dto.CostsGridSize is 0 for saves written before this field existed —
         // fall back to whatever size the loaded Navmesh/TerrainTypes arrays
