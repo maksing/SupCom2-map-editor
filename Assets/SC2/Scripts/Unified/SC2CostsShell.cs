@@ -825,7 +825,7 @@ public sealed class SC2CostsShell
     /// 5-block (always PlayableWater==true, matching EnsureCostsAndTerrainTypes'
     /// own block-set choice): block 0 additionally gets a mandatory 3-cell
     /// impassable shoreline band baked in first — every raw-geometric water
-    /// cell within 3 cells of raw land is forced impassable, everything else
+    /// cell within 3 cells of raw land (and the one land cell next to water) is forced impassable, everything else
     /// in the water is fully passable (see GenerateFromHeight — block 0 no
     /// longer uses a depth tolerance at all). Land walls of blocks 1/4 grow
     /// +1 and of blocks 2/3 +4 (cross steps); block 1 also blocks EVERY raw
@@ -881,6 +881,13 @@ public sealed class SC2CostsShell
                 var landDilated = SC2CostsAutoGen.DilateImpassable(isLandRaw, gridSize, gridSize, shorelineBandMargin);
                 for (var i = 0; i < imp0.Length; i++)
                     if (landDilated[i] && isWaterRaw[i]) imp0[i] = true;
+                // The border also takes one cell of the land side: every land cell next to water.
+                if (shorelineBandMargin > 0)
+                {
+                    var waterDilated = SC2CostsAutoGen.DilateImpassable(isWaterRaw, gridSize, gridSize, 1);
+                    for (var i = 0; i < imp0.Length; i++)
+                        if (waterDilated[i] && !isWaterRaw[i]) imp0[i] = true;
+                }
             }
 
             var overrides = Data.CostsShoreHintOverrideMask;
