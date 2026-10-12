@@ -6183,15 +6183,6 @@ public sealed class SC2ObjectsShell
             var rotation = Quaternion.Euler(0f, _placementRotationY, 0f);
             var placements = positions.Select(p => (p, rotation, 1f)).ToList();
             SC2GameAssetScenePreview.SyncPropGhosts(_placementPropAsset, _assetBrowser.GameDataRoot, placements);
-            // Footprint (e.g. `Footprint = { SizeX =
-            // 14, SizeZ = 14 }`) is how many terrain cells a building
-            // actually occupies. Draw the real occupied-area rectangle at
-            // each landing spot (including symmetric siblings), not just
-            // the flat 2D dot above, so overlapping footprints are
-            // visible before the click commits.
-            if (_placementPropAsset.FootprintSizeX > 0f && _placementPropAsset.FootprintSizeZ > 0f)
-                foreach (var pos in positions)
-                    DrawFootprintOverlay(camera, viewportRect, pos, _placementPropAsset.FootprintSizeX, _placementPropAsset.FootprintSizeZ, _placementRotationY, color);
         }
         else
         {
@@ -6973,7 +6964,6 @@ public sealed class SC2ObjectsShell
         var eventType = Event.current != null ? Event.current.type : EventType.Repaint;
         var objectPass = eventType != EventType.Layout;
         var viewportPropsScope = SC2FramePerf.Measure("objects.vp.props");
-        var footprintTicks = 0L; var footprintCount = 0;
         if (showProps && objectPass)
             foreach (var prop in Data.ObjProps)
             {
@@ -6992,30 +6982,11 @@ public sealed class SC2ObjectsShell
                 // an ALREADY-selected Prop (from before switching tabs)
                 // still keeps working exactly as before (see
                 // TryGetSelectionCentroid's own group-handle carve-out,
-                // unchanged), and the footprint overlay below stays on its
-                // own showProps gate, unaffected by this.
+                // unchanged).
                 DrawViewportDotAt(new Vector2(propPixel.x, propPixel.y), canPick && showPropsIcon, mousePosition, prop.Id, ViewportObjectKind.Prop,
                     _selProps.Contains(prop.Id) ? new Color(1f, .9f, .12f, .95f) : new Color(.25f, .86f, 1f, .75f), ref pick);
-                // Footprint should show for ALREADY-
-                // PLACED buildings too, not just the live placement preview
-                // (which DrawPlacementPreview already covers). Gated on the
-                // same showProps flag as this prop's own pick-dot, so
-                // hiding Props also hides their footprints.
-                // Only a Repaint draws footprints, and one that would be a few pixels across (zoomed far
-                // out) is not worth a quad, four lines and a height sample per corner.
-                if (eventType != EventType.Repaint) continue;
-                var propAsset = _assetBrowser.FindPropAsset(prop.BlueprintPath);
-                if (propAsset != null && propAsset.FootprintSizeX > 0f && propAsset.FootprintSizeZ > 0f
-                    && FootprintLargeEnoughOnScreen(camera, propPixel.z, Mathf.Max(propAsset.FootprintSizeX, propAsset.FootprintSizeZ) * FootprintWorldUnitsPerCell))
-                {
-                    var footprintStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                    DrawFootprintOverlay(camera, viewportRect, prop.Position, propAsset.FootprintSizeX, propAsset.FootprintSizeZ, prop.Rotation.eulerAngles.y, PlacedFootprintColor);
-                    footprintTicks += System.Diagnostics.Stopwatch.GetTimestamp() - footprintStart;
-                    footprintCount++;
-                }
             }
         viewportPropsScope.Dispose();
-        if (footprintCount > 0) SC2FramePerf.AddTicks("objects.vp.footprints", footprintTicks, footprintCount);
         if (showUnits && objectPass)
             foreach (var unit in VisibleForViewport(Data.ObjUnits.Where(u => !u.IsGroup && !_hiddenUnitIds.Contains(u.Id)), camera, viewportRect, u => u.Position))
             {
