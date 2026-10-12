@@ -17,7 +17,9 @@ Shader "SC2/FloorOverlay"
 
     SubShader
     {
-        Tags { "RenderType"="Transparent" "Queue"="Transparent+10" }
+        // After the decals (SC2Decal.shader draws at Transparent+20 and leaves the overlay out below the floor, expecting this plane to
+        // carry it): drawn before them, a decal hid the overlay wherever it lay.
+        Tags { "RenderType"="Transparent" "Queue"="Transparent+30" }
         Pass
         {
             Blend SrcAlpha OneMinusSrcAlpha
