@@ -106,12 +106,13 @@ public sealed class SC2CostsShell
     // DrawCopyBlockControls/DrawDilateControls.
     private int _copySourceBlock;
     private int _dilateMargin = 2;
-    // A toggle for fully manual drawing of any Costs block — an escape hatch back
-    // to the pre-auto-derive behavior. See IsAutoManagedCostsBlock (returns
-    // false for every block while this is on) and RecomputeDerivedCostsBlocks
-    // (no-ops entirely while this is on, so a manual stroke on a normally-
-    // derived block isn't immediately overwritten by the next auto-resync).
-    private bool _manualCostsMode;
+    // The blocks switched to fully manual drawing — an escape hatch back to the
+    // pre-auto-derive behavior, one block at a time. See IsAutoManagedCostsBlock
+    // (false for a block in this set) and RecomputeDerivedCostsBlocks (leaves a
+    // block in this set alone, so a manual stroke on a normally-derived block
+    // isn't immediately overwritten by the next auto-resync).
+    private readonly HashSet<int> _manualBlocks = new();
+    private bool IsManualBlock(int blockIndex) => _manualBlocks.Contains(blockIndex);
     // Imports a costs mask from a black/white image — see
     // ImportCostsImageFromFile; inverts which end of the black/white scale
     // means passable.
@@ -155,7 +156,7 @@ public sealed class SC2CostsShell
         // and the state being captured.
         public int CostsMode;
         public bool AllBlocks;
-        public bool ManualCostsMode;
+        public int[] ManualBlocks;
         public int ActiveBlock;
         public int ActivePreset;
         public float BrushRadius;
@@ -213,10 +214,10 @@ public sealed class SC2CostsShell
     /// directly hand-painted — every block besides the first is in
     /// auto-mode. Block 0 itself
     /// and the shore-hint-capable block are excluded (both stay paintable).
-    /// Always false while _manualCostsMode is on — the whole point of that
-    /// toggle is that no block is treated as auto-managed anymore.</summary>
+    /// Always false for a block switched to Manual mode — the whole point of
+    /// that toggle is that the block is no longer treated as auto-managed.</summary>
     private bool IsAutoManagedCostsBlock(int blockIndex) =>
-        !_manualCostsMode && blockIndex >= 0 && blockIndex < Data.CostsBlocks.Count && blockIndex != 0 && blockIndex != ShoreHintBlockIndex;
+        !IsManualBlock(blockIndex) && blockIndex >= 0 && blockIndex < Data.CostsBlocks.Count && blockIndex != 0 && blockIndex != ShoreHintBlockIndex;
 
     // ==================================================================
     // Embedded GUI (side panel) — mirrors SC2PaintMode.DrawPanel's layout
@@ -304,14 +305,15 @@ public sealed class SC2CostsShell
 
         if (ActiveTarget == PaintTarget.Costs)
         {
-            var newManual = EditorGUILayout.ToggleLeft(" Manual mode (no auto-resync)", _manualCostsMode, GUILayout.Width(w), GUILayout.MaxWidth(w));
-            if (newManual != _manualCostsMode)
+            var newManual = EditorGUILayout.ToggleLeft(" Manual mode (no auto-resync)", IsManualBlock(_activeBlock), GUILayout.Width(w), GUILayout.MaxWidth(w));
+            if (newManual != IsManualBlock(_activeBlock))
             {
                 RecordUndo();
-                _manualCostsMode = newManual;
+                if (newManual) _manualBlocks.Add(_activeBlock);
+                else _manualBlocks.Remove(_activeBlock);
                 EnforceCostsModeForActiveBlock();
             }
-            SC2TerrainShell.DrawUnifiedNote("Paint every block directly instead of deriving blocks 1+ from block 0.");
+            SC2TerrainShell.DrawUnifiedNote("Paint this block directly instead of deriving it from block 0. Other blocks are not affected.");
             EditorGUILayout.Space(SC2UiScale.Pxf(6f));
         }
 
@@ -412,7 +414,7 @@ public sealed class SC2CostsShell
     }
 
     private bool OutlineAvailable(int block) =>
-        !_manualCostsMode && Data != null && block >= 1 && block < Data.CostsBlocks.Count;
+        !IsManualBlock(block) && Data != null && block >= 1 && block < Data.CostsBlocks.Count;
 
     private void DrawOutlineControls(float w)
     {
@@ -807,11 +809,9 @@ public sealed class SC2CostsShell
     /// what remains.</summary>
     private void RecomputeDerivedCostsBlocks()
     {
-        // Manual Mode: no block is auto-managed (see IsAutoManagedCostsBlock),
-        // so there is nothing to derive — a no-op rather than silently
-        // overwriting whatever the user just hand-painted on a normally-
-        // derived block.
-        if (_manualCostsMode) return;
+        // A block in Manual mode keeps what the user painted on it: everything is worked out as usual (the other blocks
+        // are derived from block 0 and the pins), but nothing is written back into it. All blocks manual: nothing to do.
+        if (Data.CostsBlocks.Count > 0 && Enumerable.Range(0, Data.CostsBlocks.Count).All(IsManualBlock)) return;
 
         var shorelineBandMargin = Mathf.Max(0, _genThresholds.ShorelineBandMargin);
 
@@ -829,7 +829,8 @@ public sealed class SC2CostsShell
         {
             var profile = SC2CostsNavmeshRules.DeriveLandOnlyProfile(imp0, outlineMasks, gridSize, gridSize);
             for (var b = 0; b < 3; b++)
-                Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 3, profile.Walls[b], null, null, gridSize, gridSize);
+                if (!IsManualBlock(b))
+                    Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 3, profile.Walls[b], null, null, gridSize, gridSize);
             _outlineCells = profile.Outline;
             ClearStaleOutlineMarks(profile.Outline);
         }
@@ -867,7 +868,8 @@ public sealed class SC2CostsShell
             ClearStaleOutlineMarks(profile.Outline);
             var shoreZone = SC2CostsNavmeshRules.ShoreZone(walls[0], walls[1], walls[4], isWaterRaw, overrides, outlineMasks[4]);
             for (var b = 0; b < 5; b++)
-                Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 5, walls[b], walls[4], isWaterRaw, gridSize, gridSize, shoreZone);
+                if (!IsManualBlock(b))
+                    Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 5, walls[b], walls[4], isWaterRaw, gridSize, gridSize, shoreZone);
         }
 
         _overlayDirty = true;
@@ -916,6 +918,7 @@ public sealed class SC2CostsShell
             }
         }
         Data.CostsBlocks.Clear();
+        _manualBlocks.Clear(); // the block set has another shape now: no block of it was switched to Manual mode
         // The block-set itself just changed shape (3 <-> 5 blocks) — any old
         // shore-hint pins no longer correspond to the same block layout.
         if (Data.CostsShoreHintOverrideMask != null)
@@ -1549,7 +1552,7 @@ public sealed class SC2CostsShell
         CostsOutlineOpen = Data.CostsBlocks.Select(b => (byte[])(b.OutlineOpenMask ?? System.Array.Empty<byte>()).Clone()).ToArray(),
         CostsMode = _costsMode,
         AllBlocks = _allBlocks,
-        ManualCostsMode = _manualCostsMode,
+        ManualBlocks = _manualBlocks.ToArray(),
         ActiveBlock = _activeBlock,
         ActivePreset = _activePreset,
         BrushRadius = _brushRadius,
@@ -1745,7 +1748,9 @@ public sealed class SC2CostsShell
         ActiveTarget = s.Target;
         _costsMode = s.CostsMode;
         _allBlocks = s.AllBlocks;
-        _manualCostsMode = s.ManualCostsMode;
+        _manualBlocks.Clear();
+        if (s.ManualBlocks != null)
+            foreach (var manualBlock in s.ManualBlocks) _manualBlocks.Add(manualBlock);
         _activeBlock = s.ActiveBlock;
         _activePreset = s.ActivePreset;
         _brushRadius = s.BrushRadius;
