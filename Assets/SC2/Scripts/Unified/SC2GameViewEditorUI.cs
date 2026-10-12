@@ -1651,6 +1651,26 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             Event.current.type = EventType.Ignore;
         }
 
+        // A left press starts with no control holding the mouse: whatever still holds it is left over from a press whose release never
+        // reached its control (a modal or a mask took it), and it makes every other control, a menu slider included, ignore the press.
+        if (Event.current != null && Event.current.type == EventType.MouseDown && Event.current.button == 0 && GUIUtility.hotControl != 0)
+        {
+            Debug.Log($"[SC2MenuDiag] released a stale hotControl={GUIUtility.hotControl} on a left press");
+            GUIUtility.hotControl = 0;
+        }
+
+        // A control behind an open menu lights up as hovered when the mouse is over the menu: hover is worked out in Repaint from the mouse
+        // position alone, which no input mask touches. While the mouse is over the menu everything drawn before the menus sees it far away,
+        // and the real position is put back just before the menus themselves are drawn.
+        var hoverPushedAway = false;
+        var realMousePosition = Vector2.zero;
+        if (Event.current != null && AnyMenuOpen() && IsMouseOverOpenMenu(Event.current.mousePosition))
+        {
+            realMousePosition = Event.current.mousePosition;
+            Event.current.mousePosition = new Vector2(-100000f, -100000f);
+            hoverPushedAway = true;
+        }
+
         DrawHeader(width);
         // DrawSubtabs applies this same _menuOverlayBlocksInput guard
         // internally itself (see its own GUI.enabled handling), so it's
@@ -1660,11 +1680,28 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var previousEnabled = GUI.enabled;
         GUI.enabled = previousEnabled && !_menuOverlayBlocksInput;
 
+        // The panels are drawn before the dropdown menus and the runtime dropdowns, so a click on a menu's slider or item that lies over
+        // a panel would reach the panel's control first, and GUI.enabled = false does not stop the controls that read the event
+        // themselves (tiles, rows, foldout headers). While one of them is open the panels are drawn against an Ignore event, as under
+        // a modal, and the real event is put back before the menus are drawn.
+        var menuMaskedType = EventType.Ignore;
+        var menuMasked = false;
+        if (_menuOverlayBlocksInput && !panelEventsMasked && Event.current != null
+            && Event.current.type != EventType.Used && Event.current.type != EventType.Ignore)
+        {
+            menuMaskedType = Event.current.type;
+            menuMasked = true;
+            Event.current.type = EventType.Ignore;
+        }
+
         if (ShowPanel)
             DrawMainPanel(width, height);
 
         if (ShowReferencePanel)
             DrawReferencePanel();
+
+        if (menuMasked && Event.current != null && Event.current.type == EventType.Ignore)
+            Event.current.type = menuMaskedType;
 
         // Re-assert immediately before drawing, not just once at the top of
         // OnGUI: DrawMainPanel above can paint into BlendRT/PairMapRT
@@ -1702,7 +1739,15 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // issue. Back to drawing it last, matching every other overlay in
         // this file - correct paint order is proven, still investigating
         // the real fix for menu-item clicks.
+        if (hoverPushedAway && Event.current != null) Event.current.mousePosition = realMousePosition;
         DrawOpenMenus();
+
+        // A click, a drag or the wheel that the menu's own controls left alone (its padding, a label, a gap) still belongs to the
+        // menu: whatever is drawn or handled after this point (the viewport tools, the navigation) must not act on it.
+        var menuEvent = Event.current;
+        if (menuEvent != null && AnyMenuOpen() && IsMouseOverOpenMenu(menuEvent.mousePosition)
+            && (menuEvent.type == EventType.MouseDown || menuEvent.type == EventType.MouseUp || menuEvent.type == EventType.MouseDrag || menuEvent.type == EventType.ScrollWheel))
+            menuEvent.Use();
 
         // Imported terrain.bdf objects are now edited inline as the
         // Terrain tab's "Imported" subtab (DrawImportedTerrainsLeftPanelContent,
@@ -2435,6 +2480,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private void DrawOpenMenus()
     {
+        if (!_showViewMenu) ApplyPendingUiScale();
         if (!AnyMenuOpen())
             return;
 
@@ -2619,9 +2665,24 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // the panel-width formula in UpdateLayoutRects — see
             // SC2UiScale's own doc comment for why this is real layout
             // numbers, not a GUI.matrix transform.
-            GUILayout.Label($"UI Scale: {SC2UiScale.Scale:0.00}x", _miniTextStyle);
-            SC2UiScale.Scale = GUILayout.HorizontalSlider(SC2UiScale.Scale, SC2UiScale.Min, SC2UiScale.Max);
+            // The scale sizes the menu card, the slider itself and every row under it, so applying it while the thumb is dragged moves the
+            // slider away from under the cursor and the drag never settles: the value is shown as it is dragged and applied on release.
+            var shownScale = _uiScalePending ?? SC2UiScale.Scale;
+            GUILayout.Label($"UI Scale: {shownScale:0.00}x", _miniTextStyle);
+            var draggedScale = GUILayout.HorizontalSlider(shownScale, SC2UiScale.Min, SC2UiScale.Max);
+            if (!Mathf.Approximately(draggedScale, shownScale)) _uiScalePending = draggedScale;
+            if (_uiScalePending.HasValue && Event.current != null && Event.current.rawType == EventType.MouseUp) ApplyPendingUiScale();
         });
+    }
+
+    private float? _uiScalePending;
+
+    /// <summary>Makes the UI Scale chosen on the View menu's slider the real one.</summary>
+    private void ApplyPendingUiScale()
+    {
+        if (!_uiScalePending.HasValue) return;
+        SC2UiScale.Scale = _uiScalePending.Value;
+        _uiScalePending = null;
     }
 
     /// <summary>Split out of the View menu (which had grown a permanent
