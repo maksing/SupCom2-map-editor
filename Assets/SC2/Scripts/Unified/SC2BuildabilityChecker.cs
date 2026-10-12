@@ -29,6 +29,8 @@ public sealed class SC2BuildRestriction
     public int Signature { get; private set; }
     public SC2BuildCostsRule Rule { get; private set; }
     public string BlockName { get; private set; } = "";
+    /// <summary>The block as the editor names it (SC2CostsBlockLabels): the units it is made for.</summary>
+    public string BlockLabel { get; private set; } = "";
 
     private static SC2CostsBlockData FindBlock(SC2TerrainData data, string name)
     {
@@ -59,6 +61,7 @@ public sealed class SC2BuildRestriction
         else if (rule == SC2BuildCostsRule.LandMediumWaterSurface || rule == SC2BuildCostsRule.WaterSurfaceOnly) block = waterBlock;
         Rule = rule;
         BlockName = block?.Name ?? "";
+        BlockLabel = block == null ? "" : SC2CostsBlockLabels.Role(data.CostsBlocks.IndexOf(block), data.CostsBlocks.Count, block.Name);
 
         var blockUsable = block != null && block.Navmesh != null && block.Navmesh.Length == cells * cells;
         if (mapX != mapY || cells <= 0 || rule == SC2BuildCostsRule.None || (rule != SC2BuildCostsRule.Impossible && !blockUsable))
@@ -92,8 +95,8 @@ public sealed class SC2BuildRestriction
         switch (Rule)
         {
             case SC2BuildCostsRule.Impossible: return "this map has no water to build it on";
-            case SC2BuildCostsRule.WaterSurfaceOnly: return $"{BlockName} blocks it, or the ground is not under water";
-            default: return $"{BlockName} blocks it";
+            case SC2BuildCostsRule.WaterSurfaceOnly: return $"the {BlockLabel} Costs block blocks it, or the ground is not under water";
+            default: return $"the {BlockLabel} Costs block blocks it";
         }
     }
 }

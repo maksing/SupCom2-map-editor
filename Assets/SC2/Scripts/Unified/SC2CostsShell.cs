@@ -224,6 +224,9 @@ public sealed class SC2CostsShell
     // reads as part of the same shell, not a bolted-on extra panel.
     // ==================================================================
 
+    /// <summary>A block as the editor names it: by the units it is for, with its file name after it.</summary>
+    private string BlockLabel(int index) => SC2CostsBlockLabels.WithFileName(index, Data.CostsBlocks.Count, Data.CostsBlocks[index].Name);
+
     /// <summary>Sub-tab labels for the host's top-level tab row
     /// (SC2GameViewEditorUI.DrawSubtabs) — one entry per real Costs block (3
     /// land-only or 5 playable-water, matching Data.PlayableWater/
@@ -236,10 +239,11 @@ public sealed class SC2CostsShell
     {
         if (!IsReady) return new[] { "Costs", "Terrain Types" };
         Data.EnsureCostsAndTerrainTypes();
-        var blockNames = Data.CostsBlocks.Select(b => b.Name).ToArray();
-        var labels = new string[blockNames.Length + 1];
-        System.Array.Copy(blockNames, labels, blockNames.Length);
-        labels[blockNames.Length] = "Terrain Types";
+        var count = Data.CostsBlocks.Count;
+        var labels = new string[count + 1];
+        for (var i = 0; i < count; i++)
+            labels[i] = SC2CostsBlockLabels.Role(i, count, Data.CostsBlocks[i].Name);
+        labels[count] = "Terrain Types";
         return labels;
     }
 
@@ -296,7 +300,7 @@ public sealed class SC2CostsShell
         EditorGUILayout.Space(SC2UiScale.Pxf(10f));
 
         if (ActiveTarget == PaintTarget.Costs && _activeBlock >= 0 && _activeBlock < Data.CostsBlocks.Count)
-            SC2TerrainShell.DrawUnifiedSectionLabel($"Block: {Data.CostsBlocks[_activeBlock].Name}");
+            SC2TerrainShell.DrawUnifiedSectionLabel($"Block: {BlockLabel(_activeBlock)}");
 
         if (ActiveTarget == PaintTarget.Costs)
         {
@@ -551,12 +555,11 @@ public sealed class SC2CostsShell
         var sources = new List<int>();
         for (var i = 0; i < Data.CostsBlocks.Count; i++)
             if (i != _activeBlock) sources.Add(i);
-        var labels = sources.Select(i => Data.CostsBlocks[i].Name).ToArray();
+        var labels = sources.Select(BlockLabel).ToArray();
         var selected = Mathf.Max(0, sources.IndexOf(_copySourceBlock));
         _copySourceBlock = sources[SC2TerrainShell.DrawUnifiedSegmentGrid(selected, labels, 1)];
 
-        var activeName = Data.CostsBlocks[_activeBlock].Name;
-        SC2TerrainShell.DrawUnifiedNote($"Replaces the navmesh of \"{activeName}\" with a copy of \"{Data.CostsBlocks[_copySourceBlock].Name}\".");
+        SC2TerrainShell.DrawUnifiedNote($"Replaces the navmesh of \"{BlockLabel(_activeBlock)}\" with a copy of \"{BlockLabel(_copySourceBlock)}\".");
         if (GUILayout.Button("Copy into this block", GUILayout.Height(SC2UiScale.Pxf(26f)), GUILayout.Width(w), GUILayout.MaxWidth(w)))
         {
             RecordUndo();
