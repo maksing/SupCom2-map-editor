@@ -844,6 +844,56 @@ public sealed class SC2CostsShell
     /// the growth); cells the user marked with the Outline brush
     /// (SC2CostsBlockData.OutlineOpenMask) are opened, and the cost ring follows
     /// what remains.</summary>
+    // Where the water is and where the mandatory shoreline border lies depend on the heights, the water level and the border
+    // thickness only, never on what was painted, so they are kept between strokes. The height model is a new object whenever
+    // the heights were rebuilt.
+    private object _shoreHeightStamp;
+    private float _shoreWaterElevation;
+    private int _shoreGridSize, _shoreMargin;
+    private bool _shorePlayableWater;
+    private bool[] _shoreWaterMask, _shoreBandMask;
+
+    /// <summary>The raw water mask of the grid and, on a playable-water map, the cells of the shoreline border (water within
+    /// <paramref name="margin"/> cells of land, and the land cells next to water); null for the band otherwise.</summary>
+    private bool[] ShorelineMasks(System.Func<float, float, float> sample, int gridSize, int margin, out bool[] band)
+    {
+        var stamp = _terrainShell.LiveHeightGridStamp;
+        var waterElevation = SC2CostsAutoGen.ExtractWaterElevation(Data);
+        var cached = stamp != null && ReferenceEquals(stamp, _shoreHeightStamp) && waterElevation == _shoreWaterElevation
+            && gridSize == _shoreGridSize && margin == _shoreMargin && Data.PlayableWater == _shorePlayableWater
+            && _shoreWaterMask != null && _shoreWaterMask.Length == gridSize * gridSize;
+        if (!cached)
+        {
+            var water = SC2CostsAutoGen.ComputeRawWaterMask(Data, sample);
+            bool[] bandMask = null;
+            if (Data.PlayableWater)
+            {
+                bandMask = new bool[water.Length];
+                var land = new bool[water.Length];
+                for (var i = 0; i < water.Length; i++) land[i] = !water[i];
+                var landDilated = SC2CostsAutoGen.DilateImpassable(land, gridSize, gridSize, margin);
+                for (var i = 0; i < water.Length; i++)
+                    if (landDilated[i] && water[i]) bandMask[i] = true;
+                // The border also takes one cell of the land side: every land cell next to water.
+                if (margin > 0)
+                {
+                    var waterDilated = SC2CostsAutoGen.DilateImpassable(water, gridSize, gridSize, 1);
+                    for (var i = 0; i < water.Length; i++)
+                        if (waterDilated[i] && !water[i]) bandMask[i] = true;
+                }
+            }
+            _shoreWaterMask = water;
+            _shoreBandMask = bandMask;
+            _shoreHeightStamp = stamp;
+            _shoreWaterElevation = waterElevation;
+            _shoreGridSize = gridSize;
+            _shoreMargin = margin;
+            _shorePlayableWater = Data.PlayableWater;
+        }
+        band = _shoreBandMask;
+        return _shoreWaterMask;
+    }
+
     private void RecomputeDerivedCostsBlocks()
     {
         // A block in Manual mode keeps what the user painted on it: everything is worked out as usual (the other blocks
@@ -865,30 +915,23 @@ public sealed class SC2CostsShell
         if (blockCount == 3)
         {
             var profile = SC2CostsNavmeshRules.DeriveLandOnlyProfile(imp0, outlineMasks, gridSize, gridSize);
+            var landBlocks = new byte[3][];
+            var keep3 = Enumerable.Range(0, 3).Select(IsManualBlock).ToArray();
+            System.Threading.Tasks.Parallel.For(0, 3, b =>
+            {
+                if (!keep3[b]) landBlocks[b] = SC2CostsNavmeshRules.BuildBlock(b, 3, profile.Walls[b], null, null, gridSize, gridSize);
+            });
             for (var b = 0; b < 3; b++)
-                if (!IsManualBlock(b))
-                    Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 3, profile.Walls[b], null, null, gridSize, gridSize);
+                if (landBlocks[b] != null) Data.CostsBlocks[b].Navmesh = landBlocks[b];
             _outlineCells = profile.Outline;
             ClearStaleOutlineMarks(profile.Outline);
         }
         else
         {
-            var isWaterRaw = SC2CostsAutoGen.ComputeRawWaterMask(Data, sample);
-            if (Data.PlayableWater)
-            {
-                var isLandRaw = new bool[isWaterRaw.Length];
-                for (var i = 0; i < isWaterRaw.Length; i++) isLandRaw[i] = !isWaterRaw[i];
-                var landDilated = SC2CostsAutoGen.DilateImpassable(isLandRaw, gridSize, gridSize, shorelineBandMargin);
+            var isWaterRaw = ShorelineMasks(sample, gridSize, shorelineBandMargin, out var shorelineBand);
+            if (shorelineBand != null)
                 for (var i = 0; i < imp0.Length; i++)
-                    if (landDilated[i] && isWaterRaw[i]) imp0[i] = true;
-                // The border also takes one cell of the land side: every land cell next to water.
-                if (shorelineBandMargin > 0)
-                {
-                    var waterDilated = SC2CostsAutoGen.DilateImpassable(isWaterRaw, gridSize, gridSize, 1);
-                    for (var i = 0; i < imp0.Length; i++)
-                        if (waterDilated[i] && !isWaterRaw[i]) imp0[i] = true;
-                }
-            }
+                    if (shorelineBand[i]) imp0[i] = true;
 
             var overrides = Data.CostsShoreHintOverrideMask;
             var pinned = SC2CostsAutoGen.NavmeshToImpassable(Data.CostsBlocks[4].Navmesh);
@@ -916,9 +959,15 @@ public sealed class SC2CostsShell
             if (blocked != null)
                 for (var i = 0; i < blocked.Length && i < walls[AcuBlockIndex].Length; i++)
                     if (blocked[i] != 0) walls[AcuBlockIndex][i] = true;
+            // The blocks do not depend on each other (each reads the shared masks and writes its own grid), so they are built side by side.
+            var waterBlocks = new byte[5][];
+            var keep5 = Enumerable.Range(0, 5).Select(IsManualBlock).ToArray();
+            System.Threading.Tasks.Parallel.For(0, 5, b =>
+            {
+                if (!keep5[b]) waterBlocks[b] = SC2CostsNavmeshRules.BuildBlock(b, 5, walls[b], walls[4], isWaterRaw, gridSize, gridSize, shoreZone);
+            });
             for (var b = 0; b < 5; b++)
-                if (!IsManualBlock(b))
-                    Data.CostsBlocks[b].Navmesh = SC2CostsNavmeshRules.BuildBlock(b, 5, walls[b], walls[4], isWaterRaw, gridSize, gridSize, shoreZone);
+                if (waterBlocks[b] != null) Data.CostsBlocks[b].Navmesh = waterBlocks[b];
         }
 
         _overlayDirty = true;
@@ -1163,8 +1212,8 @@ public sealed class SC2CostsShell
             // block) are the only Costs blocks still hand-painted —
             // every other block auto-resyncs right after any stroke
             // completes, not just after the dedicated generate button.
-            RecomputeDerivedCostsBlocks();
-            SyncDocumentFromLive();
+            using (SC2FramePerf.Measure("costs.strokeEnd.recompute")) RecomputeDerivedCostsBlocks();
+            using (SC2FramePerf.Measure("costs.strokeEnd.sync")) SyncDocumentFromLive();
         }
     }
 
@@ -1367,7 +1416,8 @@ public sealed class SC2CostsShell
     public void PushOverlayToRuntime()
     {
         if (!IsReady || Runtime == null) return;
-        if (_overlayDirty) RebuildOverlayTexture();
+        if (_overlayDirty)
+            using (SC2FramePerf.Measure("costs.overlay.rebuild")) RebuildOverlayTexture();
         PushOverlayTexture(_overlayTex);
     }
 
@@ -1708,15 +1758,28 @@ public sealed class SC2CostsShell
             return;
 
         Data.EnsureCostsAndTerrainTypes();
+        // A block that is byte for byte what was written last time needs no new blob and no change event; the copies are only
+        // trusted for the document they were written to.
+        if (!ReferenceEquals(_syncedGridsDocument, Session.Document))
+        {
+            _syncedGrids.Clear();
+            _syncedGridsDocument = Session.Document;
+        }
         foreach (var block in Data.CostsBlocks)
         {
             EnsureCostsLayerDocument(block.Name);
+            if (_syncedGrids.TryGetValue(block.Name, out var written) && written != null && block.Navmesh != null && System.MemoryExtensions.SequenceEqual<byte>(written, block.Navmesh))
+                continue;
             var command = new SC2SetCostsLayerGridCommand(block.Name, block.Navmesh, Session.BlobStore);
             Session.Document.RaiseChanged(command.Do(Session.Document));
+            _syncedGrids[block.Name] = block.Navmesh != null ? (byte[])block.Navmesh.Clone() : null;
         }
 
         SyncHfieldTerrainTypesFromLive();
     }
+
+    private readonly Dictionary<string, byte[]> _syncedGrids = new();
+    private SC2MapDocument _syncedGridsDocument;
 
     private void EnsureCostsLayerDocument(string blockName)
     {

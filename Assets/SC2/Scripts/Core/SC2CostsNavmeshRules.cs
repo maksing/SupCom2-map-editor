@@ -28,25 +28,30 @@ public static class SC2CostsNavmeshRules
     public const int WaterBandGrow = 2;
 
     /// <summary>Grows a mask by <paramref name="steps"/> cross (4-neighbour) steps,
-    /// i.e. every cell within L1 distance <paramref name="steps"/> of a set cell.</summary>
+    /// i.e. every cell within L1 distance <paramref name="steps"/> of a set cell. Works outwards from the set cells, so a few cells
+    /// cost a few cells' work instead of a pass over the whole grid per step.</summary>
     public static bool[] DilateCross(bool[] mask, int w, int h, int steps)
     {
-        var current = (bool[])mask.Clone();
-        for (var step = 0; step < steps; step++)
+        var result = (bool[])mask.Clone();
+        if (steps <= 0) return result;
+        var frontier = new System.Collections.Generic.List<int>();
+        for (var i = 0; i < result.Length; i++)
+            if (result[i]) frontier.Add(i);
+        var next = new System.Collections.Generic.List<int>();
+        for (var step = 0; step < steps && frontier.Count > 0; step++)
         {
-            var next = (bool[])current.Clone();
-            for (var y = 0; y < h; y++)
-            for (var x = 0; x < w; x++)
+            next.Clear();
+            foreach (var idx in frontier)
             {
-                var idx = y * w + x;
-                if (current[idx]) continue;
-                if ((x > 0 && current[idx - 1]) || (x < w - 1 && current[idx + 1])
-                    || (y > 0 && current[idx - w]) || (y < h - 1 && current[idx + w]))
-                    next[idx] = true;
+                var x = idx % w;
+                if (x > 0 && !result[idx - 1]) { result[idx - 1] = true; next.Add(idx - 1); }
+                if (x < w - 1 && !result[idx + 1]) { result[idx + 1] = true; next.Add(idx + 1); }
+                if (idx >= w && !result[idx - w]) { result[idx - w] = true; next.Add(idx - w); }
+                if (idx < w * (h - 1) && !result[idx + w]) { result[idx + w] = true; next.Add(idx + w); }
             }
-            current = next;
+            (frontier, next) = (next, frontier);
         }
-        return current;
+        return result;
     }
 
     /// <summary>Renders one block. <paramref name="ringSource"/> are the walls that
@@ -57,11 +62,29 @@ public static class SC2CostsNavmeshRules
     {
         ringSource ??= walls;
         var nav = new byte[w * h];
+
+        // The ring of a cell looks at the cells one and two steps away along the four axes only: mark the cells that have a ring
+        // source in reach, and every other cell is free without asking.
+        var reach = new bool[w * h];
+        for (var i = 0; i < ringSource.Length; i++)
+        {
+            if (!ringSource[i]) continue;
+            var x = i % w; var y = i / w;
+            for (var d = 1; d <= 2; d++)
+            {
+                if (x - d >= 0) reach[i - d] = true;
+                if (x + d < w) reach[i + d] = true;
+                if (y - d >= 0) reach[i - d * w] = true;
+                if (y + d < h) reach[i + d * w] = true;
+            }
+        }
+
         for (var y = 0; y < h; y++)
         for (var x = 0; x < w; x++)
         {
             var idx = y * w + x;
             if (walls[idx]) { nav[idx] = Wall; continue; }
+            if (!reach[idx]) { nav[idx] = 1; continue; }
             var sum = 0;
             sum += DirectionCost(ringSource, w, h, x, y, 1, 0);
             sum += DirectionCost(ringSource, w, h, x, y, -1, 0);
@@ -107,12 +130,24 @@ public static class SC2CostsNavmeshRules
         if (!any) return;
 
         var horizontal = new float[w * h];
+        var rowPrefix = new int[w + 1];
         for (var y = 0; y < h; y++)
         {
             if (!rowHasWall[y]) continue;
             var row = y * w;
+            for (var x = 0; x < w; x++) rowPrefix[x + 1] = rowPrefix[x] + (gradientWalls[row + x] ? 1 : 0);
             for (var x = 0; x < w; x++)
             {
+                if (x >= radius && x < w - radius)
+                {
+                    // No wall within reach: the sum is 0, which is what the array already holds.
+                    if (rowPrefix[x + radius + 1] - rowPrefix[x - radius] == 0) continue;
+                    double inner = 0;
+                    for (var k = -radius; k <= radius; k++)
+                        if (gradientWalls[row + x + k]) inner += kernel[k + radius];
+                    horizontal[row + x] = (float)inner;
+                    continue;
+                }
                 double acc = 0;
                 for (var k = -radius; k <= radius; k++)
                 {
@@ -122,20 +157,30 @@ public static class SC2CostsNavmeshRules
             }
         }
 
+        // Per column, how many of the cells above hold a blurred wall: a cell with none within reach gets 1, which nav already has.
+        var columnPrefix = new int[(h + 1) * w];
         for (var y = 0; y < h; y++)
         for (var x = 0; x < w; x++)
+            columnPrefix[(y + 1) * w + x] = columnPrefix[y * w + x] + (horizontal[y * w + x] > 0f ? 1 : 0);
+
+        for (var y = 0; y < h; y++)
         {
-            var idx = y * w + x;
-            if (walls[idx] || !water[idx]) continue;
-            double acc = 0;
-            for (var k = -radius; k <= radius; k++)
+            var interior = y >= radius && y < h - radius;
+            for (var x = 0; x < w; x++)
             {
-                var yy = Reflect(y + k, h);
-                if (rowHasWall[yy]) acc += kernel[k + radius] * horizontal[yy * w + x];
+                var idx = y * w + x;
+                if (walls[idx] || !water[idx]) continue;
+                if (interior && columnPrefix[(y + radius + 1) * w + x] - columnPrefix[(y - radius) * w + x] == 0) continue;
+                double acc = 0;
+                for (var k = -radius; k <= radius; k++)
+                {
+                    var yy = Reflect(y + k, h);
+                    if (rowHasWall[yy]) acc += kernel[k + radius] * horizontal[yy * w + x];
+                }
+                var value = (int)Math.Floor(1.0 + GradientScale * acc);
+                if (value > MaxCost) value = MaxCost;
+                if (value > nav[idx]) nav[idx] = (byte)value;
             }
-            var value = (int)Math.Floor(1.0 + GradientScale * acc);
-            if (value > MaxCost) value = MaxCost;
-            if (value > nav[idx]) nav[idx] = (byte)value;
         }
     }
 

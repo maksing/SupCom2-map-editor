@@ -310,27 +310,33 @@ public static class SC2CostsAutoGen
     /// nothing here calls for one.</summary>
     public static bool[] DilateImpassable(bool[] impassable, int w, int h, int margin)
     {
-        if (margin <= 0) return (bool[])impassable.Clone();
-        var current = impassable;
-        for (var pass = 0; pass < margin; pass++)
+        var result = (bool[])impassable.Clone();
+        if (margin <= 0) return result;
+        // Breadth-first from the set cells: a pass costs what the new cells cost, not a pass over the whole grid.
+        var frontier = new List<int>();
+        for (var i = 0; i < result.Length; i++)
+            if (result[i]) frontier.Add(i);
+        var next = new List<int>();
+        for (var pass = 0; pass < margin && frontier.Count > 0; pass++)
         {
-            var next = (bool[])current.Clone();
-            for (var y = 0; y < h; y++)
-            for (var x = 0; x < w; x++)
+            next.Clear();
+            foreach (var idx in frontier)
             {
-                var idx = y * w + x;
-                if (current[idx] || next[idx]) continue;
-                for (var dy = -1; dy <= 1 && !next[idx]; dy++)
-                for (var dx = -1; dx <= 1 && !next[idx]; dx++)
+                var x = idx % w; var y = idx / w;
+                for (var dy = -1; dy <= 1; dy++)
+                for (var dx = -1; dx <= 1; dx++)
                 {
                     if (dx == 0 && dy == 0) continue;
                     var nx = x + dx; var ny = y + dy;
                     if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-                    if (current[ny * w + nx]) next[idx] = true;
+                    var n = ny * w + nx;
+                    if (result[n]) continue;
+                    result[n] = true;
+                    next.Add(n);
                 }
             }
-            current = next;
+            (frontier, next) = (next, frontier);
         }
-        return current;
+        return result;
     }
 }

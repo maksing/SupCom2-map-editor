@@ -4575,6 +4575,17 @@ public class SC2TerrainShell : ScriptableObject
     /// geometry - import add/remove/undo/redo, ImportOnlyMode toggle.</summary>
     public void InvalidateLiveHeightGrid() => _liveHeightGrid.MarkDirty();
 
+    /// <summary>The projected height model the live height grid serves right now: a new object every time the grid was rebuilt, so
+    /// whoever cached something worked out from the heights can tell they changed. Null before the first build.</summary>
+    public object LiveHeightGridStamp
+    {
+        get
+        {
+            _liveHeightGrid.EnsureFresh(_data, GetImportedTerrainsForExport);
+            return _liveHeightGrid.Model;
+        }
+    }
+
     /// <summary>See SC2LiveHeightGrid.EnsureFreshImmediate's own doc
     /// comment — forces the live height grid to reflect the CURRENT terrain
     /// right now instead of MarkDirty's normal debounce window, for a
