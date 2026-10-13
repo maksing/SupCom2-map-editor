@@ -408,29 +408,41 @@ public static class SC2MarkerScenePreview
         }
     }
 
-    /// <summary>A real copy of the source material (never the shared asset
-    /// itself — Graphics.DrawMeshInstanced needs enableInstancing=true, and
-    /// mutating an imported FBX material asset in place would be a
-    /// surprising, persistent side effect), with instancing turned on and
-    /// backface culling disabled — the anchor's own Z-mirror scale
-    /// (ZMirrorScale) makes the instance transform's determinant negative,
-    /// flipping triangle winding; without Cull Off (same fix already
-    /// applied to SC2/Unit's own shader for exactly this reason — mixed-
-    /// winding instanced geometry) roughly half of each marker's faces
-    /// would be invisible depending on view angle.</summary>
+    /// <summary>The material of one draw part: the albedo texture and colour of the source material (never the shared asset itself;
+    /// instancing needs enableInstancing, and changing an imported FBX material in place would be a persistent side effect) on
+    /// SC2/MarkerModel, with instancing turned on. The anchor's Z mirror (ZMirrorScale) makes the instance matrix's determinant
+    /// negative; a single renderer flips the winding for that on its own, an instanced draw does not, so the faces would come out
+    /// inside out under the Standard shader, which has no cull setting. SC2/MarkerModel culls the front faces instead.</summary>
     private static Material BuildInstancedMaterial(Material source, string key, int index)
     {
+        var shader = Resources.Load<Shader>("SC2MarkerModel") ?? Shader.Find("SC2/MarkerModel");
         Material material;
+        if (shader != null)
+        {
+            material = new Material(shader) { name = $"SC2Marker {key} {index}", enableInstancing = true };
+            if (source != null)
+            {
+                if (source.HasProperty("_MainTex") && source.GetTexture("_MainTex") != null) material.SetTexture("_MainTex", source.GetTexture("_MainTex"));
+                if (source.HasProperty("_Color")) material.SetColor("_Color", source.GetColor("_Color"));
+                else if (source.HasProperty("_BaseColor")) material.SetColor("_Color", source.GetColor("_BaseColor"));
+            }
+            else
+            {
+                material.SetColor("_Color", new Color(0.7f, 0.25f, 0.7f));
+            }
+            return material;
+        }
+
         if (source != null)
         {
             material = new Material(source) { name = $"SC2Marker {key} {index}", enableInstancing = true };
         }
         else
         {
-            var shader = Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Unlit/Color") ?? SC2FallbackShader.Get();
-            material = new Material(shader) { name = $"SC2Marker {key} {index} (missing material)", color = new Color(0.7f, 0.25f, 0.7f), enableInstancing = true };
+            var fallback = Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Unlit/Color") ?? SC2FallbackShader.Get();
+            material = new Material(fallback) { name = $"SC2Marker {key} {index} (missing material)", color = new Color(0.7f, 0.25f, 0.7f), enableInstancing = true };
         }
-        if (material.HasProperty("_Cull")) material.SetInt("_Cull", (int)CullMode.Off);
+        if (material.HasProperty("_Cull")) material.SetInt("_Cull", (int)CullMode.Front);
         return material;
     }
 
