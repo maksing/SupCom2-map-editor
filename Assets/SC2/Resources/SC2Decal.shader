@@ -65,27 +65,7 @@ Shader "SC2/Decal"
     {
         Tags { "RenderType"="Transparent" "Queue"="Transparent+20" "LightMode"="ForwardBase" }
 
-        Pass
-        {
-            // Premultiplied alpha (matches decal.hlsl's own outDiffuse =
-            // float4(color.rgb*alpha, alpha)) — straight alpha (the previous
-            // SrcAlpha OneMinusSrcAlpha) blended a soft/partial-alpha decal
-            // edge to a visibly different color than the real game.
-            Blend One OneMinusSrcAlpha
-            ZWrite Off
-            Cull Off
-            // Same intent AND same magnitude as SC2CostsOverlay's Offset -1,-1:
-            // keep decals from z-fighting with the terrain they're projected
-            // onto. This was -2,-2 (double CostsOverlay's own bias despite this
-            // comment's claim they match) — strong enough to also win the depth
-            // test against nearby real geometry it has no business beating, e.g.
-            // the base of a marker gizmo mesh sitting close to ground level,
-            // painting over it and making the marker hard to pick out.
-            Offset -1, -1
-
-            CGPROGRAM
-            #pragma vertex vert
-            #pragma fragment frag
+        CGINCLUDE
             #include "UnityCG.cginc"
             #include "Lighting.cginc" // declares _WorldSpaceLightPos0 / _LightColor0 (ForwardBase-populated)
 
@@ -221,6 +201,29 @@ Shader "SC2/Decal"
                 return saturate((baked - 0.5) * 2.2 + 0.5);
             }
 
+        ENDCG
+
+        Pass
+        {
+            // Premultiplied alpha (matches decal.hlsl's own outDiffuse =
+            // float4(color.rgb*alpha, alpha)) — straight alpha (the previous
+            // SrcAlpha OneMinusSrcAlpha) blended a soft/partial-alpha decal
+            // edge to a visibly different color than the real game.
+            Blend One OneMinusSrcAlpha
+            ZWrite Off
+            Cull Off
+            // Same intent AND same magnitude as SC2CostsOverlay's Offset -1,-1:
+            // keep decals from z-fighting with the terrain they're projected
+            // onto. This was -2,-2 (double CostsOverlay's own bias despite this
+            // comment's claim they match) — strong enough to also win the depth
+            // test against nearby real geometry it has no business beating, e.g.
+            // the base of a marker gizmo mesh sitting close to ground level,
+            // painting over it and making the marker hard to pick out.
+            Offset -1, -1
+
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
             fixed4 frag(v2f i) : SV_Target
             {
                 // Same projection-box clip as decal.hlsl's DecalPS: discard
@@ -329,6 +332,96 @@ Shader "SC2/Decal"
                 // and the Blend directive above.
                 lit *= diffuseColor.a;
                 return fixed4(lit, diffuseColor.a);
+            }
+            ENDCG
+        }
+
+        // The game writes a decal's normal into the normal buffer beside its diffuse (decal.hlsl: outNormal, with the normal map's own
+        // alpha), and the ground is lit with the blended normal afterwards. A decal with a transparent diffuse but a normal map therefore
+        // still shows, as a change of the light on the ground. This pass is that change: the baked RNM light weighted by the blended
+        // normal, over the light of the flat ground, multiplied into what is already drawn.
+        Pass
+        {
+            Blend DstColor Zero
+            ZWrite Off
+            Cull Off
+            Offset -1, -1
+
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragNormal
+
+            // The RNM basis directions the terrain shader weights its baked layers with (SC2TerrainView.shader).
+            static const half3 kBasis0 = half3(0.8165, 0.0, 0.5774);
+            static const half3 kBasis1 = half3(-0.4082, 0.7071, 0.5774);
+            static const half3 kBasis2 = half3(-0.4082, -0.7071, 0.5774);
+
+            // The three baked layers of the pair under the decal, the core's first and then the background's. False where there is none:
+            // the baked light of an imported terrain is already combined, so a normal cannot be weighed against it.
+            bool SampleBasisLights(float2 worldXZ, out half3 m0, out half3 m1, out half3 m2)
+            {
+                m0 = 0; m1 = 0; m2 = 0;
+                if (_RnmValid_Core != 0)
+                {
+                    float2 uv = (worldXZ - _RnmUvOffset_Core.xy) * _RnmUvInvScale_Core.xy;
+                    if (all(uv >= 0) && all(uv <= 1))
+                    {
+                        int pIdx = DecodePair(_PairMapTex_Core, _PairMapTex_Core_TexelSize, uv);
+                        if (pIdx < 255)
+                        {
+                            pIdx = clamp(pIdx, 0, max(_PairCount_Core - 1, 0));
+                            if (PairHasBakedRnm(_TilingLUT_Core, pIdx))
+                            {
+                                m0 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 0))).rgb;
+                                m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 1))).rgb;
+                                m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Core, float3(uv, (float)(pIdx * 3 + 2))).rgb;
+                                return true;
+                            }
+                        }
+                    }
+                }
+                if (_RnmValid_Bg != 0)
+                {
+                    float2 uv = (worldXZ - _RnmUvOffset_Bg.xy) * _RnmUvInvScale_Bg.xy;
+                    if (all(uv >= 0) && all(uv <= 1))
+                    {
+                        int pIdx = DecodePair(_PairMapTex_Bg, _PairMapTex_Bg_TexelSize, uv);
+                        if (pIdx < 255)
+                        {
+                            pIdx = clamp(pIdx, 0, max(_PairCount_Bg - 1, 0));
+                            if (PairHasBakedRnm(_TilingLUT_Bg, pIdx))
+                            {
+                                m0 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 0))).rgb;
+                                m1 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 1))).rgb;
+                                m2 = UNITY_SAMPLE_TEX2DARRAY(_RnmArr_Bg, float3(uv, (float)(pIdx * 3 + 2))).rgb;
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+
+            fixed4 fragNormal(v2f i) : SV_Target
+            {
+                clip(floor(i.texCoord) * -sign(i.texCoord));
+                if (_HasNormalMap < 0.5) { clip(-1); return fixed4(1, 1, 1, 1); }
+
+                fixed4 normalSample = tex2D(_NormalMap, i.atlasUV);
+                // A decal's normal replaces the ground's by its alpha: where the alpha is 0 the ground's own normal is left alone.
+                clip(normalSample.a - 0.002);
+                float3 decalNormal = normalize(normalSample.rgb * 2.0 - 1.0);
+                float3 blended = normalize(lerp(float3(0, 0, 1), decalNormal, normalSample.a));
+
+                half3 m0, m1, m2;
+                if (!SampleBasisLights(i.worldPos.xz, m0, m1, m2)) { clip(-1); return fixed4(1, 1, 1, 1); }
+
+                half3 light = m0 * saturate(dot(blended, kBasis0)) + m1 * saturate(dot(blended, kBasis1)) + m2 * saturate(dot(blended, kBasis2));
+                half3 flatLight = (m0 + m1 + m2) * 0.5774;
+                half3 ratio = clamp(light / max(flatLight, 0.02), 0.0, 3.0);
+                // The RNM game look multiplies the light in gamma arithmetic and brings the product to linear, which scales by the ratio ^ 2.2.
+                if (_SC2DecalGameLook > 0.5) ratio = GammaToLinearSpace(ratio);
+                return fixed4(ratio, 1);
             }
             ENDCG
         }
