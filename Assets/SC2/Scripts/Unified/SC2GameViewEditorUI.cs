@@ -313,7 +313,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private bool AnyModalOpen(bool includeTextureBrowser = true)
     {
         var open = (includeTextureBrowser && SC2TextureBrowser.IsOpen) || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false)
-            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2BusyOverlay.IsActive;
+            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2CostsGuide.IsViewerOpen || SC2BusyOverlay.IsActive;
 #if !UNITY_EDITOR
         // The runtime confirm dialog only exists in a build (the Editor uses its own dialogs).
         open |= SC2RuntimeConfirm.IsOpen;
@@ -1761,6 +1761,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Same reasoning — must draw last so it stays modal and on top.
         SC2HotkeysPanel.DrawOverlay();
         SC2ThemePanel.DrawOverlay();
+        SC2CostsGuide.DrawOverlay();
 #if !UNITY_EDITOR
         // Same reasoning for the runtime Popup/ColorField shims (UnityEditorRuntimeShim.cs):
         // their dropdown lists and color palettes are floating overlays that must be

@@ -312,6 +312,16 @@ public sealed class SC2CostsShell
             _lastSubTab = subTab;
         }
 
+        if (ActiveTarget == PaintTarget.Costs)
+        {
+            _guideExpanded = SC2TerrainShell.DrawFoldoutHeader("Guide", _guideExpanded);
+            if (_guideExpanded)
+            {
+                SC2CostsGuide.DrawContent(w, Data.PlayableWater);
+                EditorGUILayout.Space(SC2UiScale.Pxf(10f));
+            }
+        }
+
         // The grid size is fixed when the map is created, so only the block set is offered here.
         DrawBlockSetSwitcher(w);
         EditorGUILayout.Space(SC2UiScale.Pxf(10f));
@@ -532,6 +542,7 @@ public sealed class SC2CostsShell
         if (_importExpanded) DrawImportCostsImageControls(w);
     }
 
+    private bool _guideExpanded;
     private bool _autoGenExpanded = true;
     private bool _copyExpanded;
     private bool _growExpanded;

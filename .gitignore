@@ -105,3 +105,7 @@ Thumbs.db
 /Assets/SC2Textures/*
 /Assets/SC2/Resources/SC2Textures/*
 /Assets/StreamingAssets/SC2Textures/
+
+# Working drafts of the Costs guide; the shipped copy lives in Assets/SC2/Resources/CostsGuide.
+/SC2_Costs_Guide_Draft.md
+/SC2_Costs_Guide_Images/
