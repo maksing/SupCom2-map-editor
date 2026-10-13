@@ -62,7 +62,8 @@ public sealed partial class SC2GameViewEditorUI
         // Visibility menu's "Decals" toggle — applied every frame regardless of tab, same as
         // OverlayTerrain/OverlayWater (SyncTerrainOverlayFlags), so it stays in effect after a
         // tab switch instead of only until the next preview rebuild.
-        _decalsShell.SetOverlayVisible(OverlayDecals);
+        // The Slope preview shows the steepness of the ground itself, which a decal on top would hide.
+        _decalsShell.SetOverlayVisible(OverlayDecals && !(_terrainShell != null && _terrainShell.IsSlopePreview));
         if (_mainTab != 4)
         {
             _decalsShell.EnsurePreview();

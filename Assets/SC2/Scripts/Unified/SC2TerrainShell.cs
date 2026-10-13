@@ -2445,6 +2445,9 @@ public class SC2TerrainShell : ScriptableObject
     /// <summary>The current preview mode, as an index into <see cref="PreviewModeLabels"/>.</summary>
     public int PreviewModeIndex => (int)_prev;
 
+    /// <summary>Whether the Slope preview is the current mode.</summary>
+    public bool IsSlopePreview => _prev == PreviewMode.Slope;
+
     /// <summary>Switches the preview mode the way a click on the Preview mode panel does (one undo step, the preview rebuilt).</summary>
     public void SetPreviewMode(int index)
     {
