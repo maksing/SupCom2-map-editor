@@ -2439,6 +2439,27 @@ public class SC2TerrainShell : ScriptableObject
     /// terrain is put in shadow; the glow gain stands for the game's bloom; the sun's highlights are kept whole.</summary>
     private const float ShadowAmount = 0f, GlowGain = 6.5f, SpecularGain = 1f;
 
+    /// <summary>The preview modes in the order of <see cref="PreviewMode"/>, as the Preview mode panel lists them.</summary>
+    public static readonly string[] PreviewModeLabels = { "Textured", "RNM", "Mats", "Pairs", "Slope", "Height" };
+
+    /// <summary>The current preview mode, as an index into <see cref="PreviewModeLabels"/>.</summary>
+    public int PreviewModeIndex => (int)_prev;
+
+    /// <summary>Switches the preview mode the way a click on the Preview mode panel does (one undo step, the preview rebuilt).</summary>
+    public void SetPreviewMode(int index)
+    {
+        var next = (PreviewMode)Mathf.Clamp(index, 0, PreviewModeLabels.Length - 1);
+        if (next == _prev) return;
+        // Checkpoint BEFORE _prev is reassigned: CaptureAuxState() reads the CURRENT _prev, so recording after the assignment would
+        // snapshot the already-new mode as the undo target. Only checkpointed when real terrain data exists: the toolbar can be driven
+        // purely by imported terrain.bdf objects, which SC2TerrainUndoStack has nothing to snapshot for.
+        if (_data != null)
+            RecordUndoCheckpoint("Change Preview Mode");
+        _prev = next;
+        _previewDirty = true;
+        ApplyPreviewModeNow();
+    }
+
     private void DrawPreviewToolbar()
     {
         // Used to bail out entirely without an active/initialized
@@ -2457,23 +2478,7 @@ public class SC2TerrainShell : ScriptableObject
             3);
         EndUnifiedPanelBox();
         if (nextPrev != prev)
-        {
-            // Checkpoint BEFORE _prev is reassigned below — CaptureAuxState()
-            // reads the CURRENT _prev, so recording after the assignment
-            // would snapshot the already-new mode as the undo target (same
-            // "record before, not after" rule as everywhere else). Only
-            // checkpointed when real terrain data exists — otherwise this
-            // toolbar can be driven purely by imported terrain.bdf objects
-            // (see the comment above), which SC2TerrainUndoStack has nothing
-            // to snapshot for; recording a checkpoint with a null _data would
-            // still push a combined-undo marker that Undo could never
-            // actually satisfy.
-            if (_data != null)
-                RecordUndoCheckpoint("Change Preview Mode");
-            _prev = nextPrev;
-            _previewDirty = true;
-            ApplyPreviewModeNow();
-        }
+            SetPreviewMode((int)nextPrev);
 
         // Gallery-style MatCap picker — 6 procedural looks matching 6
         // specific balls from Blender's own MatCap picker (see

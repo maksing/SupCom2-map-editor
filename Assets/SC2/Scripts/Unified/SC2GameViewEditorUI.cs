@@ -1715,6 +1715,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Rect (see UpdateLayoutRects), no repositioning needed.
         DrawNavigationGizmo(width);
         DrawFloatingReferenceImage();
+        DrawPreviewModeBar(false);
         GUI.enabled = previousEnabled;
         if (panelEventsMasked)
         {
@@ -1896,6 +1897,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 // This prevents the SceneView OnSceneGUI from receiving clicks on
                 // our buttons/menus as navigation events.
                 HandleGameViewNavigation();
+
+                // Painted last: the path graphs, chains, areas and the other lines the viewport tools draw above would otherwise show
+                // through the bar.
+                DrawPreviewModeBar(true);
             }
         }
     }
@@ -2763,7 +2768,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // FIXED: was "15 + ..." — undercounted by 1 even before Decals was added below (Wireframe
         // was never included in the count), the same hit-test-rect-too-short bug class as the
         // "was 11 + ..." fix above.
-        var itemCount = 17 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units/ReferenceUnits (4) + Land/Air (2) + Chains/Areas/Decals/Water/RNM/Grid/Wireframe (7) [+ Naval/Amphibious]
+        // One row of slack on top of the count: the rows are a little taller than MenuItemHeight, so the last one (Wireframe) fell below the card.
+        var itemCount = 18 + (playableWater ? 2 : 0); // Terrain/Hfield/Costs/Collision2 (4) + Props/Markers/Units/ReferenceUnits (4) + Land/Air (2) + Chains/Areas/Decals/Water/RNM/Grid/Wireframe (7) [+ Naval/Amphibious]
 
         DrawMenuPanel(_visibilityMenuRect.x, TitleBarHeight, 210, itemCount, () =>
         {
@@ -7617,8 +7623,160 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         SC2TerrainShell.ClearFocusIfClickMissedField();
     }
 
+    private bool _previewModeBarOpen;
+    private Rect _previewModeBarRect;
+    private static Texture2D _chevronTexture;
+
+    /// <summary>A small downward chevron (a filled triangle), tinted and flipped by the caller.</summary>
+    private static Texture2D ChevronTexture
+    {
+        get
+        {
+            if (_chevronTexture != null) return _chevronTexture;
+            const int w = 16, h = 9;
+            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+            for (var y = 0; y < h; y++)
+            {
+                // Row 0 is the bottom of the texture: the triangle's point.
+                var half = (w * 0.5f) * (y + 0.5f) / h;
+                for (var x = 0; x < w; x++)
+                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, Mathf.Clamp01(half - Mathf.Abs(x + 0.5f - w * 0.5f) + 0.5f)));
+            }
+            tex.Apply(false);
+            _chevronTexture = tex;
+            return tex;
+        }
+    }
+
+    private static readonly Dictionary<(int, int, int, Color, Color), Texture2D> TabTextures = new();
+
+    /// <summary>A tab hanging from the top edge: a flat top with no border (so it runs on into the row above), rounded bottom corners and a
+    /// one pixel border along the sides and the bottom. Cached by size and colours.</summary>
+    private static Texture2D HangingTabTexture(int width, int height, int radius, Color fill, Color border)
+    {
+        width = Mathf.Max(4, width); height = Mathf.Max(4, height);
+        var key = (width, height, radius, fill, border);
+        if (TabTextures.TryGetValue(key, out var cached) && cached != null) return cached;
+        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+        // A rounded box that reaches far above the texture, so only its bottom corners are seen.
+        const float above = 64f;
+        var half = new Vector2(width * 0.5f, (height + above) * 0.5f);
+        var centre = new Vector2(width * 0.5f, (height - above) * 0.5f);
+        for (var ty = 0; ty < height; ty++)
+        for (var x = 0; x < width; x++)
+        {
+            var p = new Vector2(x + 0.5f, height - 1 - ty + 0.5f);
+            var q = new Vector2(Mathf.Abs(p.x - centre.x), Mathf.Abs(p.y - centre.y)) - (half - new Vector2(radius, radius));
+            var d = new Vector2(Mathf.Max(q.x, 0f), Mathf.Max(q.y, 0f)).magnitude + Mathf.Min(Mathf.Max(q.x, q.y), 0f) - radius;
+            var coverage = Mathf.Clamp01(0.5f - d);
+            var edge = Mathf.Clamp01(d + 1.5f); // 0 inside by more than the border, 1 on the outline
+            var colour = Color.Lerp(fill, border, edge);
+            colour.a = Mathf.Lerp(fill.a, border.a, edge) * coverage;
+            tex.SetPixel(x, ty, colour);
+        }
+        tex.Apply(false);
+        TabTextures[key] = tex;
+        return tex;
+    }
+
+    private static void DrawHangingTab(Rect rect)
+    {
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+        var texture = HangingTabTexture(Mathf.RoundToInt(rect.width), Mathf.RoundToInt(rect.height), Mathf.RoundToInt(SC2UiScale.Pxf(5f)), PanelColor, ColorDivider);
+        GUI.DrawTexture(rect, texture);
+    }
+
+    private void DrawChevron(Rect area, bool pointsDown, bool hover)
+    {
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+        var size = new Vector2(SC2UiScale.Pxf(5f), SC2UiScale.Pxf(3f));
+        var rect = new Rect(area.center.x - size.x * 0.5f, area.center.y - size.y * 0.5f, size.x, size.y);
+        // A negative height flips the texture, which turns the chevron to point up.
+        if (!pointsDown) rect = new Rect(rect.x, rect.yMax, rect.width, -rect.height);
+        var previous = GUI.color;
+        GUI.color = hover ? Color.white : new Color(0.78f, 0.8f, 0.85f, 0.9f);
+        GUI.DrawTexture(rect, ChevronTexture);
+        GUI.color = previous;
+    }
+
+    /// <summary>The Preview mode panel of the Terrain tab, repeated at the top centre of the viewport so the view can be switched from
+    /// any tab. Folded it is only a very small chevron against the sub-tab row; opened it is one compact row of every mode.
+    /// Called twice per event: first (<paramref name="paintPass"/> false) to take the clicks, before the viewport tools see them, and at
+    /// the very end of the frame (true) to paint, so nothing the tools draw lies over it.</summary>
+    private void DrawPreviewModeBar(bool paintPass)
+    {
+        if (!paintPass) _previewModeBarRect = Rect.zero;
+        if (_terrainShell == null || _viewportRect.width < SC2UiScale.Pxf(260f)) return;
+
+        var labels = SC2TerrainShell.PreviewModeLabels;
+        var current = Mathf.Clamp(_terrainShell.PreviewModeIndex, 0, labels.Length - 1);
+        var e = Event.current;
+        if (e == null) return;
+        if (paintPass && (e.type != EventType.Repaint || _previewModeBarRect.width <= 0f)) return;
+        // A dropdown menu open over the bar is painted before this pass and must stay on top.
+        if (paintPass && AnyMenuOpen() && _openMenuRect.Overlaps(_previewModeBarRect)) return;
+        var interactive = !paintPass && !_menuOverlayBlocksInput;
+        Rect rect;
+
+        if (!_previewModeBarOpen)
+        {
+            // Hangs from the divider line under the sub-tab row and starts exactly at the viewport: it does not reach up into the row.
+            var size = new Vector2(SC2UiScale.Pxf(18f), SC2UiScale.Pxf(8f));
+            rect = new Rect(_viewportRect.center.x - size.x * 0.5f, _viewportRect.y, size.x, size.y);
+            if (!paintPass) _previewModeBarRect = rect;
+            var hover = rect.Contains(e.mousePosition);
+            if (paintPass)
+            {
+                DrawHangingTab(rect);
+                DrawChevron(rect, true, hover);
+            }
+            else if (interactive && e.type == EventType.MouseDown && e.button == 0 && hover)
+            {
+                _previewModeBarOpen = true;
+                e.Use();
+            }
+        }
+        else
+        {
+            var inset = SC2UiScale.Pxf(2.5f);
+            var cellHeight = SC2UiScale.Pxf(20f);
+            var cellWidth = SC2UiScale.Pxf(60f);
+            var arrowWidth = SC2UiScale.Pxf(24f);
+            var width = inset * 2f + cellWidth * labels.Length + arrowWidth;
+            rect = new Rect(_viewportRect.center.x - width * 0.5f, _viewportRect.y, width, cellHeight + inset * 2f);
+            if (!paintPass) _previewModeBarRect = rect;
+            if (paintPass) DrawHangingTab(rect);
+            var inner = new Rect(rect.x + inset, rect.y + inset, rect.width - inset * 2f, cellHeight);
+            for (var i = 0; i < labels.Length; i++)
+            {
+                var cell = new Rect(inner.x + i * cellWidth, inner.y, cellWidth, inner.height);
+                var hover = cell.Contains(e.mousePosition);
+                if (paintPass) SC2ForgeUi.SegmentCell(cell, labels[i], i == current, hover);
+                else if (interactive && e.type == EventType.MouseDown && e.button == 0 && hover)
+                {
+                    _terrainShell.SetPreviewMode(i);
+                    e.Use();
+                }
+            }
+            var arrow = new Rect(inner.x + labels.Length * cellWidth, inner.y, arrowWidth, inner.height);
+            var arrowHover = arrow.Contains(e.mousePosition);
+            if (paintPass) DrawChevron(arrow, false, arrowHover);
+            else if (interactive && e.type == EventType.MouseDown && e.button == 0 && arrowHover)
+            {
+                _previewModeBarOpen = false;
+                e.Use();
+            }
+        }
+
+        // Whatever of the bar the cells above left alone (its border, the gaps) still belongs to it, not to the viewport behind.
+        if (interactive && e.type != EventType.Used && (e.type == EventType.MouseDown || e.type == EventType.MouseUp || e.type == EventType.MouseDrag) && rect.Contains(e.mousePosition))
+            e.Use();
+    }
+
     private bool IsMouseOverUi(Vector2 mouse)
     {
+        if (_previewModeBarRect.width > 0f && _previewModeBarRect.Contains(mouse))
+            return true;
         if (mouse.y <= HeaderHeight)
             return true;
         if (ShowPanel && _panelRect.Contains(mouse))
