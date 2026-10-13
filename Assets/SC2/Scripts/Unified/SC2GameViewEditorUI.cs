@@ -2926,6 +2926,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         DrawMenuPanel(x, y, width, itemCount * MenuItemHeight, drawContent);
     }
 
+    /// <summary>The width a sub-tab button needs for <paramref name="label"/>: the text as the (wider) selected style draws it at the
+    /// current font size, with the style's padding and a little air. Measured, not estimated from the number of characters, which
+    /// came out too narrow once the UI scale made the font larger and cut the labels with "...".</summary>
+    private float SubtabButtonWidth(string label)
+    {
+        var content = new GUIContent(label);
+        var text = Mathf.Max(_subtabStyle.CalcSize(content).x, _activeSubtabStyle.CalcSize(content).x);
+        return Mathf.Max(SC2UiScale.Pxf(64f), text + SC2UiScale.Pxf(10f));
+    }
+
     private void DrawSubtabs(int width)
     {
         var mainTabId = GameMainTabIds[_mainTab];
@@ -2973,7 +2983,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // labels.
         var fullWidthSum = 0f;
         for (var i = 0; i < tabs.Length; i++)
-            fullWidthSum += Mathf.Clamp(tabs[i].Length * SC2UiScale.Pxf(9f) + SC2UiScale.Pxf(28f), SC2UiScale.Pxf(78f), SC2UiScale.Pxf(148f)) + 4f; // +margin (2+2)
+            fullWidthSum += SubtabButtonWidth(tabs[i]) + 4f; // +margin (2+2)
         var compactTabs = tabs.Length > 0 && fullWidthSum > usableWidth;
 
         if (compactTabs)
@@ -2997,8 +3007,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // since 58px was only ever sized against the short abbreviations
             // already in that switch, never against Terrain's own subtab
             // list.
-            var compactTabWidth = SC2UiScale.Pxf(72f);
-            var contentWidth = Mathf.Max(usableWidth, compactTabWidth * tabs.Length);
+            // Each button is as wide as its own (abbreviated) label needs at the current font size, so a label is never cut; the strip
+            // scrolls when they do not all fit.
+            var compactWidths = new float[tabs.Length];
+            var compactTotal = 0f;
+            for (var i = 0; i < tabs.Length; i++)
+            {
+                compactWidths[i] = Mathf.Max(SC2UiScale.Pxf(58f), SubtabButtonWidth(CompactSubtabLabel(tabs[i])));
+                compactTotal += compactWidths[i];
+            }
+            var contentWidth = Mathf.Max(usableWidth, compactTotal);
             var scrollViewRect = new Rect(0f, 0f, usableWidth, rect.height);
             var contentRect = new Rect(0f, 0f, contentWidth, rect.height);
             // A stray vertical scrollbar sliver can show up here, though this
@@ -3016,13 +3034,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // draw as nothing regardless, which is what's actually wanted
             // here — this row only ever needs horizontal scrolling.
             _subtabsScroll = GUI.BeginScrollView(scrollViewRect, _subtabsScroll, contentRect, false, false, GUI.skin.horizontalScrollbar, GUIStyle.none);
+            var compactX = 0f;
             for (var i = 0; i < tabs.Length; i++)
             {
                 var style = i == _subTab ? _activeSubtabStyle : _subtabStyle;
-                var btnRect = new Rect(i * compactTabWidth + 2f, 0f, compactTabWidth - 4f, rect.height);
-                // A label wider than its button is cut with "..." instead of being clipped on both sides of the centre.
-                var label = SC2StartupUi.Fit(CompactSubtabLabel(tabs[i]), style, btnRect.width - style.padding.horizontal);
-                if (GUI.Button(btnRect, label, style))
+                var btnRect = new Rect(compactX + 2f, 0f, compactWidths[i] - 4f, rect.height);
+                compactX += compactWidths[i];
+                if (GUI.Button(btnRect, CompactSubtabLabel(tabs[i]), style))
                     _subTab = i;
                 if (i == _subTab) DrawSubtabLine(btnRect);
             }
@@ -3034,9 +3052,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             for (var i = 0; i < tabs.Length; i++)
             {
                 var style = i == _subTab ? _activeSubtabStyle : _subtabStyle;
-                var requestedWidth = Mathf.Clamp(tabs[i].Length * SC2UiScale.Pxf(9f) + SC2UiScale.Pxf(28f), SC2UiScale.Pxf(78f), SC2UiScale.Pxf(148f));
-                var fitted = new GUIContent(SC2StartupUi.Fit(tabs[i], style, requestedWidth - style.padding.horizontal), tabs[i]);
-                if (GUILayout.Button(fitted, style, GUILayout.Width(requestedWidth)))
+                var requestedWidth = SubtabButtonWidth(tabs[i]);
+                if (GUILayout.Button(tabs[i], style, GUILayout.Width(requestedWidth)))
                     _subTab = i;
                 if (i == _subTab && Event.current.type == EventType.Repaint) DrawSubtabLine(GUILayoutUtility.GetLastRect());
             }
@@ -3695,7 +3712,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 
     private bool DrawInspectorButton(string label)
     {
-        return GUILayout.Button(label, GUILayout.Height(26));
+        return GUILayout.Button(label, GUILayout.MinHeight(SC2UiScale.Pxf(26f)));
     }
 
     private void DrawCostsInspector()
@@ -7252,7 +7269,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         }
 
         EditorGUILayout.Space(8);
-        if (GUILayout.Button("Remove From Scene", GUILayout.Height(26), GUILayout.Width(width), GUILayout.MaxWidth(width)))
+        if (GUILayout.Button("Remove From Scene", GUILayout.MinHeight(SC2UiScale.Pxf(26f)), GUILayout.Width(width), GUILayout.MaxWidth(width)))
         {
             // Deactivated, not destroyed — see _importedTerrainsRemoved's own
             // doc comment: this is what makes "Remove" undoable at all,

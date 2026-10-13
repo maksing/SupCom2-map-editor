@@ -776,12 +776,12 @@ public sealed class SC2UnitPropBrowser
 
         var entry = _previewedEntry;
         GUILayout.Label(entry == null ? (_kind == AssetKind.Unit ? "Hover a unit to preview it" : "Hover a prop to preview it") : entry.Asset.DisplayName ?? entry.Asset.Id, CardLabelStyle, GUILayout.Height(20f));
-        GUILayout.Label(entry == null ? string.Empty : _kind == AssetKind.Unit ? entry.Asset.Id : GetPropFolderBreadcrumb(entry), CardLabelStyle, GUILayout.Height(18f));
+        GUILayout.Label(entry == null ? string.Empty : _kind == AssetKind.Unit ? entry.Asset.Id : GetPropFolderBreadcrumb(entry), CardLabelStyle, GUILayout.MinHeight(SC2UiScale.Pxf(18f)));
         if (entry != null && _kind == AssetKind.Prop)
             GUILayout.Label(entry.Asset.Destructable ? "Destructible: breaks when hit" : "Not destructible: stays standing",
-                entry.Asset.Destructable ? CardStateIssueStyle : CardLabelStyle, GUILayout.Height(18f));
+                entry.Asset.Destructable ? CardStateIssueStyle : CardLabelStyle, GUILayout.MinHeight(SC2UiScale.Pxf(18f)));
         string status = entry == null || _propPreview.HasModel ? "Drag to rotate, wheel to zoom" : "No 3D model: " + (_propPreview.Error ?? "not loaded");
-        GUILayout.Label(status, entry == null || _propPreview.HasModel ? CardStateReadyStyle : CardStateIssueStyle, GUILayout.Height(18f));
+        GUILayout.Label(status, entry == null || _propPreview.HasModel ? CardStateReadyStyle : CardStateIssueStyle, GUILayout.MinHeight(SC2UiScale.Pxf(18f)));
         GUILayout.FlexibleSpace();
         GUILayout.EndVertical();
     }

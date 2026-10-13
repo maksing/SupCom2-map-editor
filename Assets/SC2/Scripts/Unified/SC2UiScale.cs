@@ -78,10 +78,11 @@ public static class SC2UiScale
     /// fixedWidth, RectOffset components built from a float, etc.).</summary>
     public static float Pxf(float basePixels) => basePixels * Factor;
 
-    // The start window keeps its own sizes (they are not part of the editor layout): the user's UI Scale only.
-    public static int FRaw(int baseFontSize) => Mathf.RoundToInt(baseFontSize * Scale);
-    public static int PxRaw(int basePixels) => Mathf.RoundToInt(basePixels * Scale);
-    public static float PxfRaw(float basePixels) => basePixels * Scale;
+    // The start window is not scaled at all: it keeps the sizes written in code whatever the UI Scale of the editor is. (Growing it with
+    // the scale cut the names of its list rows and pushed their buttons out of the window.)
+    public static int FRaw(int baseFontSize) => baseFontSize;
+    public static int PxRaw(int basePixels) => basePixels;
+    public static float PxfRaw(float basePixels) => basePixels;
 
     private static GUIStyle _popupStyle;
     private static float _popupStyleBuiltAtScale = -1f;

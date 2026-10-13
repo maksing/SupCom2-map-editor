@@ -83,8 +83,10 @@ public sealed partial class SC2GameViewEditorUI
 
     private void DrawStartupOverlay(int screenWidth, int screenHeight)
     {
-        var panelWidth = Mathf.Min(760f, screenWidth - 40f);
-        var panelHeight = Mathf.Min(680f, screenHeight - 60f);
+        // The window grows with the UI scale: its rows, fonts and buttons do, and in a fixed 760 pixels the names were cut and the
+        // buttons ran off the right edge. It stops at the screen.
+        var panelWidth = Mathf.Min(SC2UiScale.PxfRaw(760f), screenWidth - 40f);
+        var panelHeight = Mathf.Min(SC2UiScale.PxfRaw(680f), screenHeight - 60f);
         var rect = new Rect((screenWidth - panelWidth) * 0.5f, (screenHeight - panelHeight) * 0.5f, panelWidth, panelHeight);
 
         if (!_startupBackgroundLoadAttempted)

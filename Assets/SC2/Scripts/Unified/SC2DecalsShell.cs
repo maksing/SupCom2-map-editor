@@ -234,11 +234,13 @@ public sealed class SC2DecalsShell : IDisposable
             var selected = item.i == _selectedEntry;
             GUILayout.BeginHorizontal(GUI.skin.box, GUILayout.Width(w - 8));
             var uv = AtlasUv(item.e);
-            var rect = GUILayoutUtility.GetRect(48, 48, GUILayout.Width(48), GUILayout.Height(48));
+            // The row is as tall as its two lines of text need at the current UI scale, never shorter than the thumbnail.
+            var thumbnail = SC2UiScale.Pxf(48f);
+            var rect = GUILayoutUtility.GetRect(thumbnail, thumbnail, GUILayout.Width(thumbnail), GUILayout.Height(thumbnail));
             if (_diffuseAtlas != null) GUI.DrawTextureWithTexCoords(rect, _diffuseAtlas, uv, true); else GUI.Box(rect, "DEC");
             // Picking a catalog entry arms Place mode — see the Mode field's
             // own doc comment for why this replaces a dedicated tab/toggle.
-            if (GUILayout.Button($"{item.e.Name}\n{item.e.Width} x {item.e.Height}" + (selected ? "  [selected]" : ""), GUILayout.Height(48), GUILayout.ExpandWidth(true)))
+            if (GUILayout.Button($"{item.e.Name}\n{item.e.Width} x {item.e.Height}" + (selected ? "  [selected]" : ""), GUILayout.MinHeight(thumbnail), GUILayout.ExpandWidth(true)))
             {
                 _selectedEntry = item.i;
                 _mode = InteractionMode.Place;
