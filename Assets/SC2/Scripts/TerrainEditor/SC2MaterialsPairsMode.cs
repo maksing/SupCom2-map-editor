@@ -530,7 +530,7 @@ public class SC2PairsMode
         EditorGUILayout.Space(SC2UiScale.Pxf(12f));
         SC2TerrainShell.DrawUnifiedSectionLabel("Terrain UV1 - cliff stretching");
         SC2TerrainShell.BeginUnifiedPanelBox();
-        var newHeightWeight = SC2TerrainShell.DrawCompactSlider("Height Stretch Weight", Data.Uv1HeightWeight, 0.25f, 10f,
+        var newHeightWeight = SC2TerrainShell.DrawCompactSlider("Height Stretch Weight", Data.Uv1HeightWeight, 0.01f, 10f,
             onValueChangeStart: () => _win.RecordUndoCheckpointFor(Data, "Change UV1 Height Weight"));
         if (!Mathf.Approximately(newHeightWeight, Data.Uv1HeightWeight))
         {
