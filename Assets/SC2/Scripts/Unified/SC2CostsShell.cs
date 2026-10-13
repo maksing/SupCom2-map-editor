@@ -785,7 +785,7 @@ public sealed class SC2CostsShell
 
         RecordUndo();
         Data.CostsBlocks[0].Navmesh = SC2CostsAutoGen.GenerateFromHeight(
-            Data, Data.CostsBlocks[0].Name, _terrainShell.SampleLiveHeightGrid, _genThresholds);
+            Data, Data.CostsBlocks[0].Name, _terrainShell.SampleLiveHeightGrid, _genThresholds, Session?.Document?.Environment?.WorkingHeader);
         RecomputeDerivedCostsBlocks();
         _overlayDirty = true;
         SyncDocumentFromLive();
@@ -858,13 +858,14 @@ public sealed class SC2CostsShell
     private bool[] ShorelineMasks(System.Func<float, float, float> sample, int gridSize, int margin, out bool[] band)
     {
         var stamp = _terrainShell.LiveHeightGridStamp;
-        var waterElevation = SC2CostsAutoGen.ExtractWaterElevation(Data);
+        var liveHeader = Session?.Document?.Environment?.WorkingHeader;
+        var waterElevation = SC2CostsAutoGen.ExtractWaterElevation(Data, liveHeader);
         var cached = stamp != null && ReferenceEquals(stamp, _shoreHeightStamp) && waterElevation == _shoreWaterElevation
             && gridSize == _shoreGridSize && margin == _shoreMargin && Data.PlayableWater == _shorePlayableWater
             && _shoreWaterMask != null && _shoreWaterMask.Length == gridSize * gridSize;
         if (!cached)
         {
-            var water = SC2CostsAutoGen.ComputeRawWaterMask(Data, sample);
+            var water = SC2CostsAutoGen.ComputeRawWaterMask(Data, sample, liveHeader);
             bool[] bandMask = null;
             if (Data.PlayableWater)
             {
@@ -1023,7 +1024,7 @@ public sealed class SC2CostsShell
             System.Array.Clear(Data.CostsShoreHintOverrideMask, 0, Data.CostsShoreHintOverrideMask.Length);
         Data.EnsureCostsAndTerrainTypes();
         Data.CostsBlocks[0].Navmesh = SC2CostsAutoGen.GenerateFromHeight(
-            Data, Data.CostsBlocks[0].Name, _terrainShell.SampleLiveHeightGrid, _genThresholds);
+            Data, Data.CostsBlocks[0].Name, _terrainShell.SampleLiveHeightGrid, _genThresholds, Session?.Document?.Environment?.WorkingHeader);
         RecomputeDerivedCostsBlocks();
         _activeBlock = 0;
         _overlayDirty = true;

@@ -2566,7 +2566,7 @@ public static class SC2TerrainExporter
             navmeshes[i] = navmesh;
         }
 
-        var water = blockCount == 5 ? BuildWaterMask(data, hfield, gridSize) : null;
+        var water = blockCount == 5 ? BuildWaterMask(data, hfield, gridSize, session?.Document?.Environment?.WorkingHeader) : null;
         var walls = new bool[blockCount][];
         for (var i = 0; i < blockCount; i++) walls[i] = SC2CostsAutoGen.NavmeshToImpassable(navmeshes[i]);
 
@@ -2597,12 +2597,12 @@ public static class SC2TerrainExporter
     /// <summary>Water cells of the Costs grid from the exported heightmap: vertex
     /// height below WaterElevation (the vanilla convention). Null when the
     /// heightmap does not cover the grid.</summary>
-    private static bool[] BuildWaterMask(SC2TerrainData data, HfieldModel hfield, int gridSize)
+    private static bool[] BuildWaterMask(SC2TerrainData data, HfieldModel hfield, int gridSize, byte[] workingHeader = null)
     {
         var mapX = hfield != null ? (int)hfield.MapX : 0;
         var mapY = hfield != null ? (int)hfield.MapY : 0;
         if (hfield?.Heightmap == null || mapX < gridSize || mapY < gridSize) return null;
-        var elevation = SC2CostsAutoGen.ExtractWaterElevation(data);
+        var elevation = SC2CostsAutoGen.ExtractWaterElevation(data, workingHeader);
         var water = new bool[gridSize * gridSize];
         for (var z = 0; z < gridSize; z++)
         for (var x = 0; x < gridSize; x++)

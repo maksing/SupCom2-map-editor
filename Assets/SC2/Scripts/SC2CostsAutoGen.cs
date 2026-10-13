@@ -121,11 +121,15 @@ public static class SC2CostsAutoGen
     /// <summary>Shared EnvironmentHeader -&gt; WaterElevation extraction, factored
     /// out of GenerateFromHeight so ComputeRawWaterMask below can use the exact
     /// same source without duplicating the header-parsing logic.</summary>
-    public static float ExtractWaterElevation(SC2TerrainData data)
+    /// <param name="workingHeader">The environment header the map document holds (SC2MapDocument.Environment.WorkingHeader). It follows an
+    /// edit of the water height at once, while data.EnvironmentHeader only catches up when the map is saved, so the water level of the
+    /// Environment tab is the one used whenever it is given.</param>
+    public static float ExtractWaterElevation(SC2TerrainData data, byte[] workingHeader = null)
     {
-        if (data.EnvironmentHeader == null || data.EnvironmentHeader.Length < 508) return 0f;
+        var header = workingHeader != null && workingHeader.Length >= 508 ? workingHeader : data.EnvironmentHeader;
+        if (header == null || header.Length < 508) return 0f;
         var info = new InfoModel();
-        Array.Copy(data.EnvironmentHeader, info.Header, 508);
+        Array.Copy(header, info.Header, 508);
         return info.WaterElevation;
     }
 
@@ -136,10 +140,10 @@ public static class SC2CostsAutoGen
     /// impassable regardless of tolerance (one cascade rule) and to build
     /// the mandatory shoreline safety band (another cascade rule) in
     /// SC2CostsShell.RecomputeDerivedCostsBlocks.</summary>
-    public static bool[] ComputeRawWaterMask(SC2TerrainData data, Func<float, float, float> sampleHeight)
+    public static bool[] ComputeRawWaterMask(SC2TerrainData data, Func<float, float, float> sampleHeight, byte[] workingHeader = null)
     {
         var gridSize = data.CostsGridSize;
-        var waterElevation = ExtractWaterElevation(data);
+        var waterElevation = ExtractWaterElevation(data, workingHeader);
         var result = new bool[gridSize * gridSize];
         for (var z = 0; z < gridSize; z++)
         for (var x = 0; x < gridSize; x++)
@@ -180,14 +184,15 @@ public static class SC2CostsAutoGen
     /// see SC2CostsShell's call sites, which use SC2LiveHeightGrid (the
     /// same merged live+imported projection Costs painting itself already
     /// moved to).</summary>
-    public static byte[] GenerateFromHeight(SC2TerrainData data, string blockName, Func<float, float, float> sampleHeight, Thresholds thresholds = null)
+    public static byte[] GenerateFromHeight(SC2TerrainData data, string blockName, Func<float, float, float> sampleHeight, Thresholds thresholds = null,
+        byte[] workingHeader = null)
     {
         thresholds ??= DefaultThresholds;
         var gridSize = data.CostsGridSize;
         var (sizeClass, _) = ClassifyBlockName(blockName, thresholds);
         var maxSlopeDeg = MaxSlopeFor(sizeClass, thresholds);
 
-        var waterElevation = ExtractWaterElevation(data);
+        var waterElevation = ExtractWaterElevation(data, workingHeader);
         var waterEnabled = data.PlayableWater;
 
         // With playable water on, block 0's water is ENTIRELY passable
