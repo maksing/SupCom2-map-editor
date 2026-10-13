@@ -819,6 +819,26 @@ public sealed partial class SC2GameViewEditorUI
         return string.IsNullOrEmpty(existing.DisplayName) && !string.IsNullOrEmpty(candidate.DisplayName);
     }
 
+    private const string ModdedSuffix = "modded";
+
+    /// <summary>A map opened from the game's archives is the editor's own copy of it, so its names say so: "modded" is added to the map
+    /// name (the technical folder and file name) and to the display name (what the game shows), and a map saved or exported from it
+    /// does not take the place of the original.</summary>
+    private void MarkArchiveMapAsModded(SC2TerrainData data)
+    {
+        var originalMapName = data.MapName;
+        if (!string.IsNullOrEmpty(data.MapName) && !data.MapName.EndsWith("_" + ModdedSuffix, System.StringComparison.OrdinalIgnoreCase))
+            data.MapName += "_" + ModdedSuffix;
+
+        var knownFields = _mapSession?.Document?.Scenario?.KnownFields;
+        var display = !string.IsNullOrEmpty(data.DisplayName) ? data.DisplayName : knownFields?.Name;
+        if (string.IsNullOrEmpty(display)) display = originalMapName;
+        if (!string.IsNullOrEmpty(display) && !display.EndsWith(" " + ModdedSuffix, System.StringComparison.OrdinalIgnoreCase))
+            display += " " + ModdedSuffix;
+        data.DisplayName = display;
+        if (knownFields != null) knownFields.Name = display;
+    }
+
     private void OpenArchiveMap(SC2ScenarioCandidate candidate)
     {
         if (!SC2GameArchiveRegistry.TryGetReader(out var reader))
@@ -854,7 +874,10 @@ public sealed partial class SC2GameViewEditorUI
         // actually added) doesn't leave the map in Import-only mode with
         // nothing to export.
         if (result.Success)
+        {
             data.ImportOnlyMode = true;
+            MarkArchiveMapAsModded(data);
+        }
         PersistFreshlyCreatedTerrainData(data);
         RecordLastOpenedMap(data);
         StartupComplete = true;
