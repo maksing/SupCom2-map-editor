@@ -123,9 +123,10 @@ public static class SC2TerrainMaterialFactory
     /// Cubemap/Texture3D picks under a raw AssetDatabase or Resources path
     /// instead, which ResolveEntry's own final by-name fallback against the
     /// catalog still resolves correctly.</summary>
-    public static string ResolveGamePath(Texture texture)
+    public static string ResolveGamePath(Texture texture) => ResolveGamePath(SC2TextureBrowser.ResolveEntry(texture));
+
+    public static string ResolveGamePath(SC2.MapEditor.Textures.SC2TextureCatalogEntry entry)
     {
-        var entry = SC2TextureBrowser.ResolveEntry(texture);
         if (entry == null) return "";
         // GamePath is only populated for a vanilla entry backed by a real
         // loose file on disk (see SC2TextureCatalogEntry.GamePath's own doc

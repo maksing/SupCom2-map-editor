@@ -1547,6 +1547,12 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUI.EndDisabledGroup();
 
         EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+        if (GUILayout.Button("Import waterDepth texture...", GUILayout.Height(SC2UiScale.Pxf(26f))))
+            ImportWaterDepthTexture();
+        DrawUnifiedNote("Uses an image file as the water depth texture (Mask1) instead of the generated one, and turns Auto-generate off. " +
+            "Alpha is the depth: 0 is land, a low alpha is the shoreline (strong foam), 255 is open water. The image covers the water " +
+            "depth area of Environment > Water.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
         if (SC2EnvFieldGui.PrimaryButton("Regenerate Preview", GUILayout.Height(SC2UiScale.Pxf(26f))))
             RegenerateWaterDepthPreview();
 
@@ -1558,6 +1564,36 @@ public class SC2TerrainShell : ScriptableObject
         }
 
         EndUnifiedPanelBox();
+    }
+
+    /// <summary>Picks an image file and makes it the Mask1 (waterDepth) texture of the water material. The file goes through the
+    /// custom texture import like any texture picked in the browser, and the Auto-generate option is switched off since the
+    /// export would otherwise replace the slot with the generated texture.</summary>
+    private void ImportWaterDepthTexture()
+    {
+#if UNITY_EDITOR
+        var path = EditorUtility.OpenFilePanel("Import waterDepth texture", "", "png,jpg,jpeg,dds");
+#else
+        var path = SC2RuntimeFileDialog.OpenFile("Import waterDepth texture", "Texture (*.png;*.jpg;*.jpeg;*.dds)", "png;*.jpg;*.jpeg;*.dds");
+#endif
+        if (string.IsNullOrEmpty(path)) return;
+
+        var result = SC2CustomTextureImporter.Import(path, SC2.MapEditor.Textures.SC2TextureUsage.Mask, true);
+        if (!result.Success)
+        {
+            EditorUtility.DisplayDialog("Import waterDepth texture", "The texture could not be imported: " + result.Error, "OK");
+            return;
+        }
+
+        RecordUndoCheckpoint("Import Water Depth Texture");
+        EnsureWaterTexturePaths();
+        _data.WaterDepthAutoGenerate = false;
+        _data.WaterTexturePaths[6] = SC2TerrainMaterialFactory.ResolveGamePath(result.Entry);
+        DestroyWaterDepthPreview();
+        // The live water keeps its material while the environment header is unchanged: make it load the new texture.
+        SC2WaterPreview.InvalidateMaterial();
+        EditorUtility.SetDirty(_data);
+        MarkDirtyAndRepaint();
     }
 
     private void RegenerateWaterDepthPreview()

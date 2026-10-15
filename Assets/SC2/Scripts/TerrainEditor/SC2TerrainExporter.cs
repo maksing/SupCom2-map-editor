@@ -942,6 +942,54 @@ public static class SC2TerrainExporter
         if (infoModelForWater.WaterEnabled != 0 && !alreadyHasWater)
             SC2WaterPlane.AppendToExportModel(model, data, SC2WaterPlane.PlaneHeight(data, infoModelForWater.WaterElevation));
 
+        // A water texture picked or imported from a file is stored as the path of its copy in the texture library, which exists on this
+        // machine only: the file goes into the map and the slot points at that copy. The waterDepth texture (Mask1) takes the map's own
+        // waterDepth file name, the one the game falls back to.
+        var waterDepthFromFile = false;
+        var exportedWater = model.Materials.Find(SC2HfieldProjectionService.IsWaterMaterial);
+        if (exportedWater != null)
+            for (var slot = 0; slot < exportedWater.TexturePaths.Length; slot++)
+            {
+                var waterPath = exportedWater.TexturePaths[slot];
+                if (string.IsNullOrEmpty(waterPath) || waterPath.Length < 4 || waterPath[0] != '/'
+                    || !char.IsLetter(waterPath[1]) || waterPath[2] != ':' || waterPath[3] != '/')
+                    continue;
+                // The generated waterDepth replaces whatever the slot holds.
+                if (slot == 6 && data.WaterDepthAutoGenerate) continue;
+
+                var sourceFile = waterPath.Substring(1);
+                if (!File.Exists(sourceFile))
+                {
+                    warnings.Add($"Water texture slot {slot}: the file '{sourceFile}' does not exist on this machine, the slot was left empty.");
+                    exportedWater.TexturePaths[slot] = null;
+                    continue;
+                }
+                string destination, gamePath;
+                if (slot == 6)
+                {
+                    destination = Path.Combine(mapDir, $"{mapName}.waterDepth.dds");
+                    gamePath = $"/maps/{mapName}/{mapName}.waterDepth.dds";
+                }
+                else
+                {
+                    var fileName = UniqueFileName(MakeSafe(Path.GetFileNameWithoutExtension(sourceFile)) + ".dds", null);
+                    destination = Path.Combine(texDir, fileName);
+                    gamePath = texGamePath + fileName;
+                }
+                try
+                {
+                    File.Copy(sourceFile, destination, true);
+                    copied++;
+                    exportedWater.TexturePaths[slot] = gamePath;
+                    if (slot == 6) waterDepthFromFile = true;
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"Water texture slot {slot}: {sourceFile}: {ex.Message}");
+                    exportedWater.TexturePaths[slot] = null;
+                }
+            }
+
         // terrain.bdf always uses the reverse-engineered vanilla-candidate split (same as decals.bdf/collision2.bdf), see
         // TerrainBspBuilder.FindBestVanillaCandidateSplit for why. The old per-map single-leaf switch
         // (SC2TerrainData.SingleBspNodePerLayer) is no longer read: its UI is gone, so a value saved with it on could never
@@ -1221,6 +1269,15 @@ public static class SC2TerrainExporter
             {
                 SC2Log.LogWarning("[SC2Exporter] WaterDepthAutoGenerate is on but no Water material exists in the exported model — skipped.");
             }
+        }
+
+        // An imported waterDepth image covers the Environment's depth area; with none set it covers the whole map, as the generated one does.
+        if (waterDepthFromFile && infoModel.WaterDepthBoundsSizeX == 0f && infoModel.WaterDepthBoundsSizeY == 0f)
+        {
+            infoModel.WaterDepthOriginX = 0f;
+            infoModel.WaterDepthOriginY = 0f;
+            infoModel.WaterDepthBoundsSizeX = data.CostsGridSize;
+            infoModel.WaterDepthBoundsSizeY = data.CostsGridSize;
         }
 
         // The baked point-cloud volumes only fit the box they were baked over: it goes into info.bdf, replacing
