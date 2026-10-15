@@ -269,6 +269,11 @@ Shader "SC2/Water"
                 // in isolation.
                 depthSample.y = 1.0 - depthSample.y;
                 float4 depthColor = tex2D(_Mask1Tex, depthSample);
+                // A mask texel with alpha 0 is land: there is no water there. The short fade over the lowest alphas keeps the
+                // edge smooth where the texel is filtered with a wet neighbour; what is faded out completely is not drawn at all,
+                // so it does not write depth either.
+                float maskPresence = (_HasMask1Tex > 0.5 && inRealDepthArea) ? saturate(depthColor.a / 0.05) : 1.0;
+                clip(maskPresence - 0.01);
                 float depthScalar = saturate((-depthColor.a + _WaterWaves.x) * _WaterWaves.y);
                 // Same 2026-08-12 fix as shoreColor below, applied here too:
                 // depthScalar also drives the shore-normal blend a few lines
@@ -395,6 +400,7 @@ Shader "SC2/Water"
 
                 float fogAmount = ComputeSC2Fog(viewVector);
                 finalColor.rgb = lerp(finalColor.rgb, _SC2FogColor.rgb, fogAmount);
+                finalColor.a *= maskPresence;
                 return finalColor;
             }
             ENDCG
