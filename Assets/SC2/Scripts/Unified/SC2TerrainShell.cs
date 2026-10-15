@@ -550,6 +550,7 @@ public class SC2TerrainShell : ScriptableObject
         DisposeSubEditors();
         DestroyPreview();
         SC2WaterPreview.Destroy();
+        SC2SkyPreview.Destroy();
         DestroyWaterDepthPreview();
     }
 
@@ -2270,6 +2271,7 @@ public class SC2TerrainShell : ScriptableObject
         // elevation, or a wrong one if WaterElevation didn't match the
         // import's authored height).
         SC2WaterPreview.Ensure(_data, Session, _waterOverlayVisible, GetImportedTerrainsForExport?.Invoke());
+        SC2SkyPreview.Ensure(_data, Session);
 
         // Same "keep it live every tick" reasoning as SC2WaterPreview just
         // above. EnsureBackgroundRuntime is cheap once built (early-out on
