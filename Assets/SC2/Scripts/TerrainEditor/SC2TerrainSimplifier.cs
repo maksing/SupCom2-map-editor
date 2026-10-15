@@ -355,7 +355,8 @@ public static class SC2TerrainSimplifier
         for (var i = 0; i < lv.Length; i++)
         {
             long key;
-            if (boundary != null && boundary.Contains(l2g[i]))
+            // The junction with water is not simplified at all: its vertices stay as they are, like the vertices of a pair border.
+            if ((boundary != null && boundary.Contains(l2g[i])) || (shore != null && shore.IsShore(lv[i].y)))
             {
                 // Boundary vertices stay unique if a future caller provides a
                 // real boundary set. The current exporter passes an empty set.
@@ -363,13 +364,9 @@ public static class SC2TerrainSimplifier
             }
             else
             {
-                // The junction with water keeps more of its shape: its vertices merge on a finer grid and only with each other.
-                var nearWater = shore != null && shore.IsShore(lv[i].y);
-                var refine = nearWater ? shore.Refine : 1;
-                var ix = Mathf.Clamp(Mathf.RoundToInt((lv[i].x - minX) * invX * refine), 0, cellsX * refine);
-                var iz = Mathf.Clamp(Mathf.RoundToInt((lv[i].z - minZ) * invZ * refine), 0, cellsZ * refine);
+                var ix = Mathf.Clamp(Mathf.RoundToInt((lv[i].x - minX) * invX), 0, cellsX);
+                var iz = Mathf.Clamp(Mathf.RoundToInt((lv[i].z - minZ) * invZ), 0, cellsZ);
                 key = ((long)ix << 32) | (uint)iz;
-                if (nearWater) key ^= 1L << 62;
                 // Vertices of different regions never merge, even in the same grid cell (see Build's clusterRegion).
                 if (clusterRegion != null) key ^= (long)clusterRegion(lv[i].x, lv[i].z) << 56;
             }

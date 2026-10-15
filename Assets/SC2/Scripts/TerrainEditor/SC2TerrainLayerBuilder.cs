@@ -59,7 +59,7 @@ public static class SC2TerrainLayerBuilder
     /// protectRingAroundUnassigned: see SC2TerrainSimplifier.FindBoundaryVertices.
     /// clusterRegion: maps a vertex position (x, z) to a region id; the simplifier never merges vertices of different regions. For
     /// a surface with a hole, regions that are each convex and clear of the hole keep a merged vertex out of it.
-    /// shoreDetail: when set, the ground near the water surface is simplified on a finer grid than the rest (see SC2ShoreDetail).</summary>
+    /// shoreDetail: when set, the ground near the water surface is not simplified at all (see SC2ShoreDetail).</summary>
     public static SC2TerrainBuildResult Build(
         SC2TerrainData data,
         bool sortByTriangleCount,
