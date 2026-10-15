@@ -344,7 +344,7 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// size, see SC2DdsEncoder.BuildDxt5) — clamped to the nearest valid
     /// value wherever it's used, never asserted here so a stale saved value
     /// from a UI change (e.g. resolution list edit) never throws.</summary>
-    public int WaterDepthResolution = 512;
+    public int WaterDepthResolution = DefaultWaterDepthResolution;
 
     /// <summary>World units of shoreline-to-open-water distance over which
     /// generated alpha ramps from WaterDepthMinAlpha up to fully opaque
@@ -352,27 +352,27 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// shader's shoreColor term reads alpha near 0 as strong foam, see that
     /// shader's own FoamFalloffPower comment) further out from the actual
     /// shoreline.</summary>
-    public float WaterDepthMargin = 64f;
+    public float WaterDepthMargin = DefaultWaterDepthMargin;
 
     /// <summary>Exponent shaping the alpha ramp across WaterDepthMargin:
     /// t = clamp01(distanceFromShore / WaterDepthMargin), alpha = lerp(
     /// WaterDepthMinAlpha, 1, t^WaterDepthFalloffPower). 1 = linear; &gt;1
     /// keeps alpha low (strong foam) longer right at the shore before
     /// rising sharply; &lt;1 rises immediately.</summary>
-    public float WaterDepthFalloffPower = 2f;
+    public float WaterDepthFalloffPower = DefaultWaterDepthFalloffPower;
 
     /// <summary>Alpha value written for a water texel sitting exactly at the
     /// shoreline (distance 0) — must stay above 0 (SC2Water.shader treats
     /// alpha==0 as "no water here at all", distinct from "water, but with
     /// maximum foam"), so this is a small positive floor rather than 0.</summary>
-    public float WaterDepthMinAlpha = 0.04f;
+    public float WaterDepthMinAlpha = DefaultWaterDepthMinAlpha;
 
     /// <summary>How many texels of the generated waterDepth texture's land side get a non-zero
     /// alpha instead of the usual hard 0 cutoff right at the coastline — i.e. how far the
     /// water-depth pixels extend into the terrain boundary. Applies to the Game View preview
     /// (on Regenerate Preview) and to the exported .waterDepth.dds. 0 = old hard-cutoff
     /// behavior.</summary>
-    public float WaterDepthLandBleedTexels = 10f;
+    public float WaterDepthLandBleedTexels = DefaultWaterDepthLandBleedTexels;
 
     /// <summary>When on, forces the outermost ring of texels of the
     /// generated waterDepth texture to read as water (alpha 1, ignoring the
@@ -380,7 +380,26 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// that runs off the edge of the analyzed heightfield rect so the mask
     /// doesn't fade to "no water" right where the water actually continues
     /// past the texture's own bounds.</summary>
-    public bool WaterDepthPaintBorder = true;
+    public bool WaterDepthPaintBorder = DefaultWaterDepthPaintBorder;
+
+    public const int DefaultWaterDepthResolution = 512;
+    public const float DefaultWaterDepthMargin = 64f;
+    public const float DefaultWaterDepthFalloffPower = 2f;
+    public const float DefaultWaterDepthMinAlpha = 0.04f;
+    public const float DefaultWaterDepthLandBleedTexels = 10f;
+    public const bool DefaultWaterDepthPaintBorder = true;
+
+    /// <summary>Returns the settings of the generated waterDepth texture to their defaults. Whether it is generated at all
+    /// (<see cref="WaterDepthAutoGenerate"/>) is left as it is.</summary>
+    public void ResetWaterDepthSettings()
+    {
+        WaterDepthResolution = DefaultWaterDepthResolution;
+        WaterDepthMargin = DefaultWaterDepthMargin;
+        WaterDepthFalloffPower = DefaultWaterDepthFalloffPower;
+        WaterDepthMinAlpha = DefaultWaterDepthMinAlpha;
+        WaterDepthLandBleedTexels = DefaultWaterDepthLandBleedTexels;
+        WaterDepthPaintBorder = DefaultWaterDepthPaintBorder;
+    }
 
     /// <summary>DEAD — kept only so saved maps and undo snapshots still read and write the same data. The generated waterDepth
     /// texture always gets a 1-texel ring of alpha 255 around its outer edge (SC2WaterDepthTextureGenerator.Generate), whatever

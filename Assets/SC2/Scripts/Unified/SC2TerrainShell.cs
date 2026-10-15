@@ -1547,6 +1547,15 @@ public class SC2TerrainShell : ScriptableObject
         EditorGUI.EndDisabledGroup();
 
         EditorGUILayout.Space(SC2UiScale.Pxf(6f));
+        if (GUILayout.Button("Reset generation settings to defaults", GUILayout.Height(SC2UiScale.Pxf(26f))))
+        {
+            RecordUndoCheckpoint("Reset Water Depth Settings");
+            _data.ResetWaterDepthSettings();
+            EditorUtility.SetDirty(_data);
+            MarkDirtyAndRepaint();
+        }
+        DrawUnifiedNote("Restores the resolution, shore margin, falloff, min alpha, land bleed and border settings above. Auto-generate itself stays as it is.");
+        EditorGUILayout.Space(SC2UiScale.Pxf(6f));
         if (GUILayout.Button("Import waterDepth texture...", GUILayout.Height(SC2UiScale.Pxf(26f))))
             ImportWaterDepthTexture();
         DrawUnifiedNote("Uses an image file as the water depth texture (Mask1) instead of the generated one, and turns Auto-generate off. " +
