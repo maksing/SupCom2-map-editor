@@ -1154,6 +1154,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         Camera.onPreRender += ApplyTopViewMirrorPreRender;
         Camera.onPostRender += ApplyTopViewMirrorPostRender;
         _pendingInitialTopView = true;
+        LoadVisibilitySettings();
 #if UNITY_EDITOR
         EditorApplication.update += EditorTick;
 #else
@@ -2805,6 +2806,45 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // HandleCostsGameViewInput's cross-tab branch, etc.) ever stuck. Commit here,
         // every frame this menu is open, so a click survives past the next repaint.
         CommitOverlayToContext();
+        SaveVisibilitySettingsIfChanged();
+    }
+
+    private bool[] ReadVisibilityFlags() => new[]
+    {
+        OverlayTerrain, OverlayHfield, OverlayCosts, OverlayCollision2,
+        OverlayProps, OverlayMarkers, OverlayUnits, OverlayReferenceUnits,
+        OverlayGraphLand, OverlayGraphAir, OverlayGraphNaval, OverlayGraphAmphibious,
+        OverlayChains, OverlayAreas, OverlayDecals, OverlayWater, OverlayRNM, OverlayGrid, OverlayWireframe,
+    };
+
+    private void WriteVisibilityFlags(bool[] v)
+    {
+        OverlayTerrain = v[0]; OverlayHfield = v[1]; OverlayCosts = v[2]; OverlayCollision2 = v[3];
+        OverlayProps = v[4]; OverlayMarkers = v[5]; OverlayUnits = v[6]; OverlayReferenceUnits = v[7];
+        OverlayGraphLand = v[8]; OverlayGraphAir = v[9]; OverlayGraphNaval = v[10]; OverlayGraphAmphibious = v[11];
+        OverlayChains = v[12]; OverlayAreas = v[13]; OverlayDecals = v[14]; OverlayWater = v[15];
+        OverlayRNM = v[16]; OverlayGrid = v[17]; OverlayWireframe = v[18];
+    }
+
+    /// <summary>What the Visibility menu showed when it was last saved or loaded.</summary>
+    private bool[] _savedVisibility;
+
+    /// <summary>The toggles come back as the user left them (see <see cref="SC2VisibilitySettings"/>); the shared context, if any, follows.</summary>
+    private void LoadVisibilitySettings()
+    {
+        var flags = ReadVisibilityFlags();
+        SC2VisibilitySettings.Load(flags);
+        WriteVisibilityFlags(flags);
+        _savedVisibility = (bool[])flags.Clone();
+        CommitOverlayToContext();
+    }
+
+    private void SaveVisibilitySettingsIfChanged()
+    {
+        var flags = ReadVisibilityFlags();
+        if (_savedVisibility != null && System.Linq.Enumerable.SequenceEqual(flags, _savedVisibility)) return;
+        SC2VisibilitySettings.Save(flags);
+        _savedVisibility = flags;
     }
 
     private void DrawToolsMenu()
