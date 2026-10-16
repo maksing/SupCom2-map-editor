@@ -1065,7 +1065,10 @@ public static class SC2TerrainExporter
         // projection (built further below in BuildCollision2Model) skips
         // materials in data.Collision2ExcludedMaterialNames.
         // Props marked "include in heightmap" are ground here too (never written to terrain.bdf).
-        var propSolids = SC2PropHeightmapGeometry.BuildSolids(data);
+        // The props that follow the heightmap were put on the full-resolution ground of the editor, but the game draws the simplified
+        // mesh: they are put on that surface instead, at the same height above it.
+        var exportProps = SnapPropsToExportedSurface(data, model, hfieldMapX, hfieldMapY, infoModelForWater);
+        var propSolids = SC2PropHeightmapGeometry.BuildSolids(data, exportProps);
         var hfieldModel = SC2HfieldProjectionService.Project(model, existingTerrainTypes, hfieldMapX, hfieldMapY, extraSolids: propSolids);
         var hfieldContainer = HfieldBdf.Create(hfieldModel, platform);
         var hfieldBytes = hfieldContainer.Write(HfieldBdf.Padding);
@@ -1303,7 +1306,7 @@ public static class SC2TerrainExporter
         // doc comment for exactly which parts of that text are verified
         // against real files vs. best-effort.
         ReportProgress("Building mapobjs.bdf...", 0.995f);
-        var mapObjsModel = SC2ObjectsExport.BuildMapObjsModel(data, session?.Document?.Environment?.WorkingHeader);
+        var mapObjsModel = SC2ObjectsExport.BuildMapObjsModel(data, session?.Document?.Environment?.WorkingHeader, exportProps);
         var (mapObjsData, mapObjsOt) = MapObjsBdf.Serialize(mapObjsModel, platform);
         var mapObjsBytes = new BdfContainer { Platform = platform, Data = mapObjsData, OffsetTable = mapObjsOt, NumFiles = 1 }.Write(MapObjsBdf.Padding);
         SC2Log.Log($"[SC2Exporter] mapobjs.bdf built: {mapObjsModel.Props.Count} props, {mapObjsModel.Markers.Count} markers, {mapObjsModel.Graphs.Count} graphs.");
@@ -3014,6 +3017,33 @@ public static class SC2TerrainExporter
     /// actual export, Collision2 preview) need the genuine simplified mesh
     /// and must leave this false; SC2LiveHeightGrid's rebuild is the only
     /// caller that only needs accurate triangle positions and opts in.</param>
+    /// <summary>The props of the export: each prop that follows the heightmap (not the 3D model, not free) stands on the highest surface of
+    /// <paramref name="model"/>, the mesh that ships, at its own height above it (and not below the water when it rests on it). The
+    /// props of the map data are left as they are, so the editor still shows them on the ground it draws.</summary>
+    private static List<SC2ObjProp> SnapPropsToExportedSurface(SC2TerrainData data, TerrainModel model, int mapX, int mapY, InfoModel water)
+    {
+        var result = new List<SC2ObjProp>(data.ObjProps.Count);
+        SC2WaterFloorSampler surface = null;
+        var moved = 0;
+        var largest = 0f;
+        foreach (var prop in data.ObjProps)
+        {
+            if (prop == null || !prop.AnchorToTerrain || prop.AnchorToModel) { result.Add(prop); continue; }
+            surface ??= SC2WaterFloorSampler.Build(model, mapX, mapY, water.WaterElevation, SC2HfieldProjectionService.IsWaterMaterial);
+            if (!surface.TrySampleTop(prop.Position.x, prop.Position.z, out var ground)) { result.Add(prop); continue; }
+            if (prop.OnWaterSurface && water.WaterEnabled != 0) ground = Mathf.Max(ground, water.WaterElevation);
+            var y = ground + prop.HeightOffset;
+            var shift = y - prop.Position.y;
+            if (Mathf.Abs(shift) < 0.0005f) { result.Add(prop); continue; }
+            result.Add(prop.WithPosition(new Vector3(prop.Position.x, y, prop.Position.z)));
+            moved++;
+            largest = Mathf.Max(largest, Mathf.Abs(shift));
+        }
+        if (moved > 0)
+            SC2Log.Log($"[SC2Exporter] {moved} prop(s) put on the exported surface instead of the full-resolution ground, the largest by {largest:0.###} units.");
+        return result;
+    }
+
     public static TerrainModel BuildPreviewGeometryModel(SC2TerrainData data, List<SC2ImportedTerrainExportData> importedTerrains = null, SC2MapSession session = null, bool skipSimplification = false)
     {
         var model = new TerrainModel { Version = 6 };

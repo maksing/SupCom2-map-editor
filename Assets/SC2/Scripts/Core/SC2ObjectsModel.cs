@@ -42,6 +42,15 @@ public class SC2ObjProp
     /// built from it) is made of, so a building a unit must climb or walk around is part of the ground it stands on.
     /// Off by default: a prop is only a decoration.</summary>
     public bool IncludeInHeightmap;
+
+    /// <summary>A copy of this prop standing at <paramref name="position"/>.</summary>
+    public SC2ObjProp WithPosition(Vector3 position)
+    {
+        var copy = (SC2ObjProp)MemberwiseClone();
+        copy.Position = position;
+        return copy;
+    }
+
     public bool CastsShadow
     {
         get => (Flags & NoShadowFlag) == 0;

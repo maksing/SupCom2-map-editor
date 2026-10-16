@@ -55,11 +55,12 @@ public static class SC2PropHeightmapGeometry
 
     /// <summary>One solid for every included prop, or an empty list when none is marked or the game archives are not available.
     /// Props whose blueprint or SCM cannot be found are skipped.</summary>
-    public static List<TerrainModel> BuildSolids(SC2TerrainData data)
+    public static List<TerrainModel> BuildSolids(SC2TerrainData data, IEnumerable<SC2ObjProp> props = null)
     {
         var solids = new List<TerrainModel>();
-        if (data == null || data.ObjProps == null) return solids;
-        var included = data.ObjProps.Where(p => p != null && p.IncludeInHeightmap && !string.IsNullOrEmpty(p.BlueprintPath)).ToList();
+        var source = props ?? data?.ObjProps;
+        if (data == null || source == null) return solids;
+        var included = source.Where(p => p != null && p.IncludeInHeightmap && !string.IsNullOrEmpty(p.BlueprintPath)).ToList();
         if (included.Count == 0 || AssetResolver == null) return solids;
         if (!SC2GameArchiveRegistry.TryGetReader(out var reader) || reader == null) return solids;
 

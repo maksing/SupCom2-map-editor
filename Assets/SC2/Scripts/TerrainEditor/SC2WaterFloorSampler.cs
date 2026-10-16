@@ -17,11 +17,12 @@ public sealed class SC2WaterFloorSampler
 {
     private readonly int _width, _height;
     private readonly float[] _effective;
+    private readonly float[] _top;
     private readonly bool[] _covered;
 
-    private SC2WaterFloorSampler(int width, int height, float[] effective, bool[] covered)
+    private SC2WaterFloorSampler(int width, int height, float[] effective, float[] top, bool[] covered)
     {
-        _width = width; _height = height; _effective = effective; _covered = covered;
+        _width = width; _height = height; _effective = effective; _top = top; _covered = covered;
     }
 
     /// <param name="mapX">Grid points along X (cells + 1); the grid is one world unit per cell, from world (0, 0).</param>
@@ -57,7 +58,7 @@ public sealed class SC2WaterFloorSampler
             // A surface at or below the water wins over a higher one (a deck above it); with only a surface above the water, that one.
             effective[i] = hasFloor[i] ? floor[i] : top[i];
         }
-        return new SC2WaterFloorSampler(mapX, mapY, effective, hasTop);
+        return new SC2WaterFloorSampler(mapX, mapY, effective, top, hasTop);
     }
 
     private static void Rasterize(TerrainVertex v0, TerrainVertex v1, TerrainVertex v2,
@@ -86,6 +87,22 @@ public sealed class SC2WaterFloorSampler
             if (!hasTop[idx] || height > top[idx]) { top[idx] = height; hasTop[idx] = true; }
             if (height <= ceiling && (!hasFloor[idx] || height > floor[idx])) { floor[idx] = height; hasFloor[idx] = true; }
         }
+    }
+
+    /// <summary>The height of the highest surface of the model (what the heightfield sees) at world (<paramref name="x"/>,
+    /// <paramref name="z"/>): bilinear between the four grid points around it. False when any of them is not covered by a triangle.</summary>
+    public bool TrySampleTop(float x, float z, out float height)
+    {
+        height = 0f;
+        var gx = Mathf.Clamp(x, 0f, _width - 1);
+        var gz = Mathf.Clamp(z, 0f, _height - 1);
+        var x0 = Mathf.FloorToInt(gx); var z0 = Mathf.FloorToInt(gz);
+        var x1 = Mathf.Min(_width - 1, x0 + 1); var z1 = Mathf.Min(_height - 1, z0 + 1);
+        var i00 = z0 * _width + x0; var i10 = z0 * _width + x1; var i01 = z1 * _width + x0; var i11 = z1 * _width + x1;
+        if (!_covered[i00] || !_covered[i10] || !_covered[i01] || !_covered[i11]) return false;
+        var tx = gx - x0; var tz = gz - z0;
+        height = Mathf.Lerp(Mathf.Lerp(_top[i00], _top[i10], tx), Mathf.Lerp(_top[i01], _top[i11], tx), tz);
+        return true;
     }
 
     /// <summary>The height at world (<paramref name="x"/>, <paramref name="z"/>): bilinear between the four grid points around it, or

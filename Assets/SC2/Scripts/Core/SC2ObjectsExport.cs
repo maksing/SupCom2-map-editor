@@ -149,12 +149,13 @@ public static class SC2ObjectsExport
 
     // ---- mapobjs.bdf ----
 
-    public static MapObjsModel BuildMapObjsModel(SC2TerrainData data, byte[] workingEnvironmentHeader = null)
+    /// <param name="props">The props to write instead of data.ObjProps: the export puts them on the ground it ships.</param>
+    public static MapObjsModel BuildMapObjsModel(SC2TerrainData data, byte[] workingEnvironmentHeader = null, IEnumerable<SC2ObjProp> props = null)
     {
         data.EnsureObjectIds();
         var model = new MapObjsModel { FileVersion = 4 };
 
-        foreach (var p in data.ObjProps)
+        foreach (var p in props ?? data.ObjProps)
         {
             model.Props.Add(new MapProp
             {
