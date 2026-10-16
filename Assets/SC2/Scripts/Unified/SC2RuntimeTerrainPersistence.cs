@@ -1035,14 +1035,15 @@ public static class SC2RuntimeTerrainPersistence
             for (var f = 0; f < flags.Count; f++)
                 flagDtos[f] = new ShaderFlagDto { Key = flags[f].Key, Value = flags[f].Value };
 
-            if (!string.IsNullOrEmpty(p.RnmMaskName) && (p.RnmMaskBytes?.Length ?? 0) > 0 && !maskSets.ContainsKey(p.RnmMaskName))
+            // A mask set also holds the baked lighting: a group with a bake and no painted mask still needs one.
+            if (!string.IsNullOrEmpty(p.RnmMaskName) && SC2TerrainLegacyBridge.HasMaskData(p) && !maskSets.ContainsKey(p.RnmMaskName))
             {
                 maskSets[p.RnmMaskName] = new RnmMaskSetDto
                 {
                     Name = p.RnmMaskName,
                     Width = p.MaskWidth,
                     Height = p.MaskHeight,
-                    MaskBytes = p.RnmMaskBytes,
+                    MaskBytes = p.RnmMaskBytes ?? Array.Empty<byte>(),
                     BakedRgb0 = p.RnmBakedRgb0 ?? Array.Empty<byte>(),
                     BakedRgb1 = p.RnmBakedRgb1 ?? Array.Empty<byte>(),
                     BakedRgb2 = p.RnmBakedRgb2 ?? Array.Empty<byte>(),

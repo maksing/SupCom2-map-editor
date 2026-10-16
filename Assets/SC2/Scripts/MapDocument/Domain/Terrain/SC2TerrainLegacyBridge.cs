@@ -224,7 +224,9 @@ namespace SC2.MapEditor.Document
             EnsureId(p);
 
             string rnmSetId = "";
-            if (p.RnmMaskBytes != null && p.RnmMaskBytes.Length > 0)
+            // The mask set carries the baked lighting too, so a pair with a bake needs one even when nobody painted its mask:
+            // without it the lighting map of such a mask group was lost on the next load.
+            if (HasMaskData(p))
             {
                 var existing = doc.Rnm.Find(p.RnmMaskName);
                 if (existing == null)
@@ -246,7 +248,7 @@ namespace SC2.MapEditor.Document
                         Name = p.RnmMaskName,
                         Width = p.MaskWidth,
                         Height = p.MaskHeight,
-                        MaskBytes = blobStore.Put(new MemoryStream(p.RnmMaskBytes)),
+                        MaskBytes = PutIfAny(p.RnmMaskBytes),
                         // Baked lighting rides along with the mask it belongs
                         // to; every pair sharing this name shares one bake.
                         BakedRgb0 = PutIfAny(p.RnmBakedRgb0),
@@ -282,6 +284,12 @@ namespace SC2.MapEditor.Document
                 EnvironmentForceExport = p.EnvironmentForceExport,
             };
         }
+
+        /// <summary>True when the pair holds a painted blend mask or a baked lighting map: either one belongs in its mask set.</summary>
+        public static bool HasMaskData(SC2MaterialPair p) =>
+            (p.RnmMaskBytes?.Length ?? 0) > 0
+            || (p.RnmBakedRgb0?.Length ?? 0) > 0 || (p.RnmBakedRgb1?.Length ?? 0) > 0
+            || (p.RnmBakedRgb2?.Length ?? 0) > 0 || (p.RnmBakedShadowAlpha?.Length ?? 0) > 0;
 
         private static string ResolveMaterialId(int legacyIndex, SC2TerrainDocument doc)
         {

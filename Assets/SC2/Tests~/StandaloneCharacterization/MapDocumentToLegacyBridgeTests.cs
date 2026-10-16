@@ -294,6 +294,97 @@ public class MapDocumentToLegacyBridgeTests
         }
     }
 
+    private static byte[] Filled(int length, byte value)
+    {
+        var bytes = new byte[length];
+        Array.Fill(bytes, value);
+        return bytes;
+    }
+
+    [Fact]
+    public void ReconstructTerrain_BakedLightingSurvives_WhenThePairHasNoPaintedMask()
+    {
+        // A mask group nobody painted has no RnmMaskBytes, but a bake still gives its pairs baked lighting: it is the lighting map
+        // of the map and must come back after a save and a reload.
+        var store = NewStore(out var root);
+        try
+        {
+            const int w = 4, h = 2, n = w * h;
+            var pair = new SC2MaterialPair
+            {
+                Id = "pair-a", RnmMaskName = "mask01", MaskWidth = w, MaskHeight = h,
+                RnmBakedRgb0 = Filled(n * 3, 10), RnmBakedRgb1 = Filled(n * 3, 20), RnmBakedRgb2 = Filled(n * 3, 30),
+                RnmBakedShadowAlpha = Filled(n, 40),
+            };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material>(), new List<SC2MaterialPair> { pair },
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+
+            var result = SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store);
+
+            var back = result.Pairs[0];
+            Assert.Equal(w, back.MaskWidth);
+            Assert.Equal(h, back.MaskHeight);
+            Assert.True(back.HasBakedRnmLighting);
+            Assert.Equal(Filled(n * 3, 10), back.RnmBakedRgb0);
+            Assert.Equal(Filled(n * 3, 20), back.RnmBakedRgb1);
+            Assert.Equal(Filled(n * 3, 30), back.RnmBakedRgb2);
+            Assert.Equal(Filled(n, 40), back.RnmBakedShadowAlpha);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ReconstructTerrain_PairsOfOneMaskNameShareTheBake_EvenWithoutPaintedMask()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            const int w = 2, h = 2, n = w * h;
+            SC2MaterialPair NewPair(string id) => new SC2MaterialPair
+            {
+                Id = id, RnmMaskName = "mask01", MaskWidth = w, MaskHeight = h,
+                RnmBakedRgb0 = Filled(n * 3, 1), RnmBakedRgb1 = Filled(n * 3, 2), RnmBakedRgb2 = Filled(n * 3, 3),
+            };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material>(), new List<SC2MaterialPair> { NewPair("a"), NewPair("b") },
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+
+            var result = SC2MapDocumentToLegacyBridge.ReconstructTerrain(doc, store);
+
+            Assert.Single(doc.Rnm.MaskSets);
+            Assert.True(result.Pairs[0].HasBakedRnmLighting);
+            Assert.True(result.Pairs[1].HasBakedRnmLighting);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ReconstructTerrain_PairWithNoMaskAndNoBake_StaysWithoutMaskSet()
+    {
+        var store = NewStore(out var root);
+        try
+        {
+            var pair = new SC2MaterialPair { Id = "pair-a", RnmMaskName = "mask01" };
+            var doc = SC2TerrainLegacyBridge.BuildFromLegacy(
+                new List<SC2Material>(), new List<SC2MaterialPair> { pair },
+                Array.Empty<float>(), Array.Empty<short>(), 0, 0, 1f, SymmetryMode.None, Vector3.zero, store);
+
+            Assert.Empty(doc.Rnm.MaskSets);
+            Assert.Equal("", doc.MaterialPairs[0].RnmSetId);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     [Fact]
     public void ReconstructTerrain_RoundTripsRnmMaskBytes()
     {
