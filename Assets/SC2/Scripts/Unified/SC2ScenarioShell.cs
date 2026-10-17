@@ -223,8 +223,8 @@ public sealed class SC2ScenarioShell
             ImportCustomMinimap();
         if (Data.CustomMinimapPng != null && Data.CustomMinimapPng.Length > 0)
         {
-            SC2TerrainShell.DrawUnifiedNote("A custom minimap image is in use: export, the previews and the Lobby Spawns editor use it instead of rendering the map.");
-            if (GUILayout.Button("Remove Custom Minimap (render the map again)", GUILayout.Width(w), GUILayout.MaxWidth(w)))
+            SC2TerrainShell.DrawUnifiedNote("A custom minimap image is in use: export, the previews and the Lobby Spawns editor use it instead of rendering the map. Removing it makes them render the map again.");
+            if (GUILayout.Button("Remove Custom Minimap", GUILayout.Width(w), GUILayout.MaxWidth(w)))
             {
                 Data.CustomMinimapPng = null;
                 EditorUtility.SetDirty(Data);
