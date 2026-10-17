@@ -203,15 +203,13 @@ public sealed class SC2DecalsShell : IDisposable
         // modal is where a new rect's position/size actually gets
         // configured, so it's the one real place to add one from.
         // The one real place to add/arrange a decal's atlas rect — the
-        // primary action of this whole section, not a peer of Validate —
-        // so it gets its own full-width, taller row, matching this
-        // project's established "Create New Map"-style prominent-button
-        // convention instead of sharing a row of equal-weight buttons.
+        // primary action of this whole section, so it gets its own
+        // full-width, taller row, matching this project's established
+        // "Create New Map"-style prominent-button convention.
         GUI.enabled = _diffuseAtlas != null;
         if (GUILayout.Button(_atlasWindowOpen ? "Atlas Editor open" : "Open Atlas Editor", GUILayout.Width(w), GUILayout.Height(SC2UiScale.Pxf(30f))))
         { _atlasWindowOpen = true; CancelTransform(false); }
         GUI.enabled = true;
-        if (GUILayout.Button("Validate", GUILayout.Width(w))) Validate();
         var keepOriginal = GUILayout.Toggle(Doc.KeepOriginalBakedLayer, "Keep original baked layer on export", GUILayout.Width(w));
         if (keepOriginal != Doc.KeepOriginalBakedLayer)
         {
@@ -1725,10 +1723,6 @@ public sealed class SC2DecalsShell : IDisposable
         Commit("Delete Decal", next); _selectedPlacement = Mathf.Min(_selectedPlacement, next.Placements.Count - 1); ResetPlacementDraft();
     }
 
-    private void Validate()
-    {
-        var report = SC2DecalsValidator.Validate(Doc);
-    }
     // Confirmed real, via a dedicated MapDocument save/restore + Undo/Redo
     // audit: decal commands were already real ISC2DocumentCommand entries
     // on the shared _session.History (same stack every other domain uses),
