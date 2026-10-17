@@ -1,3 +1,4 @@
+using SC2.MapEditor.Document;
 using UnityEditor;
 using UnityEngine;
 
@@ -34,12 +35,47 @@ public sealed class SC2ExportPanel
     // writable next to (or under) the built game instead.
     private static readonly string DefaultExportDir = System.IO.Path.Combine(Application.persistentDataPath, "Exports");
 #endif
-    private string _exportDir = PlayerPrefs.GetString(ExportDirPrefKey, DefaultExportDir);
+    // Set once the user has picked a folder of their own (typed or chosen); until then the folder is the game installation folder set on
+    // the start screen, and follows it.
+    private const string ExportDirChosenPrefKey = "SC2.ExportDirChosen";
+    private string _exportDir;
+    private bool _exportDirChosen;
+
+    /// <summary>What the folder is until the user picks one: the game installation folder from the start screen, or the built-in default
+    /// when none is set.</summary>
+    private static string DefaultFolder()
+    {
+        var root = SC2GameInstallSettings.RootPath;
+        return string.IsNullOrWhiteSpace(root) ? DefaultExportDir : root;
+    }
+
+    private void LoadExportDir()
+    {
+        var saved = PlayerPrefs.HasKey(ExportDirPrefKey) ? PlayerPrefs.GetString(ExportDirPrefKey, "") : "";
+        if (PlayerPrefs.HasKey(ExportDirChosenPrefKey))
+            _exportDirChosen = PlayerPrefs.GetInt(ExportDirChosenPrefKey, 0) != 0;
+        else
+        {
+            // From before the choice was recorded: a saved folder that is neither default is the user's own.
+            _exportDirChosen = !string.IsNullOrEmpty(saved) && saved != DefaultFolder() && saved != DefaultExportDir;
+            PlayerPrefs.SetInt(ExportDirChosenPrefKey, _exportDirChosen ? 1 : 0);
+        }
+        _exportDir = _exportDirChosen && !string.IsNullOrEmpty(saved) ? saved : DefaultFolder();
+    }
+
+    /// <summary>Keeps the folder on the start screen's one while the user has not picked their own (it may have been changed since).</summary>
+    private void FollowDefaultFolder()
+    {
+        if (!_exportDirChosen) _exportDir = DefaultFolder();
+    }
 
     private void SetExportDir(string dir)
     {
         _exportDir = dir;
+        // An empty text counts as the user's own: the field is being retyped, and the default must not jump back in under the cursor.
+        _exportDirChosen = dir != DefaultFolder();
         PlayerPrefs.SetString(ExportDirPrefKey, _exportDir ?? "");
+        PlayerPrefs.SetInt(ExportDirChosenPrefKey, _exportDirChosen ? 1 : 0);
         PlayerPrefs.Save();
     }
 
@@ -85,6 +121,7 @@ public sealed class SC2ExportPanel
     {
         _win = win;
         Data = data;
+        LoadExportDir();
     }
 
     public SC2ExportPanelState CaptureState() => new SC2ExportPanelState
@@ -103,6 +140,7 @@ public sealed class SC2ExportPanel
 
     public void DrawPanel()
     {
+        FollowDefaultFolder();
         // Hard outer container: ensures every child (pair boxes, sliders,
         // text fields) is constrained to the available panel width even in
         // build & run where EditorGUIUtility.currentViewWidth can return
@@ -303,6 +341,7 @@ public sealed class SC2ExportPanel
     public bool RunExport(System.Action<string> onFinished = null)
     {
         if (SC2MapPreviewCapture.IsCapturePending || SC2BusyOverlay.IsActive) return false;
+        FollowDefaultFolder();
         // The export runs on a worker thread behind the busy plate (see SC2BusyOverlay): the first function below runs on the main
         // thread, the one it returns on the worker, and the one that returns on the main thread again.
         return SC2BusyOverlay.RunInBackground("Exporting map", ExportDetail, () =>
