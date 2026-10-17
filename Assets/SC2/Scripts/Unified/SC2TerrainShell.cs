@@ -1990,7 +1990,14 @@ public class SC2TerrainShell : ScriptableObject
         if (sunShadow != _data.PointCloudSunShadow) { _data.PointCloudSunShadow = sunShadow; EditorUtility.SetDirty(_data); }
 
         EditorGUILayout.Space(4);
-        if (SC2EnvFieldGui.PrimaryButton("Bake Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(24f))))
+        // Switched off for now: maps with a baked point cloud have performance problems whose cause is not known yet.
+        var bakeButtonEnabledBefore = GUI.enabled;
+        GUI.enabled = bakeButtonEnabledBefore && PointCloudBakeEnabled;
+        var bakePressed = SC2EnvFieldGui.PrimaryButton("Bake Point Cloud", GUILayout.Width(w), GUILayout.MaxWidth(w), GUILayout.Height(SC2UiScale.Pxf(24f)));
+        GUI.enabled = bakeButtonEnabledBefore;
+        if (!PointCloudBakeEnabled)
+            DrawUnifiedNote("Baking is turned off for now: maps with a baked point cloud have performance problems that are still being investigated.");
+        if (bakePressed && PointCloudBakeEnabled)
         {
             SC2BusyOverlay.RunInBackground("Baking point cloud",
                 "Calculating the unit lighting volumes from the terrain. This can take a while.", () =>
@@ -2017,6 +2024,10 @@ public class SC2TerrainShell : ScriptableObject
         DrawUnifiedNote(!string.IsNullOrEmpty(_pointCloudStatus) ? _pointCloudStatus : (baked ? "A point cloud is baked and will be exported." : "No point cloud baked yet."));
         DrawUnifiedNote("Manual trigger only. PointCloudLightAmount (how strongly units use it in-game) is in the fields above. Not part of undo.");
     }
+
+    /// <summary>Whether Environment > Point Clouds > Bake Point Cloud can be pressed. Off while the performance problems of maps with a
+    /// baked point cloud are looked into; an already baked point cloud can still be removed.</summary>
+    private const bool PointCloudBakeEnabled = false;
 
     // ── Lighting Bake > Imported Objects ────────────────────────────────────
     // Masks of their own (SC2TerrainDocument.ImportedRnm), separate from the
