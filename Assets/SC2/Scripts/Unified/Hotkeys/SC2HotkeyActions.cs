@@ -31,6 +31,9 @@ public sealed class SC2HotkeyAction
 
     public bool IsModifierOnly => Defaults.Length > 0 && Defaults[0].IsModifierOnly;
 
+    /// <summary>An action that is a mouse button (with modifiers) instead of a key: the camera's orbit, pan and fly.</summary>
+    public bool IsMouseAction => Defaults.Length > 0 && Defaults[0].IsMouse;
+
     public SC2HotkeyAction(string id, string displayName, SC2HotkeyCategory category, params SC2HotkeyBinding[] defaults)
     {
         Id = id;
@@ -56,6 +59,9 @@ public static class SC2HotkeyActions
         new SC2HotkeyAction("Global.ResetView", "Reset camera view", SC2HotkeyCategory.Global, Key(KeyCode.Home)),
         new SC2HotkeyAction("Global.CycleMainTab", "Cycle main tab", SC2HotkeyCategory.Global, Key(KeyCode.Tab)),
 
+        new SC2HotkeyAction("Camera.Orbit", "Orbit camera (hold the button and drag)", SC2HotkeyCategory.Camera, Key(KeyCode.Mouse2)),
+        new SC2HotkeyAction("Camera.Pan", "Pan camera (hold the button and drag)", SC2HotkeyCategory.Camera, Key(KeyCode.Mouse2, shift: true)),
+        new SC2HotkeyAction("Camera.Fly", "Fly camera (hold the button, then the keys below move it)", SC2HotkeyCategory.Camera, Key(KeyCode.Mouse1)),
         new SC2HotkeyAction("Camera.MoveForward", "Fly camera forward", SC2HotkeyCategory.Camera, Key(KeyCode.W)),
         new SC2HotkeyAction("Camera.MoveBack", "Fly camera back", SC2HotkeyCategory.Camera, Key(KeyCode.S)),
         new SC2HotkeyAction("Camera.MoveLeft", "Fly camera left", SC2HotkeyCategory.Camera, Key(KeyCode.A)),

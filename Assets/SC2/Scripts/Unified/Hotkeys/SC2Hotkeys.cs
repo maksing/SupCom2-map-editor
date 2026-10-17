@@ -89,6 +89,26 @@ public static class SC2Hotkeys
         return false;
     }
 
+    /// <summary>For the actions bound to a mouse button (the camera): does this MouseDown press any of the action's bindings?</summary>
+    public static bool MatchesMouseDown(string actionId, Event e)
+    {
+        var bindings = GetBindings(actionId);
+        for (var i = 0; i < bindings.Length; i++)
+            if (bindings[i].MatchesMouseDown(e)) return true;
+        return false;
+    }
+
+    /// <summary>While a mouse button is held (a drag): is it the button of one of the action's bindings, with the modifiers held now?
+    /// Lets a drag change into another camera action when a modifier is pressed in the middle of it.</summary>
+    public static bool MouseButtonHeld(string actionId, Event e)
+    {
+        if (e == null) return false;
+        var bindings = GetBindings(actionId);
+        for (var i = 0; i < bindings.Length; i++)
+            if (bindings[i].MatchesMouseButton(e, e.button)) return true;
+        return false;
+    }
+
     /// <summary>Modifier-only check (Shift/Ctrl/Alt-while-scrolling,
     /// Ctrl-while-painting-erase, additive-select). True if ANY of the
     /// action's current bindings' modifier flags are currently held.</summary>

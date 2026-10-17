@@ -44,20 +44,24 @@ public static class SC2HotkeysPanel
         var screen = new Rect(0, 0, Screen.width, Screen.height);
         DrawRect(screen, new Color(0f, 0f, 0f, 0.72f));
 
-        var width = Mathf.Clamp(Screen.width - 96f, 520f, 760f);
-        var height = Mathf.Clamp(Screen.height - 96f, 420f, 720f);
+        // Every size below is in design pixels like the fonts (SC2Type), so the panel grows with the UI Scale instead of the
+        // text outgrowing fixed-size buttons and rows.
+        var width = Mathf.Min(Screen.width - 24f, Mathf.Clamp(Screen.width - 96f, 520f * S, 760f * S));
+        var height = Mathf.Min(Screen.height - 24f, Mathf.Clamp(Screen.height - 96f, 420f * S, 720f * S));
         var window = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
         DrawRect(window, SC2Theme.Bg2);
         DrawBorder(window, SC2Theme.LineStrong);
 
-        const float headerHeight = 40f;
-        const float footerHeight = 46f;
-        var warnHeight = _conflicts.Count > 0 ? 20f + 16f * _conflicts.Count : 0f;
+        var headerHeight = 40f * S;
+        var footerHeight = 46f * S;
+        // The conflict box is as tall as its wrapped lines, up to a third of the window; beyond that it scrolls.
+        var warnContentHeight = ConflictContentHeight(window.width);
+        var warnHeight = Mathf.Min(warnContentHeight, window.height * 0.33f);
 
         DrawHeader(new Rect(window.x, window.y, window.width, headerHeight));
         var body = new Rect(window.x, window.y + headerHeight, window.width, window.height - headerHeight - footerHeight - warnHeight);
         DrawList(body);
-        if (warnHeight > 0f) DrawConflictWarning(new Rect(window.x, body.yMax, window.width, warnHeight));
+        if (warnHeight > 0f) DrawConflictWarning(new Rect(window.x, body.yMax, window.width, warnHeight), warnContentHeight);
         DrawFooter(new Rect(window.x, window.yMax - footerHeight, window.width, footerHeight));
 
         // Escape closes the whole panel when nothing is being captured —
@@ -81,17 +85,17 @@ public static class SC2HotkeysPanel
     private static void DrawHeader(Rect rect)
     {
         DrawRect(rect, SC2Theme.Bg1);
-        GUI.Label(new Rect(rect.x + 14f, rect.y + 9f, 220f, 22f), "Edit Hotkeys", Bold());
-        if (GUI.Button(new Rect(rect.xMax - 82f, rect.y + 7f, 68f, 26f), "Close")) _open = false;
+        GUI.Label(new Rect(rect.x + 14f * S, rect.y + 5f * S, rect.width - 150f * S, rect.height - 10f * S), "Edit Hotkeys", Bold());
+        if (GUI.Button(new Rect(rect.xMax - 96f * S, rect.y + 6f * S, 84f * S, rect.height - 12f * S), "Close", FlatButton())) _open = false;
     }
 
     private static void DrawList(Rect rect)
     {
         DrawRect(rect, SC2Theme.Bg0);
-        const float rowHeight = 30f;
-        const float headerRowHeight = 24f;
+        var rowHeight = 30f * S;
+        var headerRowHeight = 24f * S;
 
-        var contentHeight = 4f;
+        var contentHeight = 4f * S;
         SC2HotkeyCategory? lastCategory = null;
         foreach (var action in SC2HotkeyActions.All)
         {
@@ -103,17 +107,17 @@ public static class SC2HotkeysPanel
         var content = new Rect(0, 0, rect.width - 18f, contentHeight);
         _scroll = GUI.BeginScrollView(rect, _scroll, content);
 
-        var y = 4f;
+        var y = 4f * S;
         lastCategory = null;
         foreach (var action in SC2HotkeyActions.All)
         {
             if (lastCategory != action.Category)
             {
-                GUI.Label(new Rect(8f, y, content.width - 16f, headerRowHeight - 2f), CategoryLabel(action.Category), MiniBold());
+                GUI.Label(new Rect(8f * S, y, content.width - 16f * S, headerRowHeight - 2f), CategoryLabel(action.Category), MiniBold());
                 y += headerRowHeight;
             }
             lastCategory = action.Category;
-            DrawRow(new Rect(4f, y, content.width - 8f, rowHeight - 3f), action);
+            DrawRow(new Rect(4f * S, y, content.width - 8f * S, rowHeight - 3f * S), action);
             y += rowHeight;
         }
 
@@ -131,11 +135,12 @@ public static class SC2HotkeysPanel
     {
         DrawRect(rect, new Color(0.11f, 0.12f, 0.145f, 1f));
 
-        const float resetWidth = 46f;
-        const float slotWidth = 90f;
-        const float gap = 6f;
+        var resetWidth = 56f * S;
+        var slotWidth = 172f * S;
+        var gap = 6f * S;
+        var pad = 3f * S;
 
-        var resetRect = new Rect(rect.xMax - resetWidth - 6f, rect.y + 3f, resetWidth, rect.height - 6f);
+        var resetRect = new Rect(rect.xMax - resetWidth - 6f * S, rect.y + pad, resetWidth, rect.height - 2f * pad);
         if (GUI.Button(resetRect, "Reset", FlatButton()))
         {
             SC2Hotkeys.ResetToDefault(action.Id);
@@ -147,9 +152,9 @@ public static class SC2HotkeysPanel
 
         if (action.IsModifierOnly)
         {
-            const float toggleSet = 3 * 40f + 2 * 4f;
+            var toggleSet = 3 * 52f * S + 2 * 4f * S;
             controlsX = resetRect.x - gap - toggleSet;
-            DrawModifierToggles(new Rect(controlsX, rect.y + 3f, toggleSet, rect.height - 6f), action, bindings);
+            DrawModifierToggles(new Rect(controlsX, rect.y + pad, toggleSet, rect.height - 2f * pad), action, bindings);
         }
         else
         {
@@ -158,19 +163,19 @@ public static class SC2HotkeysPanel
             controlsX = resetRect.x - gap - bindingsWidth;
             for (var slot = 0; slot < slots; slot++)
             {
-                var slotRect = new Rect(controlsX + slot * (slotWidth + gap), rect.y + 3f, slotWidth, rect.height - 6f);
+                var slotRect = new Rect(controlsX + slot * (slotWidth + gap), rect.y + pad, slotWidth, rect.height - 2f * pad);
                 var binding = slot < bindings.Length ? bindings[slot] : new SC2HotkeyBinding(KeyCode.None);
                 DrawBindingButton(slotRect, action, slot, binding);
             }
         }
 
-        GUI.Label(new Rect(rect.x + 10f, rect.y + 6f, controlsX - rect.x - 16f, rect.height - 12f), action.DisplayName, RowLabel());
+        GUI.Label(new Rect(rect.x + 10f * S, rect.y + 2f * S, Mathf.Max(20f, controlsX - rect.x - 16f * S), rect.height - 4f * S), action.DisplayName, RowLabel());
     }
 
     private static void DrawBindingButton(Rect rect, SC2HotkeyAction action, int slot, SC2HotkeyBinding binding)
     {
         var capturing = _capturingActionId == action.Id && _capturingSlot == slot;
-        var label = capturing ? "Press a key…" : binding.Key == KeyCode.None ? "(unbound)" : binding.ToString();
+        var label = capturing ? (action.IsMouseAction ? "Press a mouse button…" : "Press a key…") : binding.Key == KeyCode.None ? "(unbound)" : binding.ToString();
         if (GUI.Button(rect, label, capturing ? ActiveButton() : FlatButton()))
         {
             _capturingActionId = action.Id;
@@ -180,12 +185,13 @@ public static class SC2HotkeysPanel
 
     private static void DrawModifierToggles(Rect rect, SC2HotkeyAction action, SC2HotkeyBinding[] bindings)
     {
-        var w = (rect.width - 2 * 4f) / 3f;
+        var gap = 4f * S;
+        var w = (rect.width - 2 * gap) / 3f;
         DrawModifierToggle(new Rect(rect.x, rect.y, w, rect.height), "Ctrl", HasModifierBinding(bindings, true, false, false),
             v => ToggleModifierBinding(action, true, false, false, v));
-        DrawModifierToggle(new Rect(rect.x + w + 4f, rect.y, w, rect.height), "Shift", HasModifierBinding(bindings, false, true, false),
+        DrawModifierToggle(new Rect(rect.x + w + gap, rect.y, w, rect.height), "Shift", HasModifierBinding(bindings, false, true, false),
             v => ToggleModifierBinding(action, false, true, false, v));
-        DrawModifierToggle(new Rect(rect.x + 2 * (w + 4f), rect.y, w, rect.height), "Alt", HasModifierBinding(bindings, false, false, true),
+        DrawModifierToggle(new Rect(rect.x + 2 * (w + gap), rect.y, w, rect.height), "Alt", HasModifierBinding(bindings, false, false, true),
             v => ToggleModifierBinding(action, false, false, true, v));
     }
 
@@ -220,7 +226,35 @@ public static class SC2HotkeysPanel
 
     private static void HandleCapture(Event evt)
     {
-        if (_capturingActionId == null || evt == null || evt.type != EventType.KeyDown) return;
+        if (_capturingActionId == null || evt == null) return;
+
+        // The camera actions are mouse buttons: the next press of one (with the modifiers held) is the binding. A bare left button is
+        // never taken, it is the click that works the panel itself; Escape cancels like for a key.
+        var mouseAction = SC2HotkeyActions.Find(_capturingActionId)?.IsMouseAction ?? false;
+        if (mouseAction)
+        {
+            if (evt.type == EventType.MouseDown)
+            {
+                if (evt.button == 0 && !evt.control && !evt.shift && !evt.alt) return;
+                if (evt.button > 6) return;
+                var mouseBindings = new List<SC2HotkeyBinding>(SC2Hotkeys.GetBindings(_capturingActionId));
+                while (mouseBindings.Count <= _capturingSlot) mouseBindings.Add(new SC2HotkeyBinding(KeyCode.None));
+                mouseBindings[_capturingSlot] = new SC2HotkeyBinding(KeyCode.Mouse0 + evt.button, evt.control, evt.shift, evt.alt);
+                SC2Hotkeys.SetBindings(_capturingActionId, mouseBindings.ToArray());
+                RefreshConflicts();
+                _capturingActionId = null;
+                evt.Use();
+                return;
+            }
+            if (evt.type == EventType.KeyDown && evt.keyCode == KeyCode.Escape)
+            {
+                _capturingActionId = null;
+                evt.Use();
+            }
+            return;
+        }
+
+        if (evt.type != EventType.KeyDown) return;
 
         if (evt.keyCode == KeyCode.Escape)
         {
@@ -250,20 +284,50 @@ public static class SC2HotkeysPanel
         evt.Use();
     }
 
-    private static void DrawConflictWarning(Rect rect)
+    private const string ConflictTitle = "Same key used by more than one action (harmless if they're never active at the same time):";
+
+    private static string ConflictLine((string ActionA, string ActionB) conflict)
     {
+        var an = SC2HotkeyActions.Find(conflict.ActionA)?.DisplayName ?? conflict.ActionA;
+        var bn = SC2HotkeyActions.Find(conflict.ActionB)?.DisplayName ?? conflict.ActionB;
+        return "• " + an + "   ↔   " + bn;
+    }
+
+    /// <summary>The height of the conflict box with every line wrapped to the window's width (0 when there is none).</summary>
+    private static float ConflictContentHeight(float windowWidth)
+    {
+        if (_conflicts.Count == 0) return 0f;
+        EnsureStyles();
+        var titleWidth = windowWidth - 20f * S;
+        var lineWidth = windowWidth - 28f * S - 18f;
+        var height = 6f * S + _warnTitleStyle.CalcHeight(new GUIContent(ConflictTitle), titleWidth) + 2f * S;
+        foreach (var conflict in _conflicts)
+            height += _warnLineStyle.CalcHeight(new GUIContent(ConflictLine(conflict)), lineWidth);
+        return height + 4f * S;
+    }
+
+    private static Vector2 _conflictScroll;
+
+    private static void DrawConflictWarning(Rect rect, float contentHeight)
+    {
+        EnsureStyles();
         DrawRect(rect, new Color(0.32f, 0.22f, 0.07f, 0.95f));
-        var y = rect.y + 3f;
-        GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 16f),
-            "Same key used by more than one action (harmless if they're never active at the same time):", MiniBold());
-        y += 18f;
-        foreach (var (a, b) in _conflicts)
+        var scrolls = contentHeight > rect.height + 0.5f;
+        var innerWidth = rect.width - (scrolls ? 18f : 0f);
+        var content = new Rect(0f, 0f, innerWidth, contentHeight);
+        _conflictScroll = GUI.BeginScrollView(rect, _conflictScroll, content, false, false);
+        var y = 3f * S;
+        var titleHeight = _warnTitleStyle.CalcHeight(new GUIContent(ConflictTitle), rect.width - 20f * S);
+        GUI.Label(new Rect(10f * S, y, innerWidth - 20f * S, titleHeight), ConflictTitle, _warnTitleStyle);
+        y += titleHeight + 2f * S;
+        foreach (var conflict in _conflicts)
         {
-            var an = SC2HotkeyActions.Find(a)?.DisplayName ?? a;
-            var bn = SC2HotkeyActions.Find(b)?.DisplayName ?? b;
-            GUI.Label(new Rect(rect.x + 14f, y, rect.width - 28f, 16f), "• " + an + "   ↔   " + bn, RowLabel());
-            y += 16f;
+            var line = ConflictLine(conflict);
+            var lineHeight = _warnLineStyle.CalcHeight(new GUIContent(line), innerWidth - 28f * S);
+            GUI.Label(new Rect(14f * S, y, innerWidth - 28f * S, lineHeight), line, _warnLineStyle);
+            y += lineHeight;
         }
+        GUI.EndScrollView();
     }
 
     private static void DrawFooter(Rect rect)
@@ -272,23 +336,23 @@ public static class SC2HotkeysPanel
 
         if (!_confirmResetAll)
         {
-            if (GUI.Button(new Rect(rect.x + 12f, rect.y + 8f, 170f, 28f), "Reset All to Defaults", FlatButton()))
+            if (GUI.Button(new Rect(rect.x + 12f * S, rect.y + 7f * S, 200f * S, rect.height - 14f * S), "Reset All to Defaults", FlatButton()))
                 _confirmResetAll = true;
         }
         else
         {
-            GUI.Label(new Rect(rect.x + 12f, rect.y + 13f, 130f, 20f), "Reset everything?", MiniBold());
-            if (GUI.Button(new Rect(rect.x + 146f, rect.y + 8f, 58f, 28f), "Yes", FlatButton()))
+            GUI.Label(new Rect(rect.x + 12f * S, rect.y + 7f * S, 160f * S, rect.height - 14f * S), "Reset everything?", MiniBold());
+            if (GUI.Button(new Rect(rect.x + 176f * S, rect.y + 7f * S, 70f * S, rect.height - 14f * S), "Yes", FlatButton()))
             {
                 SC2Hotkeys.ResetAllToDefaults();
                 RefreshConflicts();
                 _confirmResetAll = false;
             }
-            if (GUI.Button(new Rect(rect.x + 210f, rect.y + 8f, 70f, 28f), "Cancel", FlatButton()))
+            if (GUI.Button(new Rect(rect.x + 252f * S, rect.y + 7f * S, 84f * S, rect.height - 14f * S), "Cancel", FlatButton()))
                 _confirmResetAll = false;
         }
 
-        if (GUI.Button(new Rect(rect.xMax - 88f, rect.y + 8f, 76f, 28f), "Close", FlatButton())) _open = false;
+        if (GUI.Button(new Rect(rect.xMax - 100f * S, rect.y + 7f * S, 88f * S, rect.height - 14f * S), "Close", FlatButton())) _open = false;
     }
 
     // ---- styles (mirrors SC2TextureBrowser's own EnsureStyles pattern) ----
@@ -299,18 +363,28 @@ public static class SC2HotkeysPanel
     private static GUIStyle _rowLabelStyle;
     private static GUIStyle _flatButtonStyle;
     private static GUIStyle _activeButtonStyle;
+    private static GUIStyle _warnTitleStyle;
+    private static GUIStyle _warnLineStyle;
+    private static int _styleFontSize = -1;
+
+    /// <summary>The UI Scale, applied to every size of the panel: the fonts follow it (SC2Type), so the rects have to as well.</summary>
+    private static float S => SC2UiScale.Scale;
 
     private static void EnsureStyles()
     {
-        if (_styleSkin == GUI.skin && _boldStyle != null) return;
+        // The fonts change with the UI Scale, so the styles are built again when it does.
+        if (_styleSkin == GUI.skin && _boldStyle != null && _styleFontSize == SC2Type.Body) return;
+        _styleFontSize = SC2Type.Body;
         _styleSkin = GUI.skin;
-        _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Nav };
+        _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Nav, alignment = TextAnchor.MiddleLeft };
         _boldStyle.normal.textColor = SC2Theme.TextBright;
         _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Caption };
         _miniBoldStyle.normal.textColor = SC2Theme.TextSecondary;
         _rowLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
         _rowLabelStyle.normal.textColor = SC2Theme.TextPrimary;
         _flatButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleCenter };
+        _warnTitleStyle = new GUIStyle(_miniBoldStyle) { wordWrap = true, clipping = TextClipping.Overflow };
+        _warnLineStyle = new GUIStyle(_rowLabelStyle) { wordWrap = true, clipping = TextClipping.Overflow, alignment = TextAnchor.UpperLeft };
         _activeButtonStyle = new GUIStyle(_flatButtonStyle);
         _activeButtonStyle.normal.textColor = Color.white;
         _activeButtonStyle.hover.textColor = Color.white;

@@ -2654,8 +2654,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             // the dropdown card's Surface-colored background, where
             // ColorTextSecondary doesn't reach a readable contrast ratio (same
             // "grey on grey" issue as the tab pills).
-            GUILayout.Label("MMB: rotate camera", _miniTextStyle);
-            GUILayout.Label("Shift+MMB: move over map", _miniTextStyle);
+            GUILayout.Label(ShortMouseLabel("Camera.Orbit") + ": rotate camera", _miniTextStyle);
+            GUILayout.Label(ShortMouseLabel("Camera.Pan") + ": move over map", _miniTextStyle);
             GUILayout.Label("Wheel: zoom", _miniTextStyle);
 #if !UNITY_EDITOR
             GUILayout.Label("F11: toggle fullscreen", _miniTextStyle);
@@ -2762,6 +2762,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             }
         });
     }
+
+    /// <summary>The current binding of a camera mouse action as the View menu shows it ("MMB", "Shift+MMB"), so the hint follows Edit Hotkeys.</summary>
+    private static string ShortMouseLabel(string actionId) =>
+        SC2Hotkeys.Label(actionId).Replace("Middle Mouse", "MMB").Replace("Right Mouse", "RMB").Replace("Left Mouse", "LMB");
 
     private void DrawVisibilityMenu()
     {
@@ -7507,10 +7511,11 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         if (e.type == EventType.MouseDown)
         {
             _lastMouse = e.mousePosition;
-            var shiftPressed = e.shift || Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-            _orbiting = e.button == 2 && !shiftPressed;
-            _panning = e.button == 2 && shiftPressed;
-            _flying = e.button == 1 && !e.alt;
+            // The mouse buttons of the camera are hotkeys too (Edit Hotkeys > Camera). Pan is tested first: its default is the
+            // orbit button with Shift added.
+            _panning = SC2Hotkeys.MatchesMouseDown("Camera.Pan", e);
+            _orbiting = !_panning && SC2Hotkeys.MatchesMouseDown("Camera.Orbit", e);
+            _flying = !_panning && !_orbiting && SC2Hotkeys.MatchesMouseDown("Camera.Fly", e);
 
             if (!_orbiting && !_panning && !_flying && e.button == 0)
                 HandleViewportClick(e);
@@ -7528,9 +7533,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             var previousMouse = _lastMouse;
             var delta = e.mousePosition - _lastMouse;
             _lastMouse = e.mousePosition;
-            var shiftPressed = e.shift || Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
 
-            if (_panning || shiftPressed)
+            // Pressing the modifier of Pan in the middle of an orbit turns the drag into a pan.
+            if (_panning || SC2Hotkeys.MouseButtonHeld("Camera.Pan", e))
             {
                 _orbiting = false;
                 _panning = true;
