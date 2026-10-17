@@ -20,6 +20,70 @@ public class MassSymmetryTests
     }
 
     [Fact]
+    public void WithoutASymmetrySetting_ALoneMassIsUnpaired()
+    {
+        var markers = new List<SC2ObjMarker> { Mass(1, 100f, 40f) };
+        var unpaired = SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(markers, Center);
+        Assert.Equal(1, Assert.Single(unpaired).Id);
+
+        var report = SC2MassSymmetryValidator.Validate(markers, SymmetryMode.None, Center, 4);
+        var message = Assert.Single(report.Messages);
+        Assert.Equal(SC2ValidationSeverity.Warning, message.Severity);
+        Assert.Equal("1", message.ObjectId);
+        Assert.Contains("has no symmetric twin", message.Message);
+    }
+
+    [Fact]
+    public void WithoutASymmetrySetting_APairThatAnyStandardSymmetryMapsOntoEachOther_IsPaired()
+    {
+        Assert.Empty(SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(new List<SC2ObjMarker> { Mass(1, 100f, 40f), Mass(2, 924f, 40f) }, Center));
+        // The two sides of a diagonal mirror.
+        Assert.Empty(SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(new List<SC2ObjMarker> { Mass(1, 100f, 40f), Mass(2, 40f, 100f) }, Center));
+        // A quarter turn alone is not a pair: a 4-way rotation also wants the other two copies.
+        Assert.Equal(2, SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(new List<SC2ObjMarker> { Mass(1, 100f, 40f), Mass(2, 40f, 924f) }, Center).Count);
+        Assert.Empty(SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(new List<SC2ObjMarker> { Mass(1, 512f, 300f) }, Center));
+    }
+
+    [Fact]
+    public void WithoutASymmetrySetting_AnExtraMassNextToAPair_IsUnpaired()
+    {
+        var markers = new List<SC2ObjMarker> { Mass(1, 100f, 40f), Mass(2, 924f, 40f), Mass(3, 300f, 600f) };
+        var unpaired = SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(markers, Center);
+        Assert.Equal(new[] { 3 }, unpaired.Select(m => m.Id).ToArray());
+    }
+
+    private static SC2ObjMarker Army(int id, float x, float z) =>
+        new SC2ObjMarker { Id = id, Name = "ARMY_" + id, Type = "Blank Marker", Position = new Vector3(x, 0f, z) };
+
+    [Fact]
+    public void ALoneArmyOnAMirroredMap_IsMissingItsTwin_AMassMarkerIsNotAnArmy()
+    {
+        var markers = new List<SC2ObjMarker> { Army(1, 100f, 40f), Mass(2, 300f, 300f), Mass(3, 724f, 300f) };
+        var report = SC2ArmySymmetryValidator.Validate(markers, SymmetryMode.X, Center, 4);
+        var message = Assert.Single(report.Messages);
+        Assert.Equal(SC2ValidationSeverity.Warning, message.Severity);
+        Assert.Equal("1", message.ObjectId);
+        Assert.Contains("Army 'ARMY_1'", message.Message);
+        Assert.Contains("has no symmetric twin", message.Message);
+        Assert.Empty(SC2MassSymmetryValidator.Validate(markers, SymmetryMode.X, Center, 4).Messages);
+    }
+
+    [Fact]
+    public void AMirroredArmyPair_HasItsTwins()
+    {
+        var markers = new List<SC2ObjMarker> { Army(1, 100f, 40f), Army(2, 924f, 40f) };
+        Assert.Empty(SC2ArmySymmetryValidator.Validate(markers, SymmetryMode.X, Center, 4).Messages);
+    }
+
+    [Fact]
+    public void WithoutASymmetrySetting_ALoneArmyIsUnpaired_AMirroredPairIsNot()
+    {
+        var lone = SC2ArmySymmetryValidator.Validate(new List<SC2ObjMarker> { Army(1, 100f, 40f) }, SymmetryMode.None, Center, 4);
+        Assert.Equal(SC2ValidationSeverity.Warning, Assert.Single(lone.Messages).Severity);
+        Assert.Empty(SC2ArmySymmetryValidator.Validate(new List<SC2ObjMarker> { Army(1, 100f, 40f), Army(2, 924f, 984f) }, SymmetryMode.None, Center, 4).Messages);
+    }
+
+    [Fact]
     public void AMirroredPair_HasItsTwins()
     {
         var markers = new List<SC2ObjMarker> { Mass(1, 100f, 40f), Mass(2, 924f, 40f) };

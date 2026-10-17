@@ -16,6 +16,16 @@ namespace SC2.MapEditor.Document
         public static SC2ValidationReport Validate(IReadOnlyList<SC2ObjMarker> markers, SymmetryMode mode, Vector3 center, int radialCount)
         {
             var report = new SC2ValidationReport();
+            if (mode == SymmetryMode.None)
+            {
+                // No symmetry to measure against: a Mass marker is fine when some standard symmetry of the map pairs it with the others.
+                foreach (var marker in SC2MassSymmetryCheck.FindUnpairedWithoutSymmetry(markers, center))
+                    report.Add(SC2ValidationSeverity.Warning, Code, "Objects", marker.Id.ToString(CultureInfo.InvariantCulture),
+                        $"Mass marker '{marker.Name}' ({N(marker.Position.x)}, {N(marker.Position.z)}) has no symmetric twin: " +
+                        "the map has no symmetry set, and no other Mass marker mirrors or rotates this one about the map centre.",
+                        "Place the missing Mass marker(s) so the Mass markers are symmetric, or ignore this if the map is meant to be asymmetric.");
+                return report;
+            }
             var description = SC2MassSymmetryCheck.Describe(mode, radialCount);
             foreach (var twin in SC2MassSymmetryCheck.FindMissingTwins(markers, mode, center, radialCount))
             {

@@ -2031,9 +2031,9 @@ public sealed class SC2ObjectsShell
     private List<string> _validationCombinedBase;
     private List<string> _validationCombinedMass;
 
-    /// <summary>The structural problems (see ValidateStructure) plus the Mass markers the extractor cannot be built on. The Mass check
-    /// reads the terrain, the Costs and every footprint on the map, so it runs at most a couple of times a second and its text
-    /// is only replaced when it really changed.</summary>
+    /// <summary>The structural problems (see ValidateStructure) plus the Mass markers the extractor cannot be built on and the ones
+    /// that have no symmetric twin. The Mass check reads the terrain, the Costs and every footprint on the map, so it runs at most a
+    /// couple of times a second and its text is only replaced when it really changed.</summary>
     private List<string> Validate()
     {
         var structural = ValidateStructure();
@@ -2100,6 +2100,16 @@ public sealed class SC2ObjectsShell
                     issueMarkers[text] = marker.Id;
                 }
             }
+        }
+
+        // A Mass marker or an army start that the map's symmetry maps to a point where no such marker stands (the same checks as Export > Validation).
+        var twinMessages = SC2MassSymmetryValidator.Validate(Data.ObjMarkers, Data.Symmetry, Data.SymmetryCenter, Data.RadialCount).Messages
+            .Concat(SC2ArmySymmetryValidator.Validate(Data.ObjMarkers, Data.Symmetry, Data.SymmetryCenter, Data.RadialCount).Messages);
+        foreach (var message in twinMessages)
+        {
+            issues.Add(message.Message);
+            if (int.TryParse(message.ObjectId, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var twinMarkerId))
+                issueMarkers[message.Message] = twinMarkerId;
         }
 
         // Keep the same list object while nothing changed, so the combined list above is not rebuilt every time.

@@ -148,6 +148,9 @@ public sealed class SC2ExportShell
         {
             if (text.StartsWith("Note:", System.StringComparison.Ordinal))
                 report.Add(SC2ValidationSeverity.Info, "objects.checks.pending", "Objects", null, text);
+            // A missing symmetric twin is reported by the OBJ006 check of the Objects report, with its suggested action.
+            else if (text.Contains("has no symmetric twin"))
+                continue;
             else if (text.StartsWith("Mass marker", System.StringComparison.Ordinal))
                 report.Add(SC2ValidationSeverity.Warning, "objects.mass.not_buildable", "Objects", null, text);
             else
@@ -177,7 +180,10 @@ public sealed class SC2ExportShell
         var objectsReport = SC2ObjectsValidator.Validate(doc.Objects);
         var live = _terrainShell.Data;
         if (live != null)
+        {
             objectsReport.Messages.AddRange(SC2MassSymmetryValidator.Validate(live.ObjMarkers, live.Symmetry, live.SymmetryCenter, live.RadialCount).Messages);
+            objectsReport.Messages.AddRange(SC2ArmySymmetryValidator.Validate(live.ObjMarkers, live.Symmetry, live.SymmetryCenter, live.RadialCount).Messages);
+        }
         _lastValidationDomainNames = new[] { "Terrain", "Hfield", "Costs", "Collision2", "Objects", "Objects (map checks)", "Environment", "Scenario", "Decals" };
         _lastValidationReports = new[]
         {
