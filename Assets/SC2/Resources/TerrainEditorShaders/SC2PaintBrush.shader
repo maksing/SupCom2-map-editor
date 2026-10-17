@@ -66,7 +66,16 @@ Shader "Hidden/SC2/PaintBrush"
             float4 ApplySoft(float4 src, float amt)
             {
                 if (_PaintMode == 3)
-                    return float4(lerp(src.r, _PaintColor.a, amt), src.g + amt * (1.0 - src.g), src.b, 1.0);
+                {
+                    // A layer pixel is straight alpha (R value, G coverage): painting target T with strength amt over it is the
+                    // usual "over" operation. The value must be averaged by coverage, so a pixel the layer did not cover yet
+                    // takes T itself - not a value pulled toward 0, which would also lighten the layers below.
+                    float coverage = src.g + amt * (1.0 - src.g);
+                    float value = coverage > 0.0
+                        ? (src.r * src.g * (1.0 - amt) + _PaintColor.a * amt) / coverage
+                        : src.r;
+                    return float4(value, coverage, src.b, 1.0);
+                }
                 if (_PaintMode == 4)
                     return float4(src.r, src.g * (1.0 - amt), src.b, 1.0);
                 return lerp(src, _PaintColor, amt);

@@ -53,7 +53,6 @@ public class SC2PaintMode
     private float _rnmBlend = 1f;
     private bool  _rnmErase = false;
     // Brush lowers the active layer's coverage instead of painting value (the layer eraser); never on the Base layer.
-    private bool  _rnmRemoveFromLayer = false;
     // Structural layer edits (add/delete/move/...) are queued by the buttons and run at the next Layout event, so the
     // control tree never changes between an event and the repaint that follows it.
     private readonly Queue<System.Action> _pendingLayerActions = new();
@@ -319,13 +318,11 @@ public class SC2PaintMode
             _rnmBlend > .9f ? "→ D2 (blend)" : "↔ blending",
             EditorStyles.centeredGreyMiniLabel);
         EditorGUILayout.Space(SC2UiScale.Pxf(6f));
-        _rnmErase = EditorGUILayout.Toggle("Erase (→0)", _rnmErase);
+        // On the Base layer erasing paints value 0 (the first material); on any other layer it takes the layer's own paint away,
+        // so the layers below show through unchanged.
         var layerRuntime = _win.ActiveRuntime;
-        var canRemoveFromLayer = layerRuntime != null && layerRuntime.HasActiveLayers && layerRuntime.ActiveBlendStack.ActiveIndex > 0;
-        if (canRemoveFromLayer)
-            _rnmRemoveFromLayer = EditorGUILayout.Toggle("Remove from layer", _rnmRemoveFromLayer);
-        else
-            _rnmRemoveFromLayer = false;
+        var erasesOwnPaint = layerRuntime != null && layerRuntime.HasActiveLayers && layerRuntime.ActiveBlendStack.ActiveIndex > 0;
+        _rnmErase = EditorGUILayout.Toggle(erasesOwnPaint ? "Erase (this layer)" : "Erase (→0)", _rnmErase);
 
         Gap();
         DrawPairLocks(w, "Lock pairs", _blendLock, ref _blendLockFoldout,
@@ -871,6 +868,9 @@ public class SC2PaintMode
         EditorGUILayout.Space(SC2UiScale.Pxf(4f));
         var smallButton = Mathf.Max(24f, SC2UiScale.Pxf(26f));
         var rowHeight = SC2UiScale.Pxf(20f);
+        // The list is the stack as it is drawn: a layer covers every row below it, so a layer that covers all pixels (the Base
+        // layer does) hides everything under it.
+        EditorGUILayout.LabelField("▲ top: drawn over the layers below", EditorStyles.centeredGreyMiniLabel);
         for (var i = stack.Layers.Count - 1; i >= 0; i--)
         {
             var index = i;
@@ -900,6 +900,7 @@ public class SC2PaintMode
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.Space(SC2UiScale.Pxf(3f));
         }
+        EditorGUILayout.LabelField("▼ bottom", EditorStyles.centeredGreyMiniLabel);
         EditorGUILayout.Space(SC2UiScale.Pxf(8f));
 
         var active = stack.Active;
@@ -1383,10 +1384,11 @@ public class SC2PaintMode
             {
                 EnsureBlendStrokeCheckpoint(target.Background);
                 var isActiveSurface = target.Data == Data;
-                var removeFromLayer = _rnmRemoveFromLayer && target.Runtime.HasActiveLayers && target.Runtime.ActiveBlendStack.ActiveIndex > 0;
+                // Erasing on a layer above the Base removes that layer's own paint instead of painting 0 over the layers below.
+                var removeFromLayer = erasing && target.Runtime.HasActiveLayers && target.Runtime.ActiveBlendStack.ActiveIndex > 0;
                 // The pair locks belong to the surface being edited; the other surface paints every pair.
                 target.Runtime.SetBrushPairLock(isActiveSurface ? LockTableOrNull(_blendLock) : null);
-                target.Runtime.PaintBlend(symmetricPositions[slot] - target.Offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, removeFromLayer);
+                target.Runtime.PaintBlend(symmetricPositions[slot] - target.Offset, _radius, _strength, _rnmBlend, erasing && !removeFromLayer, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, removeFromLayer);
                 target.Runtime.SetBrushPairLock(null);
             }
         }
