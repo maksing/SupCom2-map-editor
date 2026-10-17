@@ -8,7 +8,7 @@ using SC2.MapEditor.Document;
 /// </summary>
 public static class SC2EditorVersion
 {
-    public const string Current = "0.0.18-alpha";
+    public const string Current = "1.0.0-beta";
 
     public const string Repository = "maksing/SupCom2-map-editor";
     public const string ReleasesPageUrl = "https://github.com/" + Repository + "/releases";
