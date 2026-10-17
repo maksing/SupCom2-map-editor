@@ -651,6 +651,11 @@ public class SC2TerrainShell : ScriptableObject
         // return`), not per-frame.
         SC2GameAssetScenePreview.ClearAll();
         SC2ObjectMarkerRenderer.ClearAll();
+        // The water depth preview and the live water's generated mask were made for the previous map; this one gets its own
+        // (see _waterDepthPreviewPending in Update).
+        DestroyWaterDepthPreview();
+        SC2WaterPreview.ClearGeneratedMask();
+        _waterDepthPreviewPending = true;
         _data = data;
         ReresolveMaterialTextures(data);
         if (!string.IsNullOrEmpty(sourceLabel))
@@ -2293,6 +2298,9 @@ public class SC2TerrainShell : ScriptableObject
         }
     }
 
+    // Set when another map is shown: a map with Auto-generate has its water depth rebuilt from its settings once its terrain is live.
+    private bool _waterDepthPreviewPending;
+
     public void Update()
     {
         // Live water plane, kept in sync every tick this
@@ -2337,6 +2345,18 @@ public class SC2TerrainShell : ScriptableObject
         {
             var envInfo = SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true);
             SC2TerrainMaterialFactory.RefreshImportedTerrainEnvironment(importedForEnvironment, envInfo);
+        }
+
+        if (_waterDepthPreviewPending && _data != null && _data.IsInitialized && _runtime != null && !_previewBuildQueued)
+        {
+            _waterDepthPreviewPending = false;
+            if (_data.WaterDepthAutoGenerate && SC2TerrainExporter.BuildInfoModel(_data, Session, quiet: true).WaterEnabled != 0)
+            {
+                var swDepth = System.Diagnostics.Stopwatch.StartNew();
+                try { RegenerateWaterDepthPreview(); }
+                catch (System.Exception exception) { SC2Log.LogWarning("[SC2TerrainShell] The water depth could not be rebuilt on opening the map: " + exception.Message); }
+                SC2Log.Log($"[SC2TerrainShell] Water depth rebuilt on opening the map in {swDepth.ElapsedMilliseconds}ms.");
+            }
         }
 
         PushHeightGridOverlay();

@@ -431,6 +431,15 @@ public static class SC2WaterPreview
             // COUNT here has no effect on that lookup).
             var syntheticModel = new BdfIO.Formats.Terrain.TerrainModel();
             SC2WaterPlane.AppendToExportModel(syntheticModel, data, info.WaterElevation);
+            // A blank slot gets the map's own default path, "/maps/<name>/<name>.waterDepth.dds", a file only an export writes. Looking
+            // it up here could only find some other map's file of the same name (the game's own "New_Map" has one), so the preview
+            // takes its depth from the generated mask alone (SC2TerrainShell builds it when a map with Auto-generate is opened).
+            var depthSlot = data.WaterTexturePaths != null && data.WaterTexturePaths.Length > 6 ? data.WaterTexturePaths[6] : null;
+            if (string.IsNullOrEmpty(depthSlot))
+            {
+                var water = syntheticModel.Materials.Find(SC2HfieldProjectionService.IsWaterMaterial);
+                if (water != null) water.TexturePaths[6] = null;
+            }
             if (_material == null)
                 _material = SC2WaterMaterialFactory.Create(syntheticModel, info);
             else
@@ -545,6 +554,14 @@ public static class SC2WaterPreview
     {
         if (_generatedMask != null) UnityEngine.Object.DestroyImmediate(_generatedMask);
         _generatedMask = mask;
+    }
+
+    /// <summary>Drops the generated water-depth mask: it belongs to the map it was generated for, so another map must not show it.</summary>
+    public static void ClearGeneratedMask()
+    {
+        if (_generatedMask == null) return;
+        UnityEngine.Object.DestroyImmediate(_generatedMask);
+        _generatedMask = null;
     }
 
     /// <summary>Forces the next Ensure() call to rebuild the material (and re-read whatever
