@@ -313,7 +313,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private bool AnyModalOpen(bool includeTextureBrowser = true)
     {
         var open = (includeTextureBrowser && SC2TextureBrowser.IsOpen) || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false)
-            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2CostsGuide.IsViewerOpen || SC2BusyOverlay.IsActive;
+            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2CostsGuide.IsViewerOpen || SC2UpdateNotice.IsOpen || SC2BusyOverlay.IsActive;
 #if !UNITY_EDITOR
         // The runtime confirm dialog only exists in a build (the Editor uses its own dialogs).
         open |= SC2RuntimeConfirm.IsOpen;
@@ -1763,6 +1763,10 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         SC2HotkeysPanel.DrawOverlay();
         SC2ThemePanel.DrawOverlay();
         SC2CostsGuide.DrawOverlay();
+        // Once per launch: asks whether a newer version has been published, and offers it in a window of its own.
+        SC2UpdateNotice.BeginCheck();
+        SC2UpdateNotice.Tick();
+        SC2UpdateNotice.DrawOverlay();
 #if !UNITY_EDITOR
         // Same reasoning for the runtime Popup/ColorField shims (UnityEditorRuntimeShim.cs):
         // their dropdown lists and color palettes are floating overlays that must be
@@ -2732,7 +2736,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// open, instead of being baked into the .sc2terrain file itself.</summary>
     private void DrawCustomizationMenu()
     {
-        var contentHeight = 1 * MenuItemHeight + 100f * SC2UiScale.Factor;
+        var contentHeight = 1 * MenuItemHeight + 190f * SC2UiScale.Factor;
         DrawMenuPanel(_customizationMenuRect.x, TitleBarHeight, 210, contentHeight, () =>
         {
             GUILayout.Label("INTERFACE", _dropdownSectionLabelStyle);
@@ -2746,6 +2750,16 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             if (nextColor != SC2CustomizationSettings.DecalMarkerColor) SC2CustomizationSettings.DecalMarkerColor = nextColor;
             if (GUILayout.Button("Reset to Default", GUILayout.Height(SC2UiScale.Pxf(22f))))
                 SC2CustomizationSettings.DecalMarkerColor = SC2CustomizationSettings.DefaultDecalMarkerColor;
+            GUILayout.Label("UPDATES", _dropdownSectionLabelStyle);
+            GUILayout.Label("Version " + SC2EditorVersion.Current);
+            var checkForUpdates = SC2CustomizationSettings.CheckForUpdates;
+            DrawToggle("Check for updates at startup", ref checkForUpdates);
+            if (checkForUpdates != SC2CustomizationSettings.CheckForUpdates) SC2CustomizationSettings.CheckForUpdates = checkForUpdates;
+            if (GUILayout.Button("Check now", GUILayout.Height(SC2UiScale.Pxf(22f))))
+            {
+                SC2UpdateNotice.BeginCheck(manual: true);
+                _showCustomizationMenu = false;
+            }
         });
     }
 

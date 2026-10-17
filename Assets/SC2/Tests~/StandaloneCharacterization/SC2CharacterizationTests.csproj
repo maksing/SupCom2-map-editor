@@ -108,6 +108,7 @@
     <!-- Pure symmetry/lobby-spawn math (Vector3 + System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LobbySpawnMath.cs" Link="Source\SC2LobbySpawnMath.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2MassSymmetryCheck.cs" Link="Source\SC2MassSymmetryCheck.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Unified\SC2EditorVersion.cs" Link="Source\SC2EditorVersion.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2CostsBlockLabels.cs" Link="Source\SC2CostsBlockLabels.cs" />
     <!-- Vanilla-measured navmesh rules (cross growth, wall ring, water gradient), System only. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2CostsNavmeshRules.cs" Link="Source\SC2CostsNavmeshRules.cs" />

@@ -19,6 +19,23 @@ public static class SC2CustomizationSettings
     /// for an unselected pin's fill.</summary>
     public static readonly Color DefaultDecalMarkerColor = new(0.15f, 0.9f, 1f);
 
+    private const string CheckForUpdatesPrefKey = "SC2.Customization.CheckForUpdates";
+    private const string SkippedUpdateVersionPrefKey = "SC2.Customization.SkippedUpdateVersion";
+
+    /// <summary>Whether the editor asks, once at startup, if a newer version has been published (SC2UpdateNotice). On by default.</summary>
+    public static bool CheckForUpdates
+    {
+        get => PlayerPrefs.GetInt(CheckForUpdatesPrefKey, 1) != 0;
+        set { PlayerPrefs.SetInt(CheckForUpdatesPrefKey, value ? 1 : 0); PlayerPrefs.Save(); }
+    }
+
+    /// <summary>The version the user chose "Skip this version" for: the notice does not offer it again (a newer one is offered).</summary>
+    public static string SkippedUpdateVersion
+    {
+        get => PlayerPrefs.GetString(SkippedUpdateVersionPrefKey, "");
+        set { PlayerPrefs.SetString(SkippedUpdateVersionPrefKey, value ?? ""); PlayerPrefs.Save(); }
+    }
+
     // null = "not loaded from PlayerPrefs yet" — same lazy-static-field
     // pattern SC2SaveSettings' own fields already use.
     private static Color? _decalMarkerColor;
