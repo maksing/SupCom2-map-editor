@@ -58,7 +58,7 @@ public class SC2TerrainShell : ScriptableObject
                 _undoStack.ApplyExtra = ApplyAuxState;
                 _combinedUndo = new SC2TerrainCombinedUndo(_undoStack, Session?.History)
                 {
-                    CaptureRnmBlend = () => _paintMode?.CaptureActiveBlendState(),
+                    CaptureRnmBlend = () => _paintMode?.CaptureSurfaceBlendState(false),
                     ApplyRnmBlend = state => _paintMode?.ApplyActiveBlendState(state),
                 };
             }
@@ -363,7 +363,7 @@ public class SC2TerrainShell : ScriptableObject
             // RNM-blend undo channel (CombinedUndo.RecordRnmBlendCheckpoint),
             // so its own snapshot rides along on this stack's Extra channel
             // instead.
-            _bgUndoStack.CaptureExtra = () => (_geoMode.CaptureState(), _paintMode.CaptureActiveBlendState());
+            _bgUndoStack.CaptureExtra = () => (_geoMode.CaptureState(), _paintMode.CaptureSurfaceBlendState(true));
             _bgUndoStack.ApplyExtra = extra =>
             {
                 if (extra is not ValueTuple<SC2GeometryToolState, object> t) return;
@@ -864,7 +864,26 @@ public class SC2TerrainShell : ScriptableObject
     /// <summary>Call BEFORE painting an RNM blend stroke (SC2PaintMode's
     /// "Blend" sub-mode) — see SC2TerrainCombinedUndo's own doc comment for
     /// why this is a separate channel from RecordUndoCheckpoint.</summary>
-    public void RecordRnmBlendCheckpoint() => CombinedUndo.RecordRnmBlendCheckpoint();
+    public void RecordRnmBlendCheckpoint(string tag = null)
+    {
+        _lastEditedTargetIsBackground = false;
+        CombinedUndo.RecordRnmBlendCheckpoint(tag);
+    }
+
+    /// <summary>Start of the label shared by the two undo entries of a blend stroke that reached both the core and the background
+    /// (each followed by the stroke's number): Undo/Redo walk both back together.</summary>
+    public const string SeamBlendLabel = "Paint Blend (core + background)";
+
+    /// <summary>Names the newest core blend checkpoint, for a stroke that reaches the background after it was recorded.</summary>
+    public void TagLastBlendCheckpoint(string tag) => CombinedUndo.TagNextUndo(tag);
+
+    private bool NextStepIsSeamBlend(bool redo)
+    {
+        if (_data == null || _data.BackgroundTerrainData == null) return false;
+        var background = redo ? _bgUndoStack.NextRedoLabel : _bgUndoStack.NextUndoLabel;
+        var core = redo ? CombinedUndo.NextRedoTag : CombinedUndo.NextUndoTag;
+        return background != null && background.StartsWith(SeamBlendLabel, System.StringComparison.Ordinal) && background == core;
+    }
 
     /// <summary>Paints a band of the pair's second material along the inside of the pair's border into the active
     /// blend mask layer (see SC2PaintMode.OutlinePairBorder). Returns a one-line result for the panel.</summary>
@@ -936,6 +955,15 @@ public class SC2TerrainShell : ScriptableObject
         // history the moment _bgUndoStack ran dry.
         _paintMode?.FlushOutlineJob();
 
+        // A blend stroke that reached both surfaces: its core step is the newest of the combined history.
+        if (NextStepIsSeamBlend(false) && CombinedUndo.Undo(_data, Session?.Document, SyncMaterialsAndPairNamesFromDocument))
+        {
+            if (_bgUndoStack.Undo(_data.BackgroundTerrainData))
+                ApplyRestoredBackgroundSnapshot();
+            ApplyRestoredSnapshot();
+            return true;
+        }
+
         // A stroke that reached both surfaces left an entry on each stack: walk both back together.
         if (_data != null && _data.BackgroundTerrainData != null
             && _undoStack.NextUndoLabel == SeamStrokeLabel && _bgUndoStack.NextUndoLabel == SeamStrokeLabel)
@@ -969,6 +997,14 @@ public class SC2TerrainShell : ScriptableObject
     public bool Redo()
     {
         _paintMode?.FlushOutlineJob();
+
+        if (NextStepIsSeamBlend(true) && CombinedUndo.Redo(_data, Session?.Document, SyncMaterialsAndPairNamesFromDocument))
+        {
+            if (_bgUndoStack.Redo(_data.BackgroundTerrainData))
+                ApplyRestoredBackgroundSnapshot();
+            ApplyRestoredSnapshot();
+            return true;
+        }
 
         // See Undo(): a stroke that reached both surfaces is redone on both stacks together.
         if (_data != null && _data.BackgroundTerrainData != null

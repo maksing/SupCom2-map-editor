@@ -1302,13 +1302,18 @@ public class SC2PaintMode
             _win.Session?.MarkDirty(SC2DirtyFlags.TerrainMaterials);
             _isPainting = false;
 
+            // Every surface the stroke reached settles its composite back into its pairs.
             var swFlush = System.Diagnostics.Stopwatch.StartNew();
-            if (_win.ActiveRuntime != null)
-                _win.ActiveRuntime.FlushActiveBlendGroup(Data);
+            var backgroundData = _win.Data != null ? _win.Data.BackgroundTerrainData : null;
+            var settleCore = _blendStrokeTouchedCore || Data == _win.Data;
+            var settleBackground = _blendStrokeTouchedBackground || Data != _win.Data;
+            if (settleCore && _win.Runtime != null) _win.Runtime.FlushActiveBlendGroup(_win.Data);
+            if (settleBackground && _win.BackgroundRuntime != null && backgroundData != null) _win.BackgroundRuntime.FlushActiveBlendGroup(backgroundData);
             var swFlushMs = swFlush.ElapsedMilliseconds;
 
             var swSetDirty = System.Diagnostics.Stopwatch.StartNew();
-            EditorUtility.SetDirty(Data);
+            if (settleCore) EditorUtility.SetDirty(_win.Data);
+            if (settleBackground && backgroundData != null) EditorUtility.SetDirty(backgroundData);
             var swSetDirtyMs = swSetDirty.ElapsedMilliseconds;
 
             // Same as SC2GeometryMode's own MouseUp - refreshes the background
@@ -1317,7 +1322,7 @@ public class SC2PaintMode
             // no-op when active surface is core.
             // Logs its own internal breakdown separately (see its own doc
             // comment).
-            if (Data != _win.Data) _win.RefreshBackgroundRuntime();
+            if (settleBackground) _win.RefreshBackgroundRuntime();
             _win.Repaint();
             SC2Log.Log($"[SC2PaintMode] HandleRnm MouseUp: FlushActiveBlendGroup={swFlushMs}ms, EditorUtility.SetDirty={swSetDirtyMs}ms, total={swMouseUp.ElapsedMilliseconds}ms");
             return;
@@ -1330,15 +1335,13 @@ public class SC2PaintMode
             // see _rnmBrushRotationRad's own doc comment.
             _rnmBrushRotationRad = _stamp.Applying ? _stamp.AppliedRotation
                 : (_win.Data.UseCustomBrush && _win.Data.RandomizeBrushRotation) ? Random.Range(0f, Mathf.PI * 2f) : 0f;
-            // Ensure correct pair's blend RT is active before painting.
-            // Core routes through CombinedUndo's own dedicated RNM-blend
-            // channel; the background has no such channel (its own snapshot
-            // is folded into _bgUndoStack.CaptureExtra/ApplyExtra instead —
-            // see SC2TerrainShell.EnsureBackgroundSubEditors), so only
-            // record the core's checkpoint here when the core is actually
-            // the active surface.
-            if (Data == _win.Data) _win.RecordRnmBlendCheckpoint();
-            else _win.RecordUndoCheckpointFor(Data, "Paint Background Blend");
+            // The core records its checkpoint on CombinedUndo's dedicated RNM-blend channel; the background has no such channel (its
+            // snapshot rides on _bgUndoStack's Extra, see SC2TerrainShell.EnsureBackgroundSubEditors). The surface under the cursor is
+            // checkpointed right away, the other one when the stroke first reaches it (see EnsureBlendStrokeCheckpoint).
+            _blendStrokeTouchedCore = false;
+            _blendStrokeTouchedBackground = false;
+            _seamBlendTag = null;
+            EnsureBlendStrokeCheckpoint(Data != _win.Data);
         }
         if (!_isPainting || (!down && !drag)) return;
         var now = EditorApplication.timeSinceStartup;
@@ -1374,16 +1377,106 @@ public class SC2PaintMode
             // returns the CONTENT rotation; negated here because _BrushRotation rotates the sample
             // offset, the inverse operation (see that method's own doc comment).
             var extraRotationRad = -SC2SymmetryMath.GetSlotRotationDegrees(_win.Data.Symmetry, _win.Data.RadialCount, slot) * Mathf.Deg2Rad;
-            _win.ActiveRuntime.SetBrushPairLock(LockTableOrNull(_blendLock));
-            _win.ActiveRuntime.PaintBlend(symmetricPositions[slot] - offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, _rnmRemoveFromLayer);
-            _win.ActiveRuntime.SetBrushPairLock(null);
+            // Along the seam one dab paints the core's and the background's mask together.
+            CollectBlendTargets(symmetricPositions[slot], _radius);
+            foreach (var target in _blendTargets)
+            {
+                EnsureBlendStrokeCheckpoint(target.Background);
+                var isActiveSurface = target.Data == Data;
+                var removeFromLayer = _rnmRemoveFromLayer && target.Runtime.HasActiveLayers && target.Runtime.ActiveBlendStack.ActiveIndex > 0;
+                // The pair locks belong to the surface being edited; the other surface paints every pair.
+                target.Runtime.SetBrushPairLock(isActiveSurface ? LockTableOrNull(_blendLock) : null);
+                target.Runtime.PaintBlend(symmetricPositions[slot] - target.Offset, _radius, _strength, _rnmBlend, erasing, customBrush, _rnmBrushRotationRad + extraRotationRad, mirror, swapAxes, removeFromLayer);
+                target.Runtime.SetBrushPairLock(null);
+            }
         }
         // With editing layers the dabs above went into the active layer; flatten them into the mask once per tick.
-        _win.ActiveRuntime.RecompositeBlendIfDirty();
+        if (_blendStrokeTouchedCore && _win.Runtime != null) _win.Runtime.RecompositeBlendIfDirty();
+        if (_blendStrokeTouchedBackground && _win.BackgroundRuntime != null) _win.BackgroundRuntime.RecompositeBlendIfDirty();
 #if UNITY_EDITOR
         SceneView.RepaintAll();
 #endif
         e.Use();
+    }
+
+    // ── Seam painting ─────────────────────────────────────────────────────────
+    // A blend dab is applied to EVERY surface the brush reaches, so painting along the core/background seam paints both masks.
+
+    private struct BlendTarget
+    {
+        public SC2TerrainRuntime Runtime;
+        public SC2TerrainData Data;
+        public Vector3 Offset;
+        public bool Background;
+    }
+
+    private readonly List<BlendTarget> _blendTargets = new List<BlendTarget>();
+    private bool _blendStrokeTouchedCore;
+    private bool _blendStrokeTouchedBackground;
+    private string _seamBlendTag;
+    private static int s_seamBlendStrokes;
+
+    /// <summary>Fills <see cref="_blendTargets"/> with the surfaces a brush of <paramref name="radius"/> at <paramref name="pos"/>
+    /// (world space) reaches: the core when the brush touches its rectangle, the background when it touches any of it outside the
+    /// core. The surface under the cursor is always one of them.</summary>
+    private void CollectBlendTargets(Vector3 pos, float radius)
+    {
+        _blendTargets.Clear();
+        var core = _win.Data;
+        if (core == null) return;
+        var margin = core.CellSize * 2f;
+        var coreW = core.GridWidth * core.CellSize;
+        var coreD = core.GridHeight * core.CellSize;
+        var bg = core.BackgroundTerrainEnabled ? core.BackgroundTerrainData : null;
+        var offset = bg != null ? SC2BackgroundTerrain.GetWorldOffset(core) : Vector3.zero;
+        var activeIsBackground = Data != core;
+
+        var coreReached = !activeIsBackground || SC2SeamReach.ReachesCore(pos.x, pos.z, coreW, coreD, radius, margin);
+        if (_win.Runtime != null && coreReached)
+            _blendTargets.Add(new BlendTarget { Runtime = _win.Runtime, Data = core, Offset = Vector3.zero, Background = false });
+
+        if (_win.BackgroundRuntime == null || bg == null) return;
+        var backgroundReached = activeIsBackground || SC2SeamReach.ReachesBackground(pos.x, pos.z, coreW, coreD, offset.x, offset.z,
+            bg.GridWidth * bg.CellSize, bg.GridHeight * bg.CellSize, radius, margin);
+        if (backgroundReached)
+            _blendTargets.Add(new BlendTarget { Runtime = _win.BackgroundRuntime, Data = bg, Offset = offset, Background = true });
+    }
+
+    /// <summary>Records the undo checkpoint of a surface the first time the current stroke touches it and makes the mask group it
+    /// paints the active one. When the second surface joins, both checkpoints share one label so Undo/Redo walk both back together.</summary>
+    private void EnsureBlendStrokeCheckpoint(bool background)
+    {
+        if (background ? _blendStrokeTouchedBackground : _blendStrokeTouchedCore) return;
+        var otherTouched = background ? _blendStrokeTouchedCore : _blendStrokeTouchedBackground;
+        var data = background ? _win.Data?.BackgroundTerrainData : _win.Data;
+        var runtime = background ? _win.BackgroundRuntime : _win.Runtime;
+        if (data == null || runtime == null || data.Pairs.Count == 0) return;
+
+        var pairIndex = Mathf.Clamp(_rnmPair, 0, data.Pairs.Count - 1);
+        runtime.SetActivePairForBlend(pairIndex, data);
+        if (otherTouched && _seamBlendTag == null)
+            _seamBlendTag = SC2TerrainShell.SeamBlendLabel + " #" + (++s_seamBlendStrokes);
+
+        // The snapshot has to be of this surface, not of the one under the cursor.
+        _captureData = data;
+        _captureRuntime = runtime;
+        _capturePairIndex = pairIndex;
+        try
+        {
+            if (!background) _win.RecordRnmBlendCheckpoint(otherTouched ? _seamBlendTag : null);
+            else _win.RecordUndoCheckpointFor(data, otherTouched ? _seamBlendTag : "Paint Background Blend");
+        }
+        finally
+        {
+            _captureData = null;
+            _captureRuntime = null;
+        }
+        if (otherTouched)
+        {
+            if (background) _win.TagLastBlendCheckpoint(_seamBlendTag);
+            else _win.RelabelLastCheckpoint(true, _seamBlendTag);
+        }
+        if (background) _blendStrokeTouchedBackground = true; else _blendStrokeTouchedCore = true;
     }
 
     /// <summary>Places a stamp the user sized and turned with a press-drag-release: replays the ordinary stroke (a first dab, then the
@@ -1420,6 +1513,21 @@ public class SC2PaintMode
         public byte[] Bytes;
         // The whole layer stack (settings, order, active layer, and each layer's pixel array by reference).
         public SC2BlendMaskLayerStack Stack;
+    }
+
+    /// <summary>The blend state of the core's or the background's mask, whichever surface the brush is over: an undo step belongs to
+    /// one surface, and a stroke along the seam records a step on each.</summary>
+    public object CaptureSurfaceBlendState(bool background)
+    {
+        if (_captureData != null) return CaptureActiveBlendState();
+        var data = background ? _win.Data?.BackgroundTerrainData : _win.Data;
+        var runtime = background ? _win.BackgroundRuntime : _win.Runtime;
+        if (data == null || runtime == null) return CaptureActiveBlendState();
+        _captureData = data;
+        _captureRuntime = runtime;
+        _capturePairIndex = Mathf.Clamp(_rnmPair, 0, Mathf.Max(0, data.Pairs.Count - 1));
+        try { return CaptureActiveBlendState(); }
+        finally { _captureData = null; _captureRuntime = null; }
     }
 
     public object CaptureActiveBlendState()

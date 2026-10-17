@@ -106,6 +106,11 @@ namespace SC2.MapEditor.Document
             }
         }
 
+        /// <summary>The channel that owns the newest undo (redo) step, or null when there is none - lets a shell recognise a step
+        /// it has to undo together with a step of another stack.</summary>
+        public ISC2UndoChannel PeekUndoChannel() => _undoMarkers.Count > 0 ? _undoMarkers.Peek().Channel : null;
+        public ISC2UndoChannel PeekRedoChannel() => _redoMarkers.Count > 0 ? _redoMarkers.Peek().Channel : null;
+
         public bool Undo()
         {
             if (_undoMarkers.Count == 0) return false;
@@ -160,6 +165,9 @@ namespace SC2.MapEditor.Document
     {
         private readonly Func<bool> _tryUndo;
         private readonly Func<bool> _tryRedo;
+
+        /// <summary>Optional name of the step, for a shell that pairs it with a step of another stack.</summary>
+        public string Tag { get; set; }
 
         public SC2DelegateUndoChannel(Func<bool> tryUndo, Func<bool> tryRedo)
         {

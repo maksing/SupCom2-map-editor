@@ -76,7 +76,8 @@ public sealed class SC2TerrainCombinedUndo
     /// <summary>Call BEFORE painting an RNM blend stroke — mirrors
     /// RecordLegacyCheckpoint's "record before, not after" convention. A
     /// no-op if CaptureRnmBlend was never wired.</summary>
-    public void RecordRnmBlendCheckpoint()
+    /// <param name="tag">Names the step so a shell can undo it together with a step of another stack (see NextUndoTag).</param>
+    public void RecordRnmBlendCheckpoint(string tag = null)
     {
         if (CaptureRnmBlend == null)
             return;
@@ -104,7 +105,17 @@ public sealed class SC2TerrainCombinedUndo
                 _rnmUndoData.Push(CaptureRnmBlend());
                 ApplyRnmBlend(_rnmRedoData.Pop());
                 return true;
-            }));
+            }) { Tag = tag });
+    }
+
+    /// <summary>The tag of the newest undo (redo) step, null when it has none.</summary>
+    public string NextUndoTag => (_coordinator.PeekUndoChannel() as SC2DelegateUndoChannel)?.Tag;
+    public string NextRedoTag => (_coordinator.PeekRedoChannel() as SC2DelegateUndoChannel)?.Tag;
+
+    /// <summary>Names the newest undo step - for a stroke that reaches a second surface after its first checkpoint was recorded.</summary>
+    public void TagNextUndo(string tag)
+    {
+        if (_coordinator.PeekUndoChannel() is SC2DelegateUndoChannel channel) channel.Tag = tag;
     }
 
     /// <summary>Executes a real ISC2DocumentCommand against the session's
