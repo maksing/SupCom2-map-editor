@@ -2292,7 +2292,12 @@ public sealed class SC2ObjectsShell
             GUILayout.BeginHorizontal();
             var armyLabel = string.IsNullOrEmpty(a.Name) ? $"Army {a.Id}" : a.Name;
             var sel = GUILayout.Toggle(_selectedArmyId == a.Id, TruncateForLabel(armyLabel, w * 0.7f), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f));
-            if (sel) _selectedArmyId = a.Id; else if (_selectedArmyId == a.Id) _selectedArmyId = 0;
+            if (sel)
+            {
+                if (_selectedArmyId != a.Id) _selGroupId = 0; // the army chosen last is the target of new units, not a group chosen earlier
+                _selectedArmyId = a.Id;
+            }
+            else if (_selectedArmyId == a.Id) _selectedArmyId = 0;
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
                 PushUndo();
@@ -2881,7 +2886,10 @@ public sealed class SC2ObjectsShell
         var labelText = icon + node.Name + $"  {counts.Groups}-{counts.Units}";
         // The selected group is the pressed button, as selected items are elsewhere.
         if (GUILayout.Toggle(isSel, TruncateForLabel(labelText, labelWidth), "Button", GUILayout.Width(labelWidth)) && !isSel)
+        {
             _selGroupId = node.Id;
+            _selectedArmyId = 0; // the group chosen last is the target of new units, not an army chosen earlier
+        }
 
         var groupUnitIds = new List<int>();
         GatherUnitsUnderGroup(index, groupUnitIds);
@@ -3863,6 +3871,29 @@ public sealed class SC2ObjectsShell
         ReportStatus?.Invoke(_lastActionSummary);
     }
 
+    /// <summary>The army (and group, when one is chosen) new units are placed for: the group selected on the Groups tab, else the army
+    /// selected on the Armies tab, else the group of the unit placed last, else the first army. Whichever of the group and the army was
+    /// chosen last wins (choosing one clears the other).</summary>
+    private string ResolveUnitPlacementTarget(out SC2ObjUnitNode group)
+    {
+        group = _selGroupId != 0 ? Data.ObjUnits.FirstOrDefault(u => u.Id == _selGroupId && u.IsGroup) : null;
+        if (group != null && !string.IsNullOrWhiteSpace(group.ArmyName)) return group.ArmyName;
+        group = null;
+
+        var selectedArmy = _selectedArmyId != 0 ? Data.ObjArmies.FirstOrDefault(a => a.Id == _selectedArmyId) : null;
+        if (selectedArmy != null && !string.IsNullOrWhiteSpace(selectedArmy.Name)) return selectedArmy.Name;
+
+        var lastUnit = _lastActiveUnitId != 0 ? Data.ObjUnits.FirstOrDefault(u => u.Id == _lastActiveUnitId && !u.IsGroup) : null;
+        if (lastUnit != null && lastUnit.ParentIndex >= 0 && lastUnit.ParentIndex < Data.ObjUnits.Count)
+        {
+            var parent = Data.ObjUnits[lastUnit.ParentIndex];
+            if (parent.IsGroup && !string.IsNullOrWhiteSpace(parent.ArmyName)) { group = parent; return parent.ArmyName; }
+        }
+
+        return Data.ObjArmies.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Name))?.Name
+               ?? Data.ObjUnits.FirstOrDefault(u => !string.IsNullOrWhiteSpace(u.ArmyName))?.ArmyName;
+    }
+
     private void OpenUnitBrowser(SC2ObjUnitNode target)
     {
         _assetBrowser.Open(SC2UnitPropBrowser.AssetKind.Unit, selection =>
@@ -3882,8 +3913,7 @@ public sealed class SC2ObjectsShell
                 // guessing an army if none could be resolved (the same
                 // silent-fallback pattern fixed for PlaceUnitAt in this same
                 // pass, now made consistent here too).
-                var army = Data.ObjArmies.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Name))?.Name
-                           ?? Data.ObjUnits.FirstOrDefault(u => !string.IsNullOrWhiteSpace(u.ArmyName))?.ArmyName;
+                var army = ResolveUnitPlacementTarget(out var targetGroup);
                 if (string.IsNullOrEmpty(army))
                 {
                     _lastActionSummary = "Can't place a unit yet — no army exists. Place an army first.";
@@ -3893,7 +3923,8 @@ public sealed class SC2ObjectsShell
                 var displayName = string.IsNullOrWhiteSpace(asset.DisplayName) ? asset.Id : asset.DisplayName;
                 ArmPlacement(PlacementKind.Unit, army);
                 _placementUnitType = asset.Id.ToLowerInvariant(); // must be set AFTER ArmPlacement - it resets this field
-                _lastActionSummary = $"Click in the viewport to place {displayName} ({army}) — press Esc to stop.";
+                if (targetGroup != null) _placementTargetGroupId = targetGroup.Id; // likewise
+                _lastActionSummary = $"Click in the viewport to place {displayName} ({army}{(targetGroup != null ? "/" + targetGroup.Name : "")}) — press Esc to stop.";
                 RepaintHost?.Invoke();
                 return;
             }
