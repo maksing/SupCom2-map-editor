@@ -2314,15 +2314,7 @@ public sealed class SC2ObjectsShell
         {
             GUILayout.Space(6);
             var newArmyName = SC2EnvFieldGui.TextField("Name", selArmy.Name, "army_name");
-            if (newArmyName != selArmy.Name)
-            {
-                if (Session?.Document != null)
-                {
-                    Session.History.Execute(Session.Document, new SC2SetArmyNameCommand(selArmy.Id, newArmyName));
-                    _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
-                }
-                selArmy.Name = newArmyName;
-            }
+            if (newArmyName != selArmy.Name) RenameArmy(selArmy, newArmyName);
             var prevPers = selArmy.Personality; var prevPlans = selArmy.Plans;
             var prevFaction = selArmy.Faction; var prevMass = selArmy.Mass; var prevEnergy = selArmy.Energy;
             selArmy.Personality = SC2EnvFieldGui.TextField("Personality", selArmy.Personality, "army_pers");
@@ -5706,6 +5698,34 @@ public sealed class SC2ObjectsShell
     }
 
     // ── 7. Chains ────────────────────────────────────────────────────────
+    /// <summary>Renames a chain as one undoable command. The command works on the document's own copy of the chain, which only holds the chains
+    /// that existed when the document was last synced (a chain added with Add Chain, or brought in by an import, is not there), so
+    /// the copy is made first: without it the command threw "Chain not found" on every key and the name never changed.</summary>
+    private void RenameChain(SC2ObjChain chain, string newName)
+    {
+        if (Session?.Document != null)
+        {
+            var chains = Session.Document.Objects.Chains;
+            if (!chains.Any(c => c.Id == chain.Id)) chains.Add(JsonUtility.FromJson<SC2ObjChain>(JsonUtility.ToJson(chain)));
+            Session.History.Execute(Session.Document, new SC2SetChainNameCommand(chain.Id, newName));
+            _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
+        }
+        chain.Name = newName;
+    }
+
+    /// <summary>Same as <see cref="RenameChain"/> for an army: the document may not hold it yet.</summary>
+    private void RenameArmy(SC2ObjArmy army, string newName)
+    {
+        if (Session?.Document != null)
+        {
+            var armies = Session.Document.Objects.Armies;
+            if (!armies.Any(a => a.Id == army.Id)) armies.Add(JsonUtility.FromJson<SC2ObjArmy>(JsonUtility.ToJson(army)));
+            Session.History.Execute(Session.Document, new SC2SetArmyNameCommand(army.Id, newName));
+            _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
+        }
+        army.Name = newName;
+    }
+
     private void DrawChains(float w)
     {
         SC2EnvFieldGui.SectionLabel("Chains (scripted patrol/attack routes)");
@@ -5742,15 +5762,7 @@ public sealed class SC2ObjectsShell
         {
             GUILayout.Space(6);
             var newChainName = SC2EnvFieldGui.TextField("Name", selChain.Name, "chain_name");
-            if (newChainName != selChain.Name)
-            {
-                if (Session?.Document != null)
-                {
-                    Session.History.Execute(Session.Document, new SC2SetChainNameCommand(selChain.Id, newChainName));
-                    _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
-                }
-                selChain.Name = newChainName;
-            }
+            if (newChainName != selChain.Name) RenameChain(selChain, newChainName);
             SC2EnvFieldGui.SectionLabel($"Waypoints ({selChain.MarkerNames.Count})");
             for (var i = 0; i < selChain.MarkerNames.Count; i++)
             {
@@ -7563,6 +7575,17 @@ public sealed class SC2ObjectsShell
         {
             var docU = doc.Units.FirstOrDefault(x => x.Id == u.Id);
             if (docU != null) u.Position = docU.Position;
+        }
+        // A rename is a command on the document's copy as well: its undo and redo reach the live chain or army only through this.
+        foreach (var c in Data.ObjChains)
+        {
+            var docC = doc.Chains.FirstOrDefault(x => x.Id == c.Id);
+            if (docC != null) c.Name = docC.Name;
+        }
+        foreach (var a in Data.ObjArmies)
+        {
+            var docA = doc.Armies.FirstOrDefault(x => x.Id == a.Id);
+            if (docA != null) a.Name = docA.Name;
         }
         // Without this, SC2SetZoneRectCommand's Undo/Redo correctly reverted/
         // reapplied a zone's rect on Session.Document.Objects.Zones, but
