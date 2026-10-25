@@ -8,12 +8,15 @@ using UnityEditor;
 
 public static class SC2TextureBrowser
 {
-    private const float HeaderHeight = 42f;
-    private const float FooterHeight = 42f;
-    private const float SidebarWidth = 156f;
-    private const float DetailsWidth = 230f;
-    private const float CellWidth = 118f;
-    private const float CellHeight = 142f;
+    // Every size of the window is in design pixels like the fonts (SC2Type), so it grows with the UI Scale instead of the text outgrowing
+    // fixed-size buttons and rows.
+    private static float S => SC2UiScale.Scale;
+    private static float HeaderHeight => 42f * S;
+    private static float FooterHeight => 42f * S;
+    private static float SidebarWidth => 156f * S;
+    private static float DetailsWidth => 230f * S;
+    private static float CellWidth => 118f * S;
+    private static float CellHeight => 142f * S;
     private static readonly SC2TextureThumbnailCache Cache = new(192);
     /// <summary>DrawPreview's Texture2D branch (material-slot picker boxes,
     /// e.g. "left panel" Diffuse1/RNM Mask 0-2) has no SC2TextureCatalogEntry
@@ -126,6 +129,10 @@ public static class SC2TextureBrowser
     private static GUIStyle _centerDimStyle;
     private static GUIStyle _wrapBoldStyle;
     private static GUIStyle _wrapDimStyle;
+    private static GUIStyle _leftMiniStyle;
+    private static GUIStyle _leftDimStyle;
+    private static GUIStyle _channelButtonStyle;
+    private static GUIStyle _channelActiveStyle;
     private static GUIStyle _flatButtonStyle;
     private static GUIStyle _activeButtonStyle;
     // The card's small round favorite button. FlatButton is left-aligned with
@@ -157,8 +164,8 @@ public static class SC2TextureBrowser
     {
         get
         {
-            var width = Mathf.Clamp(Screen.width - 48f, 720f, 1180f);
-            var height = Mathf.Clamp(Screen.height - 48f, 520f, 820f);
+            var width = Mathf.Min(Screen.width - 24f, Mathf.Clamp(Screen.width - 48f, 720f * S, 1180f * S));
+            var height = Mathf.Min(Screen.height - 24f, Mathf.Clamp(Screen.height - 48f, 520f * S, 820f * S));
             return new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
         }
     }
@@ -354,13 +361,13 @@ public static class SC2TextureBrowser
     private static void DrawHeader(Rect rect)
     {
         DrawRect(rect, SC2Theme.Bg1);
-        GUI.Label(new Rect(rect.x + 14f, rect.y + 10f, 132f, 22f), "Texture Browser", Bold());
-        var search = new Rect(rect.x + 150f, rect.y + 8f, rect.width - 310f, 26f);
+        GUI.Label(new Rect(rect.x + 14f * S, rect.y + 10f * S, 132f * S, 22f * S), "Texture Browser", Bold());
+        var search = new Rect(rect.x + 150f * S, rect.y + 8f * S, rect.width - 310f * S, 26f * S);
         GUI.SetNextControlName("SC2TextureBrowserSearch");
         var next = GUI.TextField(search, Query.Search ?? "");
         if (next != Query.Search) { SetSearch(next); InvalidateQuery(true); }
-        if (GUI.Button(new Rect(search.xMax + 6f, search.y, 56f, 26f), "Clear")) { SetSearch(""); InvalidateQuery(); }
-        if (GUI.Button(new Rect(rect.xMax - 82f, search.y, 68f, 26f), "Close")) { _open = false; PlayerPrefs.Save(); }
+        if (GUI.Button(new Rect(search.xMax + 6f * S, search.y, 56f * S, 26f * S), "Clear")) { SetSearch(""); InvalidateQuery(); }
+        if (GUI.Button(new Rect(rect.xMax - 82f * S, search.y, 68f * S, 26f * S), "Close")) { _open = false; PlayerPrefs.Save(); }
     }
 
     private const string SearchPreferenceKey = "SC2.TextureBrowser.Search";
@@ -385,8 +392,13 @@ public static class SC2TextureBrowser
     {
         DrawRect(rect, SC2Theme.Bg1);
         DrawBorder(rect, SC2Theme.Line);
-        var y = rect.y + 10f;
-        GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 20f), "SOURCE", MiniBold()); y += 24f;
+        // The buttons are drawn into a scroll view: at a large UI Scale they are taller than the window.
+        var scrolls = _sidebarContentHeight > rect.height;
+        var content = new Rect(0f, 0f, rect.width - (scrolls ? 16f : 0f), Mathf.Max(_sidebarContentHeight, rect.height));
+        _sidebarScroll = GUI.BeginScrollView(rect, _sidebarScroll, content, false, false);
+        rect = new Rect(0f, 0f, content.width, content.height);
+        var y = rect.y + 10f * S;
+        GUI.Label(new Rect(rect.x + 10f * S, y, rect.width - 20f * S, 20f * S), "SOURCE", MiniBold()); y += 24f * S;
         // Four groups, not the raw SC2TextureSource enum (Map/Generated never
         // had a real use here, and Vanilla mixed the base game's own
         // archives with community map packs):
@@ -401,8 +413,8 @@ public static class SC2TextureBrowser
             () => SetSourceTab(SourceTabCommunity));
         DrawFilterButton(ref y, rect, "Imported", Query.Source == SC2TextureSource.Custom,
             () => SetSourceTab(SourceTabImported));
-        y += 8f;
-        GUI.Label(new Rect(rect.x + 10f, y, rect.width - 20f, 20f), "USAGE", MiniBold()); y += 24f;
+        y += 8f * S;
+        GUI.Label(new Rect(rect.x + 10f * S, y, rect.width - 20f * S, 20f * S), "USAGE", MiniBold()); y += 24f * S;
         DrawFilterButton(ref y, rect, "Any", !Query.Usage.HasValue, () => Query.Usage = null);
         DrawUsageButton(ref y, rect, "Diffuse", SC2TextureUsage.Diffuse);
         DrawUsageButton(ref y, rect, "Normal", SC2TextureUsage.Normal);
@@ -421,10 +433,10 @@ public static class SC2TextureBrowser
         // Environment (sky included) and ColorCorrectionCube are a different
         // kind of texture than the material Diffuse/Normal/Mask above, so
         // they sit in their own visually separated block, like Decals below.
-        y += 8f;
+        y += 8f * S;
         DrawUsageButton(ref y, rect, "Environment", SC2TextureUsage.Environment);
-        DrawUsageButton(ref y, rect, "ColorCorrectionCube", SC2TextureUsage.ColorCorrectionCube);
-        y += 8f;
+        DrawUsageButton(ref y, rect, "Color Correction", SC2TextureUsage.ColorCorrectionCube);
+        y += 8f * S;
         // A dedicated toggle rather than a full generic per-Category
         // section (there are a dozen+ real distinct categories - Terrain,
         // Splats, Tarmacs, environment, ui, ... - which would overflow this
@@ -441,9 +453,15 @@ public static class SC2TextureBrowser
         // UI to actually set it.
         DrawFilterButton(ref y, rect, "Decals", string.Equals(Query.Category, "Decals", StringComparison.OrdinalIgnoreCase),
             () => Query.Category = string.Equals(Query.Category, "Decals", StringComparison.OrdinalIgnoreCase) ? "" : "Decals");
-        y += 8f;
+        y += 8f * S;
         DrawFilterButton(ref y, rect, "Favorites", Query.FavoritesOnly, () => Query.FavoritesOnly = !Query.FavoritesOnly);
+        _sidebarContentHeight = y + 10f * S;
+        GUI.EndScrollView();
     }
+
+    private static Vector2 _sidebarScroll;
+    // The height the buttons took last time; the first frame assumes a typical one.
+    private static float _sidebarContentHeight = 500f;
 
     // Filter buttons compare through SC2TextureUsageFilter.Normalize so a
     // picker that opened the browser asking for Sky/Rnm/Heightmap still lights
@@ -482,10 +500,10 @@ public static class SC2TextureBrowser
 
     private static void DrawFilterButton(ref float y, Rect parent, string label, bool active, Action action)
     {
-        var rect = new Rect(parent.x + 8f, y, parent.width - 16f, 24f);
+        var rect = new Rect(parent.x + 8f * S, y, parent.width - 16f * S, 24f * S);
         if (active) DrawRect(rect, SC2Theme.Accent);
         if (GUI.Button(rect, label, active ? ActiveButton() : FlatButton())) { action(); InvalidateQuery(); }
-        y += 26f;
+        y += 26f * S;
     }
 
     private static void DrawGrid(Rect rect)
@@ -536,7 +554,7 @@ public static class SC2TextureBrowser
             var isRepaint = Event.current.type == EventType.Repaint;
             var allowHeavyLoad = scrollSettled && _heavyThumbnailTimeThisRepaint < HeavyThumbnailLoadBudgetSeconds && isRepaint;
             var allowDiskLoad = _diskThumbnailLoadsThisRepaint < DiskThumbnailLoadsPerRepaint && isRepaint;
-            DrawCard(new Rect(column * cellWidth + 6f, row * cellHeight + 6f, cellWidth - 10f, cellHeight - 10f), entry, allowHeavyLoad, allowDiskLoad);
+            DrawCard(new Rect(column * cellWidth + 6f * S, row * cellHeight + 6f * S, cellWidth - 10f * S, cellHeight - 10f * S), entry, allowHeavyLoad, allowDiskLoad);
         }
         GUI.EndScrollView();
     }
@@ -555,7 +573,7 @@ public static class SC2TextureBrowser
         var isSuggested = TryGetSuggestionUsage(entry.Id, out var suggestionUsage);
         DrawRect(rect, selected ? Color.Lerp(SC2Theme.Bg1, SC2Theme.Accent, 0.35f) : SC2Theme.Bg1);
         DrawBorder(rect, selected ? SC2Theme.SelectedBorder : isSuggested ? SC2Theme.Amber : SC2Theme.Line);
-        var preview = new Rect(rect.x + 7f, rect.y + 7f, rect.width - 14f, rect.width - 14f);
+        var preview = new Rect(rect.x + 7f * S, rect.y + 7f * S, rect.width - 14f * S, rect.width - 14f * S);
         DrawChecker(preview);
         var heavyLoadsBefore = Cache.HeavyLoadCount;
         var diskLoadsBefore = Cache.DiskLoadCount;
@@ -565,14 +583,14 @@ public static class SC2TextureBrowser
         if (Cache.DiskLoadCount != diskLoadsBefore) _diskThumbnailLoadsThisRepaint++;
         if (texture != null) DrawEntryTexture(preview, entry, texture);
         else GUI.Label(preview, Cache.HasFailed(entry) ? "not loaded" : "loading...", CenterMini());
-        GUI.Label(new Rect(rect.x + 5f, preview.yMax + 4f, rect.width - 10f, 18f), entry.Name, CenterMini());
-        GUI.Label(new Rect(rect.x + 5f, preview.yMax + 20f, rect.width - 10f, 16f), entry.Category, CenterDim());
+        GUI.Label(new Rect(rect.x + 5f * S, preview.yMax + 4f * S, rect.width - 10f * S, 18f * S), entry.Name, FittingMini(entry.Name, rect.width - 10f * S, false));
+        GUI.Label(new Rect(rect.x + 5f * S, preview.yMax + 20f * S, rect.width - 10f * S, 16f * S), entry.Category, FittingMini(entry.Category, rect.width - 10f * S, true));
         // Inset into the thumbnail's own top-right corner by the same margin
         // on both sides, mirroring the "Suggested" badge at its top-left.
         // It used to hang off the card's edge (xMax-22..xMax-4 against a
         // thumbnail ending at xMax-7), so it poked past the thumbnail and
         // sat unevenly against the card border.
-        var favoriteRect = new Rect(preview.xMax - 21f, preview.y + 3f, 18f, 18f);
+        var favoriteRect = new Rect(preview.xMax - 21f * S, preview.y + 3f * S, 18f * S, 18f * S);
         var isFavorite = Favorites.Contains(entry.Id);
         if (GUI.Button(favoriteRect, isFavorite ? "*" : "+", FavoriteButton(isFavorite))) ToggleFavorite(entry.Id);
         if (isSuggested)
@@ -587,8 +605,8 @@ public static class SC2TextureBrowser
             // Open's own doc comment), so printing the usage would just be
             // redundant with the picker's own Usage filter.
             const string badgeText = "Suggested";
-            var badgeWidth = Mathf.Clamp(MiniBold().CalcSize(new GUIContent(badgeText)).x + 10f, 26f, rect.width - 14f);
-            var badgeRect = new Rect(rect.x + 7f, rect.y + 7f, badgeWidth, 16f);
+            var badgeWidth = Mathf.Clamp(MiniBold().CalcSize(new GUIContent(badgeText)).x + 10f * S, 26f * S, rect.width - 14f * S);
+            var badgeRect = new Rect(rect.x + 7f * S, rect.y + 7f * S, badgeWidth, 16f * S);
             DrawRect(badgeRect, new Color(SC2Theme.Amber.r, SC2Theme.Amber.g, SC2Theme.Amber.b, 0.92f));
             var badgeStyle = MiniBold();
             var previousColor = badgeStyle.normal.textColor;
@@ -614,9 +632,9 @@ public static class SC2TextureBrowser
         DrawRect(rect, SC2Theme.Bg1);
         DrawBorder(rect, SC2Theme.Line);
         var entry = SC2TextureCatalog.Instance.Find(_selectedId);
-        var y = rect.y + 12f;
-        GUI.Label(new Rect(rect.x + 12f, y, rect.width - 24f, 22f), "DETAILS", MiniBold()); y += 28f;
-        var preview = new Rect(rect.x + 14f, y, rect.width - 28f, rect.width - 28f);
+        var y = rect.y + 12f * S;
+        GUI.Label(new Rect(rect.x + 12f * S, y, rect.width - 24f * S, 22f * S), "DETAILS", MiniBold()); y += 28f * S;
+        var preview = new Rect(rect.x + 14f * S, y, rect.width - 28f * S, rect.width - 28f * S);
         DrawChecker(preview);
         var texture = entry != null ? (_fullPreviewRequested ? Cache.GetFull(entry) : Cache.Get(entry)) : null;
         if (texture != null)
@@ -624,26 +642,26 @@ public static class SC2TextureBrowser
             if (_fullPreviewRequested) DrawChannelTexture(preview, texture);
             else DrawEntryTexture(preview, entry, texture);
         }
-        y = preview.yMax + 10f;
+        y = preview.yMax + 10f * S;
         var channelLabels = new[] { "RGBA", "RGB", "R", "G", "B", "A" };
-        var channelWidth = (rect.width - 28f) / channelLabels.Length;
+        var channelWidth = (rect.width - 28f * S) / channelLabels.Length;
         for (var i = 0; i < channelLabels.Length; i++)
         {
-            var channelRect = new Rect(rect.x + 14f + i * channelWidth, y, channelWidth - 2f, 22f);
+            var channelRect = new Rect(rect.x + 14f * S + i * channelWidth, y, channelWidth - 2f * S, 22f * S);
             if (_channel == i) DrawRect(channelRect, SC2Theme.Accent);
-            if (GUI.Button(channelRect, channelLabels[i], _channel == i ? ActiveButton() : FlatButton()))
+            if (GUI.Button(channelRect, channelLabels[i], ChannelButton(_channel == i)))
             {
                 _channel = i;
                 _fullPreviewRequested = true;
             }
         }
-        y += 30f;
+        y += 30f * S;
         if (entry != null)
         {
-            if (!_fullPreviewRequested && GUI.Button(new Rect(rect.x + 14f, y, rect.width - 28f, 24f), "Load full preview", FlatButton()))
+            if (!_fullPreviewRequested && GUI.Button(new Rect(rect.x + 14f * S, y, rect.width - 28f * S, 24f * S), "Load full preview", FlatButton()))
                 _fullPreviewRequested = true;
-            y += 30f;
-            GUI.Label(new Rect(rect.x + 12f, y, rect.width - 24f, 38f), entry.Name, WrapBold()); y += 42f;
+            y += 30f * S;
+            GUI.Label(new Rect(rect.x + 12f * S, y, rect.width - 24f * S, 38f * S), entry.Name, WrapBold()); y += 42f * S;
             DetailLine(rect, ref y, "Usage", entry.Usage.ToString());
             DetailLine(rect, ref y, "Source", entry.Source.ToString());
             // Prefer entry's own recorded metadata over the DRAWN texture's
@@ -659,32 +677,32 @@ public static class SC2TextureBrowser
             DetailLine(rect, ref y, "Size", hasRealMetadata || texture == null ? entry.Width + " x " + entry.Height : texture.width + " x " + texture.height);
             DetailLine(rect, ref y, "Format", hasRealMetadata || texture == null ? entry.Encoding : texture.format.ToString());
             DetailLine(rect, ref y, "Mips", hasRealMetadata || texture == null ? entry.MipCount.ToString() : texture.mipmapCount.ToString());
-            GUI.Label(new Rect(rect.x + 12f, y, rect.width - 24f, 74f), string.IsNullOrEmpty(entry.ResourcePath) ? entry.GamePath : entry.ResourcePath, WrapDim());
+            GUI.Label(new Rect(rect.x + 12f * S, y, rect.width - 24f * S, 74f * S), string.IsNullOrEmpty(entry.ResourcePath) ? entry.GamePath : entry.ResourcePath, WrapDim());
         }
     }
 
     private static void DrawFooter(Rect rect)
     {
         DrawRect(rect, SC2Theme.Bg1);
-        GUI.Label(new Rect(rect.x + 12f, rect.y + 12f, 170f, 20f), _results.Count + " textures", CenterDim());
+        GUI.Label(new Rect(rect.x + 12f * S, rect.y + 12f * S, 170f * S, 20f * S), _results.Count + " textures", CenterDim());
         var previousEnabled = GUI.enabled;
-        if (GUI.Button(new Rect(rect.x + 180f, rect.y + 7f, 112f, 28f), "Import...")) ImportCustom();
+        if (GUI.Button(new Rect(rect.x + 180f * S, rect.y + 7f * S, 112f * S, 28f * S), "Import...")) ImportCustom();
         var selected = SC2TextureCatalog.Instance.Find(_selectedId);
         GUI.enabled = previousEnabled && selected != null;
-        if (GUI.Button(new Rect(rect.x + 298f, rect.y + 7f, 104f, 28f), "Download...")) DownloadSelected(selected);
+        if (GUI.Button(new Rect(rect.x + 298f * S, rect.y + 7f * S, 104f * S, 28f * S), "Download...")) DownloadSelected(selected);
         GUI.enabled = previousEnabled;
-        var messageX = rect.x + 408f;
+        var messageX = rect.x + 408f * S;
         // Only an IMPORTED texture (the editor's own TextureLibrary) can be
         // deleted — vanilla/community archive entries are read-only.
         if (selected != null && selected.Source == SC2TextureSource.Custom)
         {
-            if (GUI.Button(new Rect(rect.x + 408f, rect.y + 7f, 84f, 28f), "Delete")) RequestDeleteImported(selected);
-            messageX = rect.x + 500f;
+            if (GUI.Button(new Rect(rect.x + 408f * S, rect.y + 7f * S, 84f * S, 28f * S), "Delete")) RequestDeleteImported(selected);
+            messageX = rect.x + 500f * S;
         }
-        if (!string.IsNullOrEmpty(_message)) GUI.Label(new Rect(messageX, rect.y + 10f, rect.xMax - 260f - messageX, 22f), _message, CenterDim());
-        if (GUI.Button(new Rect(rect.xMax - 238f, rect.y + 7f, 72f, 28f), "None")) Accept(null);
+        if (!string.IsNullOrEmpty(_message)) GUI.Label(new Rect(messageX, rect.y + 10f * S, rect.xMax - 260f * S - messageX, 22f * S), _message, CenterDim());
+        if (GUI.Button(new Rect(rect.xMax - 238f * S, rect.y + 7f * S, 72f * S, 28f * S), "None")) Accept(null);
         GUI.enabled = previousEnabled && selected != null;
-        if (GUI.Button(new Rect(rect.xMax - 158f, rect.y + 7f, 144f, 28f), "Use Selected")) Accept(SC2TextureCatalog.Instance.Find(_selectedId));
+        if (GUI.Button(new Rect(rect.xMax - 158f * S, rect.y + 7f * S, 144f * S, 28f * S), "Use Selected")) Accept(SC2TextureCatalog.Instance.Find(_selectedId));
         GUI.enabled = previousEnabled;
     }
 
@@ -1129,7 +1147,7 @@ public static class SC2TextureBrowser
         _queryReadyAt = debounce ? Time.realtimeSinceStartupAsDouble + 0.12 : 0.0;
     }
 
-    private static void DetailLine(Rect parent, ref float y, string label, string value) { GUI.Label(new Rect(parent.x + 12f, y, 62f, 18f), label, CenterDim()); GUI.Label(new Rect(parent.x + 76f, y, parent.width - 88f, 18f), value ?? "", CenterMini()); y += 20f; }
+    private static void DetailLine(Rect parent, ref float y, string label, string value) { GUI.Label(new Rect(parent.x + 12f * S, y, 62f * S, 18f * S), label, CenterDim()); GUI.Label(new Rect(parent.x + 76f * S, y, parent.width - 88f * S, 18f * S), value ?? "", CenterMini()); y += 20f * S; }
     /// <summary>V-flipped source UV rect (V grows downward from 1 instead of
     /// up from 0) — used for every flat, non-atlas preview draw below. DDS
     /// files store row 0 at the top of the image; Unity's Texture2D/
@@ -1191,10 +1209,14 @@ public static class SC2TextureBrowser
     }
     private static void DrawBorder(Rect r, Color c) { DrawRect(new Rect(r.x,r.y,r.width,1),c); DrawRect(new Rect(r.x,r.yMax-1,r.width,1),c); DrawRect(new Rect(r.x,r.y,1,r.height),c); DrawRect(new Rect(r.xMax-1,r.y,1,r.height),c); }
     private static void DrawRect(Rect rect, Color color) { var old=GUI.color; GUI.color=color; GUI.DrawTexture(rect,Texture2D.whiteTexture); GUI.color=old; }
+    private static int _styleFontSize = -1;
+
     private static void EnsureStyles()
     {
-        if (_styleSkin == GUI.skin && _boldStyle != null) return;
+        // Rebuilt when the skin or the font size (the UI Scale) changes.
+        if (_styleSkin == GUI.skin && _boldStyle != null && _styleFontSize == SC2Type.Body) return;
         _styleSkin = GUI.skin;
+        _styleFontSize = SC2Type.Body;
         _boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Nav };
         _boldStyle.normal.textColor = SC2Theme.TextBright;
         _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Caption };
@@ -1203,12 +1225,20 @@ public static class SC2TextureBrowser
         _centerMiniStyle.normal.textColor = SC2Theme.TextPrimary;
         _centerDimStyle = new GUIStyle(_centerMiniStyle);
         _centerDimStyle.normal.textColor = SC2Theme.TextSecondary;
+        // A name wider than its card keeps its start visible (left-aligned) instead of losing both ends.
+        _leftMiniStyle = new GUIStyle(_centerMiniStyle) { alignment = TextAnchor.MiddleLeft };
+        _leftDimStyle = new GUIStyle(_centerDimStyle) { alignment = TextAnchor.MiddleLeft };
         _wrapBoldStyle = new GUIStyle(_boldStyle) { fontSize = SC2Type.Body, wordWrap = true };
         _wrapDimStyle = new GUIStyle(_centerDimStyle) { alignment = TextAnchor.UpperLeft, wordWrap = true };
         _flatButtonStyle = new GUIStyle(GUI.skin.button) { alignment = TextAnchor.MiddleLeft };
         _activeButtonStyle = new GUIStyle(_flatButtonStyle);
         _activeButtonStyle.normal.textColor = Color.white;
         _activeButtonStyle.hover.textColor = Color.white;
+        // The six channel buttons share the width of the details column, so they use the small font and no padding.
+        _channelButtonStyle = new GUIStyle(_flatButtonStyle) { alignment = TextAnchor.MiddleCenter, fontSize = SC2Type.Caption, padding = new RectOffset(1, 1, 0, 0) };
+        _channelActiveStyle = new GUIStyle(_channelButtonStyle);
+        _channelActiveStyle.normal.textColor = Color.white;
+        _channelActiveStyle.hover.textColor = Color.white;
         // "+" is vertically centered by its font metrics already; "*" is a
         // superscript-style glyph that sits high in the em box, so it gets
         // extra top padding to land at the circle's center too.
@@ -1224,5 +1254,14 @@ public static class SC2TextureBrowser
     private static GUIStyle WrapBold() { EnsureStyles(); return _wrapBoldStyle; }
     private static GUIStyle WrapDim() { EnsureStyles(); return _wrapDimStyle; }
     private static GUIStyle FlatButton() { EnsureStyles(); return _flatButtonStyle; }
+    private static GUIStyle ChannelButton(bool active) { EnsureStyles(); return active ? _channelActiveStyle : _channelButtonStyle; }
+
+    /// <summary>The centered small label, or its left-aligned twin when the text does not fit the width.</summary>
+    private static GUIStyle FittingMini(string text, float width, bool dim)
+    {
+        EnsureStyles();
+        var fits = _centerMiniStyle.CalcSize(new GUIContent(text ?? "")).x <= width;
+        return dim ? (fits ? _centerDimStyle : _leftDimStyle) : (fits ? _centerMiniStyle : _leftMiniStyle);
+    }
     private static GUIStyle ActiveButton() { EnsureStyles(); return _activeButtonStyle; }
 }
