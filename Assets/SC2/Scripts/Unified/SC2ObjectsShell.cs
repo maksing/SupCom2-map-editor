@@ -506,6 +506,7 @@ public sealed class SC2ObjectsShell
             return;
         }
         EnsureObjectsDocumentSynced();
+        CommitArmyNameDraft();
         // SyncTransforms/SyncMissingAssetPreviews (real 3D prop/unit
         // preview models) and SC2MarkerScenePreview.Sync (markers) moved to
         // OnGameViewGUI — that method already runs cross-tab whenever any
@@ -678,6 +679,7 @@ public sealed class SC2ObjectsShell
     public void DoUndo()
     {
         if (!_undo.Undo()) return;
+        ReconcileArmyNamesInDocument();
         ClearAllSelections(keepGraphSelection: true, keepZoneSelection: true);
         BumpDataVersion();
         RepaintHost?.Invoke();
@@ -686,6 +688,7 @@ public sealed class SC2ObjectsShell
     public void DoRedo()
     {
         if (!_undo.Redo()) return;
+        ReconcileArmyNamesInDocument();
         ClearAllSelections(keepGraphSelection: true, keepZoneSelection: true);
         BumpDataVersion();
         RepaintHost?.Invoke();
@@ -1582,6 +1585,61 @@ public sealed class SC2ObjectsShell
         return $"ARMY_{n}";
     }
 
+    /// <summary>Where an army stands in the order the game gets the armies: its place among the ARMY_* start positions (the export writes
+    /// StartPositions, the team's army list and the Armies table in that order), or among the armies list when it has no start position.
+    /// <paramref name="count"/> is the size of that order; the place is -1 when the army is in neither.</summary>
+    private int ArmyOrderPlace(SC2ObjArmy army, out int count)
+    {
+        var starts = Data.ObjMarkers.Where(m => ArmyPositionRe.IsMatch(m.Name)).ToList();
+        var at = starts.FindIndex(m => string.Equals(m.Name, army.Name, StringComparison.OrdinalIgnoreCase));
+        if (at >= 0) { count = starts.Count; return at; }
+        count = Data.ObjArmies.Count;
+        return Data.ObjArmies.IndexOf(army);
+    }
+
+    /// <summary>Moves an army one place up (direction -1) or down (+1) in the order the game gets the armies. That order is the order of the
+    /// ARMY_* start-position markers, so the two markers swap places in the marker list; the Armies list is then put in the same order so both
+    /// lists agree. The names stay as they are (ARMY_3 may come second).</summary>
+    private void MoveArmy(SC2ObjArmy army, int direction)
+    {
+        var place = ArmyOrderPlace(army, out var count);
+        var target = place + direction;
+        if (place < 0 || target < 0 || target >= count) return;
+        PushUndo();
+
+        var starts = Data.ObjMarkers.Where(m => ArmyPositionRe.IsMatch(m.Name)).ToList();
+        if (starts.Any(m => string.Equals(m.Name, army.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            var from = Data.ObjMarkers.IndexOf(starts[place]);
+            var to = Data.ObjMarkers.IndexOf(starts[target]);
+            (Data.ObjMarkers[from], Data.ObjMarkers[to]) = (Data.ObjMarkers[to], Data.ObjMarkers[from]);
+            SortArmiesLikeStartPositions();
+        }
+        else
+        {
+            (Data.ObjArmies[place], Data.ObjArmies[target]) = (Data.ObjArmies[target], Data.ObjArmies[place]);
+        }
+        _lastActionSummary = $"Moved {army.Name} {(direction < 0 ? "up" : "down")}.";
+        MarkObjectsDirty();
+    }
+
+    /// <summary>Puts the Armies list in the order of the ARMY_* start-position markers; an army without a start position keeps its relative
+    /// order after the others.</summary>
+    private void SortArmiesLikeStartPositions()
+    {
+        var ordered = new List<SC2ObjArmy>();
+        foreach (var marker in Data.ObjMarkers)
+        {
+            if (!ArmyPositionRe.IsMatch(marker.Name)) continue;
+            var army = Data.ObjArmies.Find(a => string.Equals(a.Name, marker.Name, StringComparison.OrdinalIgnoreCase));
+            if (army != null && !ordered.Contains(army)) ordered.Add(army);
+        }
+        foreach (var army in Data.ObjArmies)
+            if (!ordered.Contains(army)) ordered.Add(army);
+        Data.ObjArmies.Clear();
+        Data.ObjArmies.AddRange(ordered);
+    }
+
     /// <summary>Only campaign maps are allowed a start-position marker whose
     /// name doesn't follow the plain "ARMY_N" convention (e.g. a
     /// story-specific name) — every skirmish/multiplayer map's ARMY_*
@@ -2207,6 +2265,55 @@ public sealed class SC2ObjectsShell
     }
 
     // ── 1. Armies ────────────────────────────────────────────────────────
+    private const string ArmyNameControl = "SC2EnvText_army_name";
+    private int _armyNameDraftId;
+    private string _armyNameDraft = "";
+    private bool _armyNameHadFocus;
+
+    /// <summary>Applies the army name typed in the Name field once the field has lost the keyboard (Enter, a click elsewhere), also when
+    /// another army was selected or the Armies tab left meanwhile. Until then nothing has changed, so the lists never disagree.</summary>
+    /// <summary>Every army rename of this session, oldest first: undo and redo of a rename restore the live lists, and this is how the army
+    /// names kept in the document (the lobby start positions, the validator's copy of the armies) are taken back with them.</summary>
+    private readonly List<(string From, string To)> _armyRenames = new();
+
+    private void ReconcileArmyNamesInDocument()
+    {
+        if (Session?.Document == null) return;
+        foreach (var documentArmy in Session.Document.Objects.Armies)
+        {
+            var live = Data.ObjArmies.FirstOrDefault(a => a.Id == documentArmy.Id);
+            if (live != null) documentArmy.Name = live.Name;
+        }
+        var lobby = Session.Document.Scenario?.LobbyStartPositions;
+        if (lobby == null) return;
+        bool Exists(string name) => Data.ObjArmies.Any(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase));
+        foreach (var position in lobby)
+        {
+            if (Exists(position.ArmyName)) continue;
+            for (var i = _armyRenames.Count - 1; i >= 0; i--)
+            {
+                var (from, to) = _armyRenames[i];
+                if (string.Equals(position.ArmyName, to, StringComparison.OrdinalIgnoreCase) && Exists(from)) { position.ArmyName = from; break; }
+                if (string.Equals(position.ArmyName, from, StringComparison.OrdinalIgnoreCase) && Exists(to)) { position.ArmyName = to; break; }
+            }
+        }
+    }
+
+    private void CommitArmyNameDraft()
+    {
+        // Only in a layout pass: the lists change, and the passes of one frame have to see the same controls.
+        if (Event.current == null || Event.current.type != EventType.Layout) return;
+        if (!_armyNameHadFocus || GUI.GetNameOfFocusedControl() == ArmyNameControl) return;
+        _armyNameHadFocus = false;
+        var army = _armyNameDraftId != 0 ? Data.ObjArmies.FirstOrDefault(a => a.Id == _armyNameDraftId) : null;
+        if (army == null) return;
+        var newName = (_armyNameDraft ?? "").Trim();
+        _armyNameDraft = army.Name;
+        if (newName == army.Name) return;
+        RenameArmy(army, newName);
+        _armyNameDraft = army.Name;
+    }
+
     private void DrawArmies(float w)
     {
         GUILayout.BeginHorizontal();
@@ -2291,13 +2398,28 @@ public sealed class SC2ObjectsShell
         {
             GUILayout.BeginHorizontal();
             var armyLabel = string.IsNullOrEmpty(a.Name) ? $"Army {a.Id}" : a.Name;
-            var sel = GUILayout.Toggle(_selectedArmyId == a.Id, TruncateForLabel(armyLabel, w * 0.7f), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f));
+            var armyNameWidth = w * 0.7f - SC2UiScale.Pxf(56f);
+            var sel = GUILayout.Toggle(_selectedArmyId == a.Id, TruncateForLabel(armyLabel, armyNameWidth), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(armyNameWidth));
             if (sel)
             {
                 if (_selectedArmyId != a.Id) _selGroupId = 0; // the army chosen last is the target of new units, not a group chosen earlier
                 _selectedArmyId = a.Id;
             }
             else if (_selectedArmyId == a.Id) _selectedArmyId = 0;
+            // The order of the list is the order the game gets the armies (the lobby slots): see MoveArmy.
+            var armyPlace = ArmyOrderPlace(a, out var armyCount);
+            var movedArmy = false;
+            var enabledBeforeMove = GUI.enabled;
+            GUI.enabled = enabledBeforeMove && armyPlace > 0;
+            if (SC2EnvFieldGui.Button("\u2191", GUILayout.Width(SC2UiScale.Pxf(24f)))) { MoveArmy(a, -1); movedArmy = true; }
+            GUI.enabled = enabledBeforeMove && armyPlace >= 0 && armyPlace < armyCount - 1;
+            if (!movedArmy && SC2EnvFieldGui.Button("\u2193", GUILayout.Width(SC2UiScale.Pxf(24f)))) { MoveArmy(a, 1); movedArmy = true; }
+            GUI.enabled = enabledBeforeMove;
+            if (movedArmy)
+            {
+                GUILayout.EndHorizontal();
+                break;
+            }
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
                 PushUndo();
@@ -2313,8 +2435,11 @@ public sealed class SC2ObjectsShell
         if (selArmy != null)
         {
             GUILayout.Space(6);
-            var newArmyName = SC2EnvFieldGui.TextField("Name", selArmy.Name, "army_name");
-            if (newArmyName != selArmy.Name) RenameArmy(selArmy, newArmyName);
+            // The name is applied when the field is left (see CommitArmyNameDraft), not on every key: it moves the start position,
+            // the groups and units and the alliances along, and half-typed names must not do that.
+            if (_armyNameDraftId != selArmy.Id) { _armyNameDraftId = selArmy.Id; _armyNameDraft = selArmy.Name; }
+            _armyNameDraft = SC2EnvFieldGui.TextField("Name", _armyNameDraft, "army_name");
+            _armyNameHadFocus = GUI.GetNameOfFocusedControl() == ArmyNameControl;
             var prevPers = selArmy.Personality; var prevPlans = selArmy.Plans;
             var prevFaction = selArmy.Faction; var prevMass = selArmy.Mass; var prevEnergy = selArmy.Energy;
             selArmy.Personality = SC2EnvFieldGui.TextField("Personality", selArmy.Personality, "army_pers");
@@ -5713,17 +5838,57 @@ public sealed class SC2ObjectsShell
         chain.Name = newName;
     }
 
-    /// <summary>Same as <see cref="RenameChain"/> for an army: the document may not hold it yet.</summary>
+    /// <summary>Renames an army with everything that carries its name: the ARMY_* start-position marker (and the chains that list it), the groups
+    /// and units of the army, the alliances other armies hold with it, its place in the Groups tree and its lobby start position. Without that
+    /// the groups and units stayed under the old name, an army of their own with nothing else. A name that is empty, already taken, or (for an
+    /// army with a start position) not "ARMY_..." is refused. One undo step.</summary>
     private void RenameArmy(SC2ObjArmy army, string newName)
     {
-        if (Session?.Document != null)
+        var from = army.Name;
+        if (string.IsNullOrWhiteSpace(newName) || string.Equals(newName, from, StringComparison.Ordinal)) return;
+
+        var marker = (army.MarkerId != 0 ? Data.ObjMarkers.FirstOrDefault(m => m.Id == army.MarkerId) : null)
+                     ?? Data.ObjMarkers.FirstOrDefault(m => ArmyPositionRe.IsMatch(m.Name) && string.Equals(m.Name, from, StringComparison.OrdinalIgnoreCase));
+        if (Data.ObjArmies.Any(a => a != army && string.Equals(a.Name, newName, StringComparison.OrdinalIgnoreCase))
+            || Data.ObjMarkers.Any(m => m != marker && string.Equals(m.Name, newName, StringComparison.OrdinalIgnoreCase)))
         {
-            var armies = Session.Document.Objects.Armies;
-            if (!armies.Any(a => a.Id == army.Id)) armies.Add(JsonUtility.FromJson<SC2ObjArmy>(JsonUtility.ToJson(army)));
-            Session.History.Execute(Session.Document, new SC2SetArmyNameCommand(army.Id, newName));
-            _undo.Record(new SC2DelegateUndoChannel(TryCommandUndo, TryCommandRedo));
+            _lastActionSummary = $"Army not renamed: '{newName}' already exists.";
+            return;
         }
+        if (marker != null && !ArmyPositionRe.IsMatch(newName))
+        {
+            _lastActionSummary = "Army not renamed: the name of an army with a start position has to be ARMY_<something>.";
+            return;
+        }
+
+        PushUndo();
         army.Name = newName;
+        if (marker != null)
+        {
+            var previousMarkerName = marker.Name;
+            marker.Name = newName;
+            RenameMarkerReferences(previousMarkerName, newName);
+            army.MarkerId = marker.Id;
+        }
+        foreach (var unit in Data.ObjUnits)
+            if (string.Equals(unit.ArmyName, from, StringComparison.OrdinalIgnoreCase)) unit.ArmyName = newName;
+        foreach (var other in Data.ObjArmies)
+            foreach (var alliance in other.Alliances)
+                if (string.Equals(alliance.OtherArmy, from, StringComparison.OrdinalIgnoreCase)) alliance.OtherArmy = newName;
+        if (_unitArmyCollapsed.Remove(from)) _unitArmyCollapsed.Add(newName);
+
+        _armyRenames.Add((from, newName));
+        // The lobby start position is kept by army name in the scenario document.
+        var lobby = Session?.Document?.Scenario?.LobbyStartPositions;
+        if (lobby != null)
+            foreach (var position in lobby)
+                if (string.Equals(position.ArmyName, from, StringComparison.OrdinalIgnoreCase)) position.ArmyName = newName;
+        // The document's own copy of the army (what the validator reads) follows too.
+        var documentArmy = Session?.Document?.Objects.Armies.FirstOrDefault(a => a.Id == army.Id);
+        if (documentArmy != null) documentArmy.Name = newName;
+
+        _lastActionSummary = $"Renamed {from} to {newName}.";
+        MarkObjectsDirty();
     }
 
     private void DrawChains(float w)
@@ -7581,11 +7746,6 @@ public sealed class SC2ObjectsShell
         {
             var docC = doc.Chains.FirstOrDefault(x => x.Id == c.Id);
             if (docC != null) c.Name = docC.Name;
-        }
-        foreach (var a in Data.ObjArmies)
-        {
-            var docA = doc.Armies.FirstOrDefault(x => x.Id == a.Id);
-            if (docA != null) a.Name = docA.Name;
         }
         // Without this, SC2SetZoneRectCommand's Undo/Redo correctly reverted/
         // reapplied a zone's rect on Session.Document.Objects.Zones, but
