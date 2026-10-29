@@ -2897,7 +2897,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private void DrawSymmetryMenu()
     {
         var data = _terrainShell?.Data;
-        var contentHeight = data == null ? MenuItemHeight : 8 * MenuItemHeight + (data.Symmetry == SymmetryMode.Radial ? MenuItemHeight : 0f);
+        // + the CENTER block: its label, the presets, two fields and the map-center button.
+        var contentHeight = data == null ? MenuItemHeight : 12 * MenuItemHeight + (data.Symmetry == SymmetryMode.Radial ? MenuItemHeight : 0f);
         DrawMenuPanel(_symmetryMenuRect.x, TitleBarHeight, 210, contentHeight, () =>
         {
             if (data == null)
@@ -2929,7 +2930,38 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                     EditorUtility.SetDirty(data);
                 }
             }
+
+            DrawSymmetryCenter(data);
         });
+    }
+
+    /// <summary>The point every symmetry is worked out around (SC2TerrainData.SymmetryCenter, in world units; the height is not used). It is
+    /// the middle of the map when a map is made, which is 256, 512 or 1024 for the usual sizes; the presets set both axes to that value, and
+    /// the two fields take any other point.</summary>
+    private void DrawSymmetryCenter(SC2TerrainData data)
+    {
+        GUILayout.Label("CENTER", _dropdownSectionLabelStyle);
+        var center = data.SymmetryCenter;
+        var next = center;
+
+        GUILayout.BeginHorizontal();
+        foreach (var preset in new[] { 256f, 512f, 1024f })
+        {
+            var isOn = Mathf.Approximately(center.x, preset) && Mathf.Approximately(center.z, preset);
+            if (GUILayout.Toggle(isOn, preset.ToString("0"), "Button") && !isOn)
+                next = new Vector3(preset, center.y, preset);
+        }
+        GUILayout.EndHorizontal();
+
+        next.x = SC2EnvFieldGui.FloatField("Center X", next.x, "symmetry_center_x");
+        next.z = SC2EnvFieldGui.FloatField("Center Z", next.z, "symmetry_center_z");
+        if (GUILayout.Button("Map center", GUILayout.Height(SC2UiScale.Pxf(22f))))
+            next = new Vector3(data.GridWidth * data.CellSize * 0.5f, center.y, data.GridHeight * data.CellSize * 0.5f);
+
+        if (float.IsNaN(next.x) || float.IsNaN(next.z) || next == center) return;
+        _terrainShell.RecordUndoCheckpoint("Change Symmetry Center");
+        data.SymmetryCenter = next;
+        EditorUtility.SetDirty(data);
     }
 
     private void DrawSymmetryModeToggle(SC2TerrainData data, SymmetryMode mode, string label)
