@@ -150,10 +150,10 @@ public class SC2TerrainShell : ScriptableObject
     // strength/etc. selection is ONE state for both surfaces, not two
     // independent copies the way an earlier version of this — and the now-
     // removed SC2BackgroundEditMode class it used for Geometry/Paint —
-    // worked). Materials/Pairs are separate instances per surface
-    // (_bgMatMode/_bgPairsMode below) since they have no viewport/runtime
-    // dependency to share and the user asked for both to just show stacked
-    // instead. There is no more manual "Editing Target: Core/Background"
+    // worked). Pairs are a separate instance per surface (_bgPairsMode
+    // below) since it has no viewport/runtime dependency to share and the
+    // user asked for both to just show stacked instead; the materials are
+    // one list for both (SC2SharedMaterials). There is no more manual "Editing Target: Core/Background"
     // toggle at all — Geometry/Paint decide which surface the brush is
     // pointing at from where the cursor actually is
     // (DetermineActiveBrushTarget), and Materials/Pairs show both surfaces'
@@ -183,7 +183,6 @@ public class SC2TerrainShell : ScriptableObject
     private bool? _strokeTargetIsBackground;
     private bool _lastEditedTargetIsBackground;
     private readonly SC2TerrainUndoStack _bgUndoStack = new();
-    private SC2MaterialsMode _bgMatMode;
     private SC2PairsMode     _bgPairsMode;
 
     /// <summary>Live GPU chunk runtime for the background terrain — a
@@ -348,7 +347,6 @@ public class SC2TerrainShell : ScriptableObject
         EnsureBackgroundRuntime();
         var bg = _data != null ? SC2BackgroundTerrain.EnsureGenerated(_data) : null;
         if (bg == null) return;
-        if (_bgMatMode == null || _bgMatMode.Data != bg) _bgMatMode = new SC2MaterialsMode(this, bg);
         if (_bgPairsMode == null || _bgPairsMode.Data != bg) _bgPairsMode = new SC2PairsMode(this, bg);
         if (_bgUndoStack.CaptureExtra == null)
         {
@@ -1237,14 +1235,9 @@ public class SC2TerrainShell : ScriptableObject
                 _geoMode.DrawPanel();
                 break;
             case EditorMode.Materials:
-                DrawUnifiedSectionLabel("Core");
+                // One list for the core and the background: the background's pairs take their materials from it too
+                // (SC2SharedMaterials keeps its list on the same objects).
                 _matMode.DrawPanel();
-                if (_data.BackgroundTerrainEnabled && _bgMatMode != null)
-                {
-                    EditorGUILayout.Space(10);
-                    DrawUnifiedSectionLabel("Background");
-                    _bgMatMode.DrawPanel();
-                }
                 break;
             case EditorMode.Imported:  DrawImportedTerrainsContent?.Invoke(contentWidth); break;
             case EditorMode.Pairs:
@@ -2328,6 +2321,10 @@ public class SC2TerrainShell : ScriptableObject
         // import's authored height).
         SC2WaterPreview.Ensure(_data, Session, _waterOverlayVisible, GetImportedTerrainsForExport?.Invoke());
         SC2SkyPreview.Ensure(_data, Session);
+
+        // The background's materials are the core's own objects; after an undo, a load or a deleted material its list and its pairs'
+        // indices are brought back in line here, and the preview redrawn when that changed anything.
+        if (_data != null && SC2SharedMaterials.Sync(_data)) SC2BackgroundRuntimeSync.MarkDirty();
 
         // Same "keep it live every tick" reasoning as SC2WaterPreview just
         // above. EnsureBackgroundRuntime is cheap once built (early-out on
@@ -5084,6 +5081,8 @@ public class SC2TerrainShell : ScriptableObject
         SC2Log.Log($"[SC2TerrainShell] Save started. MapName='{_data.MapName}', writeAssets={writeAssets}");
         try
         {
+            // What is saved and exported must not depend on a frame having run since the last undo or deleted material.
+            if (_data != null) SC2SharedMaterials.Sync(_data);
             SyncDataForSave(sw);
             EditorUtility.SetDirty(_data);
             if (writeAssets)

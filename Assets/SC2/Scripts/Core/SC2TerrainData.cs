@@ -427,6 +427,10 @@ public class SC2TerrainData : ScriptableObject, ISerializationCallbackReceiver
     /// persisted (Undo/document), not this whole nested object.</summary>
     public SC2TerrainData BackgroundTerrainData;
 
+    /// <summary>Set on a background terrain once its material list has been joined with the core's (see SC2SharedMaterials). Not
+    /// saved: a loaded or regenerated background starts without it and is joined again.</summary>
+    [System.NonSerialized] public bool MaterialsSharedWithCore;
+
     /// <summary>World-space outer size (both X and Z) of the background's
     /// square footprint, centered on the core's own rectangle. Rounded
     /// outward to the core's CellSize by SC2BackgroundTerrain.ComputeBounds
