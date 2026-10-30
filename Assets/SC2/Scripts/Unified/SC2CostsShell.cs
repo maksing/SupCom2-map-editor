@@ -992,21 +992,26 @@ public sealed class SC2CostsShell
     /// safety (which exists so loading an already-painted map never
     /// silently discards its blocks), this is a deliberate, explicit user
     /// action to switch profiles, so it really does replace the block list
-    /// - confirmed first if anything already looks hand-painted. Immediately
-    /// runs Auto-generate on the new set too (not left blank/all-passable):
-    /// the point of toggling this is to see a real water-aware result, not
-    /// an empty grid the user then has to remember to fill in.</summary>
+    /// - always confirmed first, painted or not. The new set starts empty
+    /// (all passable): nothing is generated from the terrain here, the user
+    /// presses Auto-generate when that is wanted.</summary>
     private void ApplyPlayableWaterToggle(bool playableWater)
     {
-        if (AnyCostsBlockPainted())
-        {
-            var proceed = EditorUtility.DisplayDialog(
-                "Playable water",
-                "Switching this rebuilds the Costs block set (3 land-only blocks <-> 5 playable-water blocks) and discards any hand-painted Costs data. Continue?",
-                "Switch", "Cancel");
-            if (!proceed) return;
-        }
+        var title = "Costs block set";
+        var message = $"Switch to {(playableWater ? "5 blocks (land + water)" : "3 blocks (land only)")}?\n\n" +
+                      "The Costs blocks are replaced by an empty set and everything painted in them is discarded. " +
+                      "The new blocks are not generated from the terrain: use Auto-generate afterwards if you want that.";
+#if UNITY_EDITOR
+        if (EditorUtility.DisplayDialog(title, message, "Switch", "Cancel")) SwitchBlockSet(playableWater);
+#else
+        // EditorUtility.DisplayDialog is a stub that always agrees in a build; the cancelable question there is the runtime one.
+        SC2RuntimeConfirm.Open(title, message, "Switch", () => SwitchBlockSet(playableWater));
+#endif
+    }
 
+    /// <summary>The switch itself, after the user confirmed it.</summary>
+    private void SwitchBlockSet(bool playableWater)
+    {
         RecordUndo();
         Data.PlayableWater = playableWater;
         // Turning on playable water with no visible water plane
@@ -1034,9 +1039,6 @@ public sealed class SC2CostsShell
         if (Data.CostsShoreHintOverrideMask != null)
             System.Array.Clear(Data.CostsShoreHintOverrideMask, 0, Data.CostsShoreHintOverrideMask.Length);
         Data.EnsureCostsAndTerrainTypes();
-        Data.CostsBlocks[0].Navmesh = SC2CostsAutoGen.GenerateFromHeight(
-            Data, Data.CostsBlocks[0].Name, _terrainShell.SampleLiveHeightGrid, _genThresholds, Session?.Document?.Environment?.WorkingHeader);
-        RecomputeDerivedCostsBlocks();
         _activeBlock = 0;
         _overlayDirty = true;
         SyncDocumentFromLive();
