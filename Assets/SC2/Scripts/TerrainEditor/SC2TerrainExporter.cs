@@ -918,6 +918,22 @@ public static class SC2TerrainExporter
                     if (!string.IsNullOrEmpty(pair.ShaderPrefix)) mat.ShaderPrefix = pair.ShaderPrefix;
                     model.Materials.Add(mat);
                 }
+
+                // The blend brush paints the mask group of the first pair and the editor shows it over every pair, but each group is its
+                // own file: a pair in another group exports a blend file nobody painted, so it is not blended in the game.
+                var firstBackgroundMask = bg.Pairs[0].RnmMaskName;
+                var otherBackgroundMasks = new List<string>();
+                foreach (var builtLayer in bgBuild.Layers)
+                {
+                    var layerPair = builtLayer.PairIndex >= 0 && builtLayer.PairIndex < bg.Pairs.Count ? bg.Pairs[builtLayer.PairIndex] : null;
+                    if (layerPair != null && MakeSafe(layerPair.RnmMaskName ?? "mask01") != MakeSafe(firstBackgroundMask ?? "mask01")
+                        && !otherBackgroundMasks.Contains(layerPair.Name))
+                        otherBackgroundMasks.Add(layerPair.Name);
+                }
+                if (otherBackgroundMasks.Count > 0)
+                    warnings.Add($"Background pair(s) {string.Join(", ", otherBackgroundMasks)} use another RNM Mask than '{firstBackgroundMask}', "
+                                 + "the one Paint > Blend Mask paints on the background: they export an unpainted blend and are not blended in the game. "
+                                 + "Set the same RNM Mask on them in the Pairs tab.");
             }
         }
 

@@ -476,6 +476,11 @@ public class SC2PairsMode
                 Mat2Id     = Data.Materials[mat2Index].Id,
                 ShaderFlags = DefaultFlags(),
             };
+            // The blend brush paints one mask group per surface and shows it over every pair, so a new pair has to join the group of the
+            // first pair. Left on the class default ("mask01") it would sit next to the background's "background" group and export an
+            // empty blend file while the editor still showed the painted blend on it.
+            if (Data.Pairs.Count > 0 && !string.IsNullOrWhiteSpace(Data.Pairs[0].RnmMaskName))
+                np.RnmMaskName = Data.Pairs[0].RnmMaskName;
             Data.Pairs.Add(np);
             _sel = Data.Pairs.Count-1;
             // If this is the first pair, auto-assign every triangle to it
