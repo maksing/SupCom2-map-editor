@@ -45,9 +45,10 @@ public struct SC2HotkeyBinding
     }
 
     /// <summary>For a keyed binding: does this KeyDown event match exactly
-    /// (key + all three modifier flags)?</summary>
+    /// (key + all three modifier flags)? An empty alternative slot (no key) matches nothing: a character-only KeyDown
+    /// carries keyCode None and would otherwise match it.</summary>
     public bool MatchesEvent(Event e) =>
-        e != null && e.keyCode == Key && e.control == Ctrl && e.shift == Shift && e.alt == Alt;
+        e != null && Key != KeyCode.None && e.keyCode == Key && e.control == Ctrl && e.shift == Shift && e.alt == Alt;
 
     /// <summary>For a modifier-only binding: are exactly these modifiers
     /// held right now, regardless of e.keyCode?</summary>

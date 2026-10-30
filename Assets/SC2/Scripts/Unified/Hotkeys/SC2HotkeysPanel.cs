@@ -41,12 +41,16 @@ public static class SC2HotkeysPanel
         if (!_open) return;
         var evt = Event.current;
 
+        // The capture takes its press before the list is drawn: a slot button under the cursor would otherwise use the press
+        // up first, and a mouse button could only be assigned by pressing it where no button is.
+        HandleCapture(evt);
+
         var screen = new Rect(0, 0, Screen.width, Screen.height);
         DrawRect(screen, new Color(0f, 0f, 0f, 0.72f));
 
         // Every size below is in design pixels like the fonts (SC2Type), so the panel grows with the UI Scale instead of the
         // text outgrowing fixed-size buttons and rows.
-        var width = Mathf.Min(Screen.width - 24f, Mathf.Clamp(Screen.width - 96f, 520f * S, 760f * S));
+        var width = Mathf.Min(Screen.width - 24f, Mathf.Clamp(Screen.width - 96f, 560f * S, 900f * S));
         var height = Mathf.Min(Screen.height - 24f, Mathf.Clamp(Screen.height - 96f, 420f * S, 720f * S));
         var window = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
         DrawRect(window, SC2Theme.Bg2);
@@ -77,8 +81,6 @@ public static class SC2HotkeysPanel
             return;
         }
 
-        HandleCapture(evt);
-
         if (evt != null && evt.type != EventType.Repaint && evt.type != EventType.Layout) evt.Use();
     }
 
@@ -92,7 +94,7 @@ public static class SC2HotkeysPanel
     private static void DrawList(Rect rect)
     {
         DrawRect(rect, SC2Theme.Bg0);
-        var rowHeight = 30f * S;
+        var rowHeight = 44f * S;
         var headerRowHeight = 24f * S;
 
         var contentHeight = 4f * S;
@@ -136,7 +138,7 @@ public static class SC2HotkeysPanel
         DrawRect(rect, new Color(0.11f, 0.12f, 0.145f, 1f));
 
         var resetWidth = 56f * S;
-        var slotWidth = 172f * S;
+        var slotWidth = 150f * S;
         var gap = 6f * S;
         var pad = 3f * S;
 
@@ -158,7 +160,8 @@ public static class SC2HotkeysPanel
         }
         else
         {
-            var slots = Mathf.Max(1, bindings.Length);
+            // Every action offers a second slot for an alternative key or button next to the main one.
+            var slots = Mathf.Max(2, bindings.Length);
             var bindingsWidth = slots * slotWidth + (slots - 1) * gap;
             controlsX = resetRect.x - gap - bindingsWidth;
             for (var slot = 0; slot < slots; slot++)
@@ -175,11 +178,22 @@ public static class SC2HotkeysPanel
     private static void DrawBindingButton(Rect rect, SC2HotkeyAction action, int slot, SC2HotkeyBinding binding)
     {
         var capturing = _capturingActionId == action.Id && _capturingSlot == slot;
-        var label = capturing ? (action.IsMouseAction ? "Press a mouse button…" : "Press a key…") : binding.Key == KeyCode.None ? "(unbound)" : binding.ToString();
-        if (GUI.Button(rect, label, capturing ? ActiveButton() : FlatButton()))
+        var unboundLabel = slot > 0 ? "+ alternative" : "(unbound)";
+        var label = capturing ? (action.IsMouseAction ? "Press a mouse button…" : "Press a key…") : binding.Key == KeyCode.None ? unboundLabel : binding.ToString();
+        // A bound alternative can be cleared with the x at its right end.
+        var clearable = slot > 0 && binding.Key != KeyCode.None && !capturing;
+        var buttonRect = clearable ? new Rect(rect.x, rect.y, rect.width - rect.height, rect.height) : rect;
+        if (GUI.Button(buttonRect, label, capturing ? ActiveButton() : FlatButton()))
         {
             _capturingActionId = action.Id;
             _capturingSlot = slot;
+        }
+        if (clearable && GUI.Button(new Rect(rect.xMax - rect.height + 2f * S, rect.y, rect.height - 2f * S, rect.height), "×", FlatButton()))
+        {
+            var kept = new List<SC2HotkeyBinding>(SC2Hotkeys.GetBindings(action.Id));
+            if (slot < kept.Count) kept.RemoveAt(slot);
+            SC2Hotkeys.SetBindings(action.Id, kept.ToArray());
+            RefreshConflicts();
         }
     }
 
@@ -380,7 +394,7 @@ public static class SC2HotkeysPanel
         _boldStyle.normal.textColor = SC2Theme.TextBright;
         _miniBoldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = SC2Type.Caption };
         _miniBoldStyle.normal.textColor = SC2Theme.TextSecondary;
-        _rowLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
+        _rowLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip, wordWrap = true };
         _rowLabelStyle.normal.textColor = SC2Theme.TextPrimary;
         _flatButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = SC2Type.Body, alignment = TextAnchor.MiddleCenter };
         _warnTitleStyle = new GUIStyle(_miniBoldStyle) { wordWrap = true, clipping = TextClipping.Overflow };

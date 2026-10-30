@@ -138,8 +138,9 @@ public static class SC2Hotkeys
 
     public static string Label(string actionId)
     {
-        var bindings = GetBindings(actionId);
-        return bindings.Length > 0 ? string.Join(" / ", Array.ConvertAll(bindings, b => b.ToString())) : "(unbound)";
+        // An empty alternative slot of the rebind panel is stored as an unbound entry; it has no label.
+        var bound = Array.FindAll(GetBindings(actionId), b => !(b.Key == KeyCode.None && !b.Ctrl && !b.Shift && !b.Alt));
+        return bound.Length > 0 ? string.Join(" / ", Array.ConvertAll(bound, b => b.ToString())) : "(unbound)";
     }
 
     /// <summary>Every pair of distinct actions whose current bindings share
