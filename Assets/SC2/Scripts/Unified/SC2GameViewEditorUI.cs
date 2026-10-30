@@ -2549,9 +2549,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         DrawMenuPanel(_fileMenuRect.x, TitleBarHeight, 210,
 #if UNITY_EDITOR
-            12,
+            14,
 #else
-            13, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
+            15, // +1 for "Exit" below, Build-only — Application.Quit() is a documented no-op in the Editor.
 #endif
             () =>
         {
@@ -2565,6 +2565,18 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             if (GUILayout.Button("Load Terrain...", _dropdownItemStyle)) { OpenLoadTerrainMenu(); _showFileMenu = false; }
             if (GUILayout.Button("Delete Saved Terrain...", _dropdownItemStyle)) { OpenDeleteTerrainMenu(); _showFileMenu = false; }
             if (GUILayout.Button("Restore Backup...", _dropdownItemStyle)) { OpenRestoreBackupMenu(); _showFileMenu = false; }
+            if (GUILayout.Button("Show Terrains Folder", _dropdownItemStyle))
+            {
+                _showFileMenu = false;
+                var terrains = SC2FileManager.TerrainsFolder();
+                SetStatus(SC2FileManager.Reveal(terrains) ? $"Saved terrains: {terrains}" : $"Could not show the terrains folder: {terrains}");
+            }
+            if (GUILayout.Button("Show Logs Folder", _dropdownItemStyle))
+            {
+                _showFileMenu = false;
+                var logs = SC2FileManager.LogTarget();
+                SetStatus(SC2FileManager.Reveal(logs) ? $"Log: {logs}" : "Could not show the log: it was not started or its folder is missing.");
+            }
             if (GUILayout.Button("Diagnostics", _dropdownItemStyle)) { OpenBatchImportDiagnostics(); _showFileMenu = false; }
             if (GUILayout.Button("Show Game View UI", _dropdownItemStyle)) { OpenGameViewUiBootstrap(); _showFileMenu = false; }
 #if !UNITY_EDITOR
