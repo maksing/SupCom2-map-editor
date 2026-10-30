@@ -12,6 +12,10 @@ public class TexturePathSafetyTests
     [InlineData("C:/Users/ragin/a.dds")]
     [InlineData("d:\\maps\\a.dds")]
     [InlineData("\\\\server\\share\\a.dds")]
+    [InlineData("/C:/Users/ragin/TextureLibrary/a.dds")]
+    [InlineData("/d:\\maps\\a.dds")]
+    [InlineData("/archive:textures/Terrain/Dirt_d.dds")]
+    [InlineData("/file:C:/a.dds")]
     public void MarkersAndLocalPaths_AreUnexportable(string path) =>
         Assert.True(SC2TexturePathSafety.IsUnexportable(path));
 

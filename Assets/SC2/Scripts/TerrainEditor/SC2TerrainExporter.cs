@@ -432,6 +432,7 @@ public static class SC2TerrainExporter
                 // the BDF (the game cannot load it) — ignore the override and fall back to
                 // the texture itself.
                 if (!SC2TexturePathSafety.IsUnexportable(overridePath)) return overridePath;
+                warnings.Add($"Texture path '{overridePath}' is not a game path and was not exported; the slot falls back to its texture.");
             }
             if (tex == null) return null;
             // A cached no-copy (bare game path) result must not satisfy a slot
@@ -1211,6 +1212,20 @@ public static class SC2TerrainExporter
             infoModel.ReservedTexturePath = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.TexturePath3, infoModel.ReservedTexturePath);
             infoModel.ColorCorrectionCube = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.ColorCorrectionCube, infoModel.ColorCorrectionCube);
             infoModel.FogOfWarCorrectionCube = ApplyEnvTextureExport(SC2EnvironmentTextureSlot.FogOfWarCorrectionCube, infoModel.FogOfWarCorrectionCube);
+
+            // Same last line of defence as for terrain.bdf: an editor marker or a machine-local path in one of these
+            // slots (typed in, or left by an older save) is not a game path and the game cannot load it.
+            string GamePathOrEmpty(string slotName, string path)
+            {
+                if (!SC2TexturePathSafety.IsUnexportable(path)) return path;
+                warnings.Add($"Environment texture '{slotName}' referenced '{path}', which is not a game path — the slot was left empty.");
+                return "";
+            }
+            infoModel.EnvironmentMap = GamePathOrEmpty("Environment map", infoModel.EnvironmentMap);
+            infoModel.SkyMap = GamePathOrEmpty("Sky map", infoModel.SkyMap);
+            infoModel.ReservedTexturePath = GamePathOrEmpty("Texture path 3", infoModel.ReservedTexturePath);
+            infoModel.ColorCorrectionCube = GamePathOrEmpty("Color correction cube", infoModel.ColorCorrectionCube);
+            infoModel.FogOfWarCorrectionCube = GamePathOrEmpty("Fog of war correction cube", infoModel.FogOfWarCorrectionCube);
         }
 
         // Requested directly: auto-generate the real per-map waterDepth
