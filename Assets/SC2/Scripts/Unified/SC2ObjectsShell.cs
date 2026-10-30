@@ -5350,6 +5350,8 @@ public sealed class SC2ObjectsShell
         if (dup > 0 || dangling > 0)
             SC2EnvFieldGui.WrapLabel($"⚠ {dup} duplicate edge(s), {dangling} dangling reference(s).", w);
 
+        DrawPathGridSection(g2, w);
+
         // Lets one graph's edges be reused as the
         // starting point for another — the real workflow is building Land
         // first (accounting for every real obstacle), then copying it onto
@@ -5395,6 +5397,155 @@ public sealed class SC2ObjectsShell
             SC2EnvFieldGui.WrapLabel("Connect links every selected pair exactly once (2 selected → 1 edge, 3 → a full triangle, etc.).", w);
             DrawConnectSelectedButtons(g2, w);
         }
+    }
+
+    // ── Path grid ───────────────────────────────────────────────────────
+    private float _pathGridStep = 32f;
+    private bool _pathGridOnlyPassable = true;
+    private string _pathGridResult = "";
+
+    /// <summary>The marker type a node of <paramref name="graph"/> has (what Markers tab calls Land / Water / Air / Amphibious Path Node).</summary>
+    private static string PathNodeTypeFor(SC2ObjGraph graph)
+    {
+        switch ((graph.GraphKind ?? "").ToLowerInvariant())
+        {
+            case "land": return "Land Path Node";
+            case "air": return "Air Path Node";
+            case "naval": return "Water Path Node";
+            case "amphibious": return "Amphibious Path Node";
+            default: return "Default Path Node";
+        }
+    }
+
+    private void DrawPathGridSection(SC2ObjGraph graph, float w)
+    {
+        GUILayout.Space(6);
+        SC2EnvFieldGui.SectionLabel("Path grid");
+        SC2EnvFieldGui.WrapLabel($"Fills the map with {PathNodeTypeFor(graph)} markers on a regular grid and joins every node to its 8 neighbours in {graph.Name}. " +
+                                 "Nodes and edges that are already there stay; a grid node that falls on an existing node of the same type reuses it.", w);
+        _pathGridStep = Mathf.Max(1f, SC2EnvFieldGui.FloatField("Grid step", _pathGridStep, "path_grid_step"));
+        _pathGridOnlyPassable = SC2EnvFieldGui.Toggle("Only where passable", _pathGridOnlyPassable);
+        SC2EnvFieldGui.WrapLabel(_pathGridOnlyPassable
+            ? "Land: dry ground that is not a wall of the Costs Tanks block (steep ground when that block is empty). Naval: water. Amphibious: land or water. Air: everywhere. " +
+              "A pair is joined only when the way between the two nodes is passable too."
+            : "Every grid position gets a node and every neighbouring pair is joined, whatever the ground is.", w);
+        if (SC2EnvFieldGui.PrimaryButton("Generate Path Grid", GUILayout.Height(SC2UiScale.Pxf(26f))))
+            GeneratePathGrid(graph);
+        if (!string.IsNullOrEmpty(_pathGridResult))
+            SC2EnvFieldGui.WrapLabel(_pathGridResult, w);
+    }
+
+    /// <summary>The rectangle the grid covers: the playable area when the map has one, else the whole terrain.</summary>
+    private (float x1, float z1, float x2, float z2) PathGridBounds()
+    {
+        var terrainX = Data.GridWidth * Data.CellSize;
+        var terrainZ = Data.GridHeight * Data.CellSize;
+        var name = SC2ObjectsExport.PlayableAreaName(Data);
+        var zone = string.IsNullOrEmpty(name) ? null : Data.ObjZones.FirstOrDefault(z => string.Equals(z.Name, name, StringComparison.Ordinal));
+        if (zone == null) return (0f, 0f, terrainX, terrainZ);
+        return (Mathf.Clamp(Mathf.Min(zone.X1, zone.X2), 0f, terrainX), Mathf.Clamp(Mathf.Min(zone.Z1, zone.Z2), 0f, terrainZ),
+                Mathf.Clamp(Mathf.Max(zone.X1, zone.X2), 0f, terrainX), Mathf.Clamp(Mathf.Max(zone.Z1, zone.Z2), 0f, terrainZ));
+    }
+
+    /// <summary>Whether a node of a graph of <paramref name="kind"/> can stand at (x, z); null means everywhere (Air).</summary>
+    private Func<float, float, bool> PathGridPassability(string kind)
+    {
+        var lower = (kind ?? "").ToLowerInvariant();
+        if (lower == "air") return null;
+        var water = CurrentWaterSurface();
+        bool IsWater(float x, float z) => water.HasValue && SampleHeight(x, z) < water.Value;
+
+        // The Tanks block of the Costs tab is the real land navmesh, with every wall the user painted; without it (a map whose Costs
+        // were never generated) steepness decides, with the limit the Costs generator uses for medium units.
+        var size = Data.CostsGridSize;
+        var navmesh = Data.CostsBlocks != null && Data.CostsBlocks.Count > 0 && Data.CostsBlocks[0].Navmesh != null
+                      && size > 0 && Data.CostsBlocks[0].Navmesh.Length == size * size ? Data.CostsBlocks[0].Navmesh : null;
+        float Ground(float x, float z) => SampleRuntimeTerrainHeight(x, z) ?? 0f;
+        bool IsLand(float x, float z)
+        {
+            if (IsWater(x, z)) return false;
+            if (navmesh != null)
+            {
+                var cx = Mathf.Clamp(Mathf.FloorToInt(x), 0, size - 1);
+                var cz = Mathf.Clamp(Mathf.FloorToInt(z), 0, size - 1);
+                return navmesh[cz * size + cx] != SC2CostsNavmeshRules.Wall;
+            }
+            var dx = (Ground(x + 1f, z) - Ground(x - 1f, z)) * 0.5f;
+            var dz = (Ground(x, z + 1f) - Ground(x, z - 1f)) * 0.5f;
+            return Mathf.Atan(Mathf.Sqrt(dx * dx + dz * dz)) * Mathf.Rad2Deg <= SC2CostsAutoGen.DefaultThresholds.MaxSlopeDegreesMedium;
+        }
+
+        switch (lower)
+        {
+            case "naval": return IsWater;
+            case "amphibious": return (x, z) => IsLand(x, z) || IsWater(x, z);
+            default: return IsLand;
+        }
+    }
+
+    /// <summary>Lays <see cref="SC2PathGrid"/> over the map as markers of the graph's node type, joined in <paramref name="graph"/>.
+    /// One undo step. The grid is not mirrored by the map's symmetry: it covers the whole area by itself.</summary>
+    private void GeneratePathGrid(SC2ObjGraph graph)
+    {
+        var type = PathNodeTypeFor(graph);
+        var (x1, z1, x2, z2) = PathGridBounds();
+        var plan = SC2PathGrid.Build(x1, z1, x2, z2, _pathGridStep, _pathGridOnlyPassable ? PathGridPassability(graph.GraphKind) : null);
+        if (plan.TooManyNodes)
+        {
+            _pathGridResult = $"Not generated: a step of {_pathGridStep:0.##} would make {plan.Columns * plan.Rows} nodes, the limit is {SC2PathGrid.MaxNodes}. Use a larger step.";
+            return;
+        }
+        if (plan.Nodes.Count == 0)
+        {
+            _pathGridResult = _pathGridOnlyPassable ? "Nothing generated: no grid position is passable for this graph." : "Nothing generated: the area is smaller than the grid.";
+            return;
+        }
+
+        PushUndo();
+        // A grid node on a node of the same type that is already there reuses it, so repeating the command never stacks nodes.
+        var existing = new Dictionary<(int, int), int>();
+        foreach (var marker in Data.ObjMarkers)
+            if (string.Equals(marker.Type, type, StringComparison.Ordinal))
+                existing[(Mathf.RoundToInt(marker.Position.x), Mathf.RoundToInt(marker.Position.z))] = marker.Id;
+        var usedNames = new HashSet<string>(Data.ObjMarkers.Select(m => m.Name), StringComparer.OrdinalIgnoreCase);
+        var ids = new int[plan.Nodes.Count];
+        var created = 0;
+        var reused = 0;
+        var number = Data.ObjMarkers.Count;
+        for (var i = 0; i < plan.Nodes.Count; i++)
+        {
+            var node = plan.Nodes[i];
+            if (existing.TryGetValue((Mathf.RoundToInt(node.x), Mathf.RoundToInt(node.y)), out var existingId))
+            {
+                ids[i] = existingId;
+                reused++;
+                continue;
+            }
+            var marker = BuildMarkerPlacementCandidate(new Vector3(node.x, SampleHeight(node.x, node.y), node.y), type);
+            string name;
+            do { name = $"{type}_{++number}"; } while (!usedNames.Add(name));
+            marker.Id = Data.AllocateObjectId();
+            marker.Name = name;
+            Data.ObjMarkers.Add(marker);
+            ids[i] = marker.Id;
+            created++;
+        }
+
+        var joined = new HashSet<(int, int)>();
+        foreach (var (a, b) in SC2ObjectGraphRefs.Enumerate(graph))
+            joined.Add(a < b ? (a, b) : (b, a));
+        var edgesAdded = 0;
+        foreach (var (a, b) in plan.Edges)
+        {
+            var from = ids[a]; var to = ids[b];
+            if (!joined.Add(from < to ? (from, to) : (to, from))) continue;
+            SC2ObjectGraphRefs.AddEdge(graph, from, to);
+            edgesAdded++;
+        }
+
+        _pathGridResult = $"Added {created} node(s) ({reused} already there) and {edgesAdded} edge(s) to {graph.Name}.";
+        _lastActionSummary = _pathGridResult;
+        MarkObjectsDirty();
     }
 
     /// <summary>"Connect selected (mesh)" / "Disconnect selected" for the marker selection, acting on
