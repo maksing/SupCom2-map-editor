@@ -1611,7 +1611,8 @@ public class SC2TerrainShell : ScriptableObject
         {
             var previewSize = Mathf.Min(SC2UiScale.Pxf(256f), GetUnifiedContentWidth());
             var rect = GUILayoutUtility.GetRect(previewSize, previewSize, GUILayout.ExpandWidth(false));
-            GUI.DrawTexture(rect, _waterDepthPreviewTex, ScaleMode.ScaleToFit, true);
+            // Drawn flipped in V: only this panel image is turned, the water in the viewport and the exported waterDepth are not.
+            GUI.DrawTextureWithTexCoords(rect, _waterDepthPreviewTex, new Rect(0f, 1f, 1f, -1f), true);
         }
 
         EndUnifiedPanelBox();
