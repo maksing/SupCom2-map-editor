@@ -1785,6 +1785,8 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             ApplyLoadedTerrainName(loadTerrainName);
         if (SC2RuntimeDropdown.TryConsumeLabel(DeleteTerrainDropdownId, out var deleteTerrainName))
             RequestDeleteTerrainName(deleteTerrainName);
+        if (SC2RuntimeDropdown.TryConsumeLabel(RestoreBackupMapDropdownId, out var restoreBackupMap))
+            OpenRestoreBackupVersions(restoreBackupMap);
         if (SC2RuntimeDropdown.TryConsumeLabel(RestoreBackupDropdownId, out var restoreBackupId))
             RequestRestoreBackup(restoreBackupId);
 #endif
@@ -5399,6 +5401,9 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private const int LoadTerrainDropdownId = 0x5C2A1CAD;
     private const int DeleteTerrainDropdownId = 0x5C2A1CAE;
     private const int RestoreBackupDropdownId = 0x5C2A1CAF;
+    private const int RestoreBackupMapDropdownId = 0x5C2A1CB0;
+    /// <summary>The map whose backups the second step of "Restore Backup..." lists.</summary>
+    private string _restoreBackupMap;
 #endif
 
     private void OpenLoadTerrainMenu()
@@ -5433,23 +5438,19 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
 #endif
     }
 
+    /// <summary>First step of "Restore Backup...": every map that has backups (not only the open one, and also a map whose own save
+    /// is gone); the pick opens the second step, that map's backups.</summary>
     private void OpenRestoreBackupMenu()
     {
 #if !UNITY_EDITOR
-        var mapName = _terrainShell?.Data?.MapName;
-        if (string.IsNullOrEmpty(mapName))
+        var maps = SC2RuntimeTerrainPersistence.ListMapsWithBackups();
+        if (maps.Count == 0)
         {
-            SetStatus("No active terrain.");
-            return;
-        }
-        var backups = SC2RuntimeTerrainPersistence.ListBackups(mapName);
-        if (backups.Count == 0)
-        {
-            SetStatus($"No backups found for '{mapName}' (see View > Autosave > Backups to keep).");
+            SetStatus("No backups found for any map (see View > Autosave > Backups to keep).");
             return;
         }
         var anchor = new Rect(_fileMenuRect.x, TitleBarHeight + 4f, 220f, TitleBarHeight);
-        SC2RuntimeDropdown.Toggle(RestoreBackupDropdownId, backups.ToArray(), anchor);
+        SC2RuntimeDropdown.Toggle(RestoreBackupMapDropdownId, maps.ToArray(), anchor);
 #else
         SetStatus("Backups only apply to standalone builds — in the Editor, saving goes through the asset database, not the backup rotation.");
 #endif
@@ -5551,22 +5552,53 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     /// SC2RuntimeTerrainPersistence.BackupStampFormat's own doc comment.</summary>
     private void RequestRestoreBackup(string backupId)
     {
-        var mapName = _terrainShell?.Data?.MapName;
+        var mapName = _restoreBackupMap;
         if (string.IsNullOrEmpty(mapName)) return;
+        var isOpenMap = IsOpenMap(mapName);
         SC2RuntimeConfirm.Open(
             "Restore Backup",
             $"Restore '{mapName}' to the backup from {backupId.Replace('_', ' ')}? " +
-            "This overwrites the currently saved file on disk (your in-memory unsaved edits are untouched until you reload).",
+            "This overwrites the currently saved file of that map on disk" +
+            (isOpenMap ? " (your in-memory unsaved edits are untouched until you reload)." : ". The map that is open now is not touched."),
             "Restore",
             () => ApplyRestoreBackup(mapName, backupId));
+    }
+
+    /// <summary>Second step of "Restore Backup...": the backups of one map, newest first.</summary>
+    private void OpenRestoreBackupVersions(string mapName)
+    {
+        var backups = SC2RuntimeTerrainPersistence.ListBackups(mapName);
+        if (backups.Count == 0)
+        {
+            SetStatus($"No backups found for '{mapName}'.");
+            return;
+        }
+        _restoreBackupMap = mapName;
+        var anchor = new Rect(_fileMenuRect.x, TitleBarHeight + 4f, 220f, TitleBarHeight);
+        SC2RuntimeDropdown.Toggle(RestoreBackupDropdownId, backups.ToArray(), anchor);
+    }
+
+    private bool IsOpenMap(string mapName)
+    {
+        var open = _terrainShell?.Data?.MapName;
+        return !string.IsNullOrEmpty(open) && SC2SaveLayout.SafeName(open) == SC2SaveLayout.SafeName(mapName);
     }
 
     private void ApplyRestoreBackup(string mapName, string backupId)
     {
         if (SC2RuntimeTerrainPersistence.RestoreBackup(mapName, backupId))
         {
-            ApplyLoadedTerrainName(mapName); // reload so the in-memory state matches what was just restored on disk
-            SetStatus($"Restored backup from {backupId.Replace('_', ' ')}.");
+            // The open map is reloaded so the in-memory state matches what was just restored on disk; another map is only put back on
+            // disk, open it from "Load Terrain..." (replacing the map being edited here would lose its unsaved work).
+            if (IsOpenMap(mapName))
+            {
+                ApplyLoadedTerrainName(mapName);
+                SetStatus($"Restored backup from {backupId.Replace('_', ' ')}.");
+            }
+            else
+            {
+                SetStatus($"Restored '{mapName}' from the backup of {backupId.Replace('_', ' ')}. Open it with File > Load Terrain...");
+            }
         }
         else
         {

@@ -329,6 +329,20 @@ public static class SC2RuntimeTerrainPersistence
         }
     }
 
+    /// <summary>Every map that has at least one backup, by name, alphabetically: the maps of the save folder and also the ones whose own
+    /// save is gone (deleted, or lost) and only the backups remain. The name is the backup folder's, i.e. the map's file-safe name.</summary>
+    public static List<string> ListMapsWithBackups()
+    {
+        var result = new List<string>();
+        var root = Path.Combine(SaveDirectory, SC2SaveLayout.BackupsFolderName);
+        if (!Directory.Exists(root)) return result;
+        foreach (var dir in Directory.GetDirectories(root))
+            if (Directory.GetDirectories(dir).Length > 0)
+                result.Add(Path.GetFileName(dir));
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        return result;
+    }
+
     /// <summary>Newest first — what the "Restore Backup..." dropdown lists.</summary>
     public static List<string> ListBackups(string mapName)
     {
@@ -461,6 +475,9 @@ public static class SC2RuntimeTerrainPersistence
         // fresh Scenario built above knows nothing about them.
         if (session?.Document?.Scenario?.LobbyStartPositions != null)
             doc.Scenario.LobbyStartPositions = SC2LobbyStartPosition.CloneList(session.Document.Scenario.LobbyStartPositions);
+        // The mission graph has no legacy counterpart either; the rebuilt Scenario starts without it.
+        if (session?.Document?.Scenario?.Mission != null)
+            doc.Scenario.Mission = session.Document.Scenario.Mission.Clone();
 
         // The preview pictures and the Collision2 tab's meshes/flags have no counterpart in the
         // legacy bridges above; without these blobs a normal load (which reads this package, not

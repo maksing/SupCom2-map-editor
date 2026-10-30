@@ -85,7 +85,13 @@ public static class SC2SaveStorage
     {
         lock (_lock)
         {
-            if (_storesByDirectory.TryGetValue(directory, out var existing)) return existing;
+            if (_storesByDirectory.TryGetValue(directory, out var existing))
+            {
+                if (Directory.Exists(directory)) return existing;
+                // The folder is gone (a map deleted with Delete Saved Terrain..., a wiped cache): the store points at nothing, and a write
+                // through it (a save, a restore from a backup) would fail. It is dropped, so the folder is made again when one is needed.
+                _storesByDirectory.Remove(directory);
+            }
             // The store creates its directory when it is made; a folder that is not there is left alone, so that reading never
             // leaves empty Blobs folders behind.
             if (!create && !Directory.Exists(directory)) return null;
