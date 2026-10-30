@@ -550,6 +550,9 @@ public sealed class SC2ReferenceUnitsShell
         GUILayout.Label("REFERENCE UNITS", GUI.skin.label, GUILayout.MaxWidth(width));
         if (GUILayout.Button(_placementArmed ? "Click viewport..." : "Place unit...", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.MaxWidth(width)))
             OpenBrowserForPlacement();
+        // Placing stays on after each click, so the way out is shown while it is.
+        if (_placementArmed)
+            GUILayout.Label("Click in the viewport to place. Press Esc to exit placement mode.", PlacementHintStyle(), GUILayout.MaxWidth(width));
 
         if (Data == null || Data.ObjReferenceUnits.Count == 0) return;
         var deleteButtonWidth = SC2UiScale.Pxf(18f);
@@ -583,6 +586,21 @@ public sealed class SC2ReferenceUnitsShell
             unit.ShowWeapons = GUILayout.Toggle(unit.ShowWeapons, "Weapons", GUI.skin.button, GUILayout.MaxWidth(width));
             DrawBuildableToggle(unit, width);
         }
+    }
+
+    private static GUIStyle _placementHintStyle;
+    private static int _placementHintFontSize;
+
+    /// <summary>Wrapped caption-size text in the secondary colour; rebuilt when the UI Scale changes the font size.</summary>
+    private static GUIStyle PlacementHintStyle()
+    {
+        if (_placementHintStyle == null || _placementHintFontSize != SC2Type.Caption)
+        {
+            _placementHintFontSize = SC2Type.Caption;
+            _placementHintStyle = new GUIStyle(GUI.skin.label) { wordWrap = true, fontSize = SC2Type.Caption };
+            _placementHintStyle.normal.textColor = SC2Theme.TextSecondary;
+        }
+        return _placementHintStyle;
     }
 
     private void DrawBuildableToggle(SC2ObjReferenceUnit unit, float width)
