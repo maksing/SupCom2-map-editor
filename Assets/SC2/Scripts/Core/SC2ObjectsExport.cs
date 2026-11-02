@@ -660,6 +660,19 @@ public static class SC2ObjectsExport
             "end\r\n";
     }
 
+    /// <summary>The Area that limits the playable region of the map: the one chosen on the Scripts tab, else the first of role Playable.</summary>
+    public static string PlayableAreaName(SC2TerrainData data) => ResolvePlayableAreaName(data);
+
+    /// <summary>The armies of the scenario in the order the engine counts them (the order of their start markers), as _scenario.lua lists
+    /// them. An army's engine index is its place here, counted from 1.</summary>
+    public static List<string> ScenarioArmyNames(SC2TerrainData data)
+    {
+        var names = new List<string>();
+        foreach (var m in data.ObjMarkers)
+            if (ArmyPositionRe.IsMatch(m.Name)) names.Add(m.Name);
+        return names;
+    }
+
     private static string ResolvePlayableAreaName(SC2TerrainData data)
     {
         if (!string.IsNullOrEmpty(data.PlayableAreaName)) return data.PlayableAreaName;

@@ -693,6 +693,8 @@ public class SC2TerrainShell : ScriptableObject
             // minimap positions; a load/import assigns the real ones right
             // after this (LoadFromDisk / SC2MapImportOrchestrator).
             Session.Document.Scenario.LobbyStartPositions = new System.Collections.Generic.List<SC2.MapEditor.Document.SC2LobbyStartPosition>();
+            // The mission graph belongs to one map as well.
+            Session.Document.Scenario.Mission = new SC2.MapEditor.Document.SC2MissionDocument();
             // Same for the imported-layer RNM masks: they belong to one map.
             Session.Document.Terrain.ImportedRnm = new SC2.MapEditor.Document.SC2RnmDocument();
         }
@@ -5193,33 +5195,11 @@ public class SC2TerrainShell : ScriptableObject
 #endif
     }
 
-    /// <summary>Loads a previously-saved terrain by name (standalone builds only) and adopts it as the active data.</summary>
-    public bool LoadFromDisk(string mapName) => LoadFromDisk(mapName, out _);
-
-    /// <summary>loadedDocument out param (added for the same MapDocument
-    /// audit fix as the Decals restore below): callers that need to sync
-    /// scene state the document alone can't describe on its own — currently
-    /// only imported terrain.bdf GameObjects, restored by
-    /// SC2GameViewEditorUI.ApplyLoadedTerrainName — can now reach the full
-    /// loaded document instead of just the bool success flag.</summary>
-    public bool LoadFromDisk(string mapName, out SC2MapDocument loadedDocument)
+    /// <summary>Carries what a saved map holds only in its document (the SetData above rebuilt the session from the legacy data, which has
+    /// none of it) into the live session: the lobby minimap positions, the imported-layer masks, the Decals document and the mission
+    /// graph. loadedDocument is null on the legacy-JSON fallback path, where there is nothing to carry.</summary>
+    public void AdoptLoadedDocument(SC2.MapEditor.Document.SC2MapDocument loadedDocument, SC2TerrainData loaded)
     {
-#if !UNITY_EDITOR
-        if (!SC2RuntimeTerrainPersistence.TryLoad(mapName, out var loaded, out loadedDocument))
-            return false;
-
-        SetData(loaded,
-            $"Source: loaded from saved runtime data '{loaded.name}'.\n" +
-            $"Path: {SC2RuntimeTerrainPersistence.GetSavePath(mapName)}\n" +
-            "This file existed and was parsed by SC2RuntimeTerrainPersistence.TryLoad.");
-
-        // Restores the ACTIVE Decals document (catalog entries, placements,
-        // symmetry groups) from what was actually saved — confirmed real
-        // via the MapDocument audit that this data existed in the saved
-        // package but nothing ever read it back into a live session.
-        // loadedDocument is null on the legacy-JSON fallback path (no
-        // document package existed), which SetData above already handled
-        // correctly on its own.
         if (loadedDocument != null && Session?.Document?.Scenario != null)
         {
             var lobby = SC2.MapEditor.Document.SC2LobbyStartPosition.CloneList(loadedDocument.Scenario?.LobbyStartPositions);
@@ -5248,6 +5228,43 @@ public class SC2TerrainShell : ScriptableObject
                 TimestampUtc = System.DateTime.UtcNow
             });
         }
+        if (loadedDocument?.Scenario?.Mission != null && Session?.Document?.Scenario != null)
+        {
+            Session.Document.Scenario.Mission.CopyFrom(loadedDocument.Scenario.Mission);
+            Session.Document.RaiseChanged(new SC2DocumentChangeSet
+            {
+                BeforeRevision = Session.Document.Revision,
+                AfterRevision = Session.Document.Revision + 1,
+                CommandName = "Load Mission",
+                DirectDirtyFlags = SC2.MapEditor.SmartExport.SC2DirtyFlags.ScriptLua,
+                ChangedDomains = new[] { SC2DomainId.Scenario },
+                InvalidatedDomains = System.Array.Empty<SC2DomainId>(),
+                TimestampUtc = System.DateTime.UtcNow
+            });
+        }
+    }
+
+    /// <summary>Loads a previously-saved terrain by name (standalone builds only) and adopts it as the active data.</summary>
+    public bool LoadFromDisk(string mapName) => LoadFromDisk(mapName, out _);
+
+    /// <summary>loadedDocument out param (added for the same MapDocument
+    /// audit fix as the Decals restore below): callers that need to sync
+    /// scene state the document alone can't describe on its own — currently
+    /// only imported terrain.bdf GameObjects, restored by
+    /// SC2GameViewEditorUI.ApplyLoadedTerrainName — can now reach the full
+    /// loaded document instead of just the bool success flag.</summary>
+    public bool LoadFromDisk(string mapName, out SC2MapDocument loadedDocument)
+    {
+#if !UNITY_EDITOR
+        if (!SC2RuntimeTerrainPersistence.TryLoad(mapName, out var loaded, out loadedDocument))
+            return false;
+
+        SetData(loaded,
+            $"Source: loaded from saved runtime data '{loaded.name}'.\n" +
+            $"Path: {SC2RuntimeTerrainPersistence.GetSavePath(mapName)}\n" +
+            "This file existed and was parsed by SC2RuntimeTerrainPersistence.TryLoad.");
+
+        AdoptLoadedDocument(loadedDocument, loaded);
         return true;
 #else
         loadedDocument = null;

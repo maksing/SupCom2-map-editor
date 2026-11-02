@@ -93,7 +93,7 @@ public static class SC2TerrainExporter
         try
         {
             var result = DoExport(data, perMapRoot, importedTerrains, debugSaveCostsImages, session, minimapDdsBytes);
-            if (exportAsArchives)
+            if (exportAsArchives && !IsFailure(result))
                 result = PackStagingRootIntoSingleArchive(perMapRoot, archivePath, result);
             SC2Log.Log("=== Export completed ===");
             return result;
@@ -169,6 +169,10 @@ public static class SC2TerrainExporter
     /// not part of the real game's .scd format. Returns resultMessage
     /// unchanged — this only repackages what DoExport/ExportCorrectSmart
     /// already wrote, it doesn't change the outcome text.</summary>
+    /// <summary>True for the result text of an export that stopped before it wrote the map: nothing is worth packing then.</summary>
+    private static bool IsFailure(string result) =>
+        result != null && (result.StartsWith("Export failed", StringComparison.Ordinal) || result.StartsWith("Export cancelled", StringComparison.Ordinal));
+
     private static string PackStagingRootIntoSingleArchive(string stagingRoot, string archiveFilePath, string resultMessage)
     {
         const string reportFileName = "sc2_export_report.md";
@@ -231,6 +235,43 @@ public static class SC2TerrainExporter
         public string Collision2OffsetSource;
     }
 
+    /// <summary>The plain _script.lua, or - when the mission graph is switched on - the one generated from it. A graph that has errors, or
+    /// whose Lua does not compile, stops the export (failure is set): writing the plain script instead would hand out a map from which the
+    /// mission has silently disappeared.</summary>
+    private static string RegenerateScriptWithMission(SC2TerrainData data, SC2MapSession session, out string failure)
+    {
+        failure = null;
+        var mission = session?.Document?.Scenario?.Mission;
+        if (mission == null || !mission.Enabled || mission.IsEmpty)
+            return SC2ObjectsExport.RegenerateScriptLua(data);
+
+        const string fix = "Fix them in the Mission editor (Validation), or switch off \"Use graph for _script.lua\" to export the plain script.";
+        var compiled = SC2MissionCompiler.Compile(mission, SC2MissionMapInfoBuilder.From(data));
+        if (compiled.HasErrors)
+        {
+            var errors = compiled.Issues.FindAll(i => i.Severity == SC2MissionSeverity.Error);
+            var shown = string.Join("; ", errors.GetRange(0, System.Math.Min(5, errors.Count))) + (errors.Count > 5 ? "; and " + (errors.Count - 5) + " more" : "");
+            failure = "Export failed: the mission graph has " + errors.Count + " error(s), so no script was written. " + fix + " " + shown;
+            SC2Log.Log("[SC2Exporter] " + failure);
+            SC2MissionLog.Add("Export stopped: the graph has errors. " + shown);
+            return null;
+        }
+
+        // The generated script is the whole file (the campaign entry points included), not a patch of the plain one.
+        var script = compiled.Lua.Replace("\r\n", "\n").Replace("\n", "\r\n");
+        if (!SC2LuaSyntaxCheck.TryCompile(script, out var error))
+        {
+            failure = "Export failed: the Lua generated from the mission graph does not compile (" + error + "). " + fix;
+            SC2Log.Log("[SC2Exporter] " + failure);
+            SC2MissionLog.Add("Export stopped: the generated Lua does not compile (" + error + ").");
+            return null;
+        }
+        SC2Log.Log("[SC2Exporter] _script.lua generated from the mission graph (" + mission.Stages.Count + " stages).");
+        SC2MissionLog.Add("Export: _script.lua generated from the graph (" + mission.Stages.Count + " stages" +
+            (string.IsNullOrEmpty(mission.Settings.TestStartStage) ? "" : ", test start at " + mission.Settings.TestStartStage) + ").");
+        return script;
+    }
+
     private static SC2ExportArtifacts BuildExportArtifacts(SC2TerrainData data, string outputDir, List<SC2ImportedTerrainExportData> importedTerrains, bool debugSaveCostsImages, SC2MapSession session)
     {
         SC2Log.Log($"[SC2Exporter] Export started. Pairs={data.Pairs.Count}, " +
@@ -246,6 +287,12 @@ public static class SC2TerrainExporter
             ExportDialog("Export",
                 "TrianglePairIndex is empty — go to Paint mode and paint pairs before exporting.", "OK");
             return new SC2ExportArtifacts { ErrorMessage = "Export failed: no pairs painted yet." };
+        }
+        var missionScript = RegenerateScriptWithMission(data, session, out var missionFailure);
+        if (missionFailure != null)
+        {
+            ExportDialog("Export", missionFailure, "OK");
+            return new SC2ExportArtifacts { ErrorMessage = missionFailure };
         }
         var rawMapName  = string.IsNullOrEmpty(data.MapName) ? "map" : data.MapName;
         var mapName     = SanitizeMapName(rawMapName);
@@ -1367,7 +1414,7 @@ public static class SC2TerrainExporter
             if (!armyRealPositions.ContainsKey(marker.Name)) armyRealPositions[marker.Name] = marker.Position;
         var lobbyStartPositions = SC2LobbyStartPosition.CurrentOverrides(session?.Document?.Scenario?.LobbyStartPositions, armyRealPositions);
         var newScenarioLua = SC2ObjectsExport.RegenerateScenarioLua(data, mapName, documentObjects?.ScenarioLuaTextOriginal, lobbyStartPositions);
-        var newScriptLua = SC2ObjectsExport.RegenerateScriptLua(data);
+        var newScriptLua = missionScript;
         SC2Log.Log("[SC2Exporter] _save.lua/_scenario.lua/_script.lua text built (Objects blocks regenerated).");
 
         // Decals are clipped against the FINAL terrain model's own triangles - the same

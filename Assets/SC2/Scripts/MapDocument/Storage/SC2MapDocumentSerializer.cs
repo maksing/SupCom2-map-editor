@@ -1426,6 +1426,7 @@ namespace SC2.MapEditor.Document
             o.Set("lobbyStartPositions", WriteLobbyStartPositions(s.LobbyStartPositions));
             o.Set("mapShotBgra", WriteBlobRef(s.MapShotBgra));
             o.Set("customMinimapPng", WriteBlobRef(s.CustomMinimapPng));
+            o.Set("mission", WriteMission(s.Mission));
             o.Set("scenarioMode", SC2JsonValue.Of(s.ScenarioMode.ToString()));
             o.Set("saveMode", SC2JsonValue.Of(s.SaveMode.ToString()));
             o.Set("scriptMode", SC2JsonValue.Of(s.ScriptMode.ToString()));
@@ -1442,11 +1443,245 @@ namespace SC2.MapEditor.Document
             LobbyStartPositions = ReadLobbyStartPositions(o.Get("lobbyStartPositions")),
             MapShotBgra = ReadBlobRef(o.Get("mapShotBgra")),
             CustomMinimapPng = ReadBlobRef(o.Get("customMinimapPng")),
+            Mission = ReadMission(o.Get("mission")),
             ScenarioMode = ParseEnum(o.Get("scenarioMode"), SC2LuaPatchMode.OriginalPassthrough),
             SaveMode = ParseEnum(o.Get("saveMode"), SC2LuaPatchMode.OriginalPassthrough),
             ScriptMode = ParseEnum(o.Get("scriptMode"), SC2LuaPatchMode.OriginalPassthrough),
             State = ParseEnum(o.Get("state"), SC2DerivedState.Original),
         };
+
+        private static SC2JsonValue WriteMission(SC2MissionDocument m)
+        {
+            var o = SC2JsonValue.NewObject();
+            o.Set("enabled", SC2JsonValue.Of(m.Enabled));
+            o.Set("title", SC2JsonValue.Of(m.Title ?? ""));
+            var stages = SC2JsonValue.NewArray();
+            foreach (var s in m.Stages)
+            {
+                var so = SC2JsonValue.NewObject();
+                so.Set("id", SC2JsonValue.Of(s.Id ?? ""));
+                so.Set("name", SC2JsonValue.Of(s.Name ?? ""));
+                so.Set("nextNodeId", SC2JsonValue.Of(s.NextNodeId));
+                var nodes = SC2JsonValue.NewArray();
+                foreach (var n in s.Nodes)
+                {
+                    var no = SC2JsonValue.NewObject();
+                    no.Set("id", SC2JsonValue.Of(n.Id));
+                    no.Set("type", SC2JsonValue.Of(n.Type ?? ""));
+                    no.Set("x", SC2JsonValue.Of(n.X));
+                    no.Set("y", SC2JsonValue.Of(n.Y));
+                    var ps = SC2JsonValue.NewObject();
+                    foreach (var p in n.Params) ps.Set(p.Key, SC2JsonValue.Of(p.Value ?? ""));
+                    no.Set("params", ps);
+                    nodes.Add(no);
+                }
+                so.Set("nodes", nodes);
+                var edges = SC2JsonValue.NewArray();
+                foreach (var e in s.Edges)
+                {
+                    var eo = SC2JsonValue.NewObject();
+                    eo.Set("from", SC2JsonValue.Of(e.FromNode));
+                    eo.Set("port", SC2JsonValue.Of(e.FromPort ?? ""));
+                    eo.Set("to", SC2JsonValue.Of(e.ToNode));
+                    if (!string.IsNullOrEmpty(e.ToPort) && e.ToPort != SC2MissionNodeCatalog.DefaultInput) eo.Set("toPort", SC2JsonValue.Of(e.ToPort));
+                    edges.Add(eo);
+                }
+                so.Set("edges", edges);
+                stages.Add(so);
+            }
+            o.Set("stages", stages);
+
+            var variables = SC2JsonValue.NewArray();
+            foreach (var v in m.Variables)
+            {
+                var vo = SC2JsonValue.NewObject();
+                vo.Set("name", SC2JsonValue.Of(v.Name ?? ""));
+                vo.Set("type", SC2JsonValue.Of(v.Type ?? ""));
+                vo.Set("initial", SC2JsonValue.Of(v.Initial ?? ""));
+                variables.Add(vo);
+            }
+            o.Set("variables", variables);
+
+            var bases = SC2JsonValue.NewArray();
+            foreach (var b in m.Bases)
+            {
+                var bo = SC2JsonValue.NewObject();
+                bo.Set("id", SC2JsonValue.Of(b.Id ?? ""));
+                bo.Set("army", SC2JsonValue.Of(b.Army ?? ""));
+                bo.Set("marker", SC2JsonValue.Of(b.Marker ?? ""));
+                bo.Set("radius", SC2JsonValue.Of(b.Radius));
+                bo.Set("engineers", SC2JsonValue.Of(b.Engineers));
+                bo.Set("startMode", SC2JsonValue.Of(b.StartMode ?? ""));
+                bo.Set("startAtBegin", SC2JsonValue.Of(b.StartAtBegin));
+                var groups = SC2JsonValue.NewArray();
+                foreach (var g in b.BuildGroups)
+                {
+                    var go = SC2JsonValue.NewObject();
+                    go.Set("group", SC2JsonValue.Of(g.Group ?? ""));
+                    go.Set("priority", SC2JsonValue.Of(g.Priority));
+                    groups.Add(go);
+                }
+                bo.Set("buildGroups", groups);
+                var opais = SC2JsonValue.NewArray();
+                foreach (var op in b.OpAIs)
+                {
+                    var oo = SC2JsonValue.NewObject();
+                    oo.Set("name", SC2JsonValue.Of(op.Name ?? ""));
+                    oo.Set("type", SC2JsonValue.Of(op.Type ?? ""));
+                    oo.Set("thread", SC2JsonValue.Of(op.Thread ?? ""));
+                    var chains = SC2JsonValue.NewArray();
+                    foreach (var c in op.Chains) chains.Add(SC2JsonValue.Of(c ?? ""));
+                    oo.Set("chains", chains);
+                    oo.Set("childCount", SC2JsonValue.Of(op.ChildCount));
+                    oo.Set("maxPlatoons", SC2JsonValue.Of(op.MaxPlatoons));
+                    oo.Set("attackDelay", SC2JsonValue.Of(op.AttackDelay));
+                    oo.Set("enabled", SC2JsonValue.Of(op.Enabled));
+                    opais.Add(oo);
+                }
+                bo.Set("opais", opais);
+                bases.Add(bo);
+            }
+            o.Set("bases", bases);
+
+            var armiesArray = SC2JsonValue.NewArray();
+            foreach (var a in m.Armies)
+            {
+                var ao = SC2JsonValue.NewObject();
+                ao.Set("name", SC2JsonValue.Of(a.Name ?? ""));
+                ao.Set("alias", SC2JsonValue.Of(a.Alias ?? ""));
+                ao.Set("role", SC2JsonValue.Of(a.Role ?? ""));
+                var colors = SC2JsonValue.NewArray();
+                foreach (var c in a.Colors) colors.Add(SC2JsonValue.Of(c ?? ""));
+                ao.Set("colors", colors);
+                ao.Set("unitCap", SC2JsonValue.Of(a.UnitCap));
+                ao.Set("massBoost", SC2JsonValue.Of(a.MassBoost));
+                ao.Set("energyBoost", SC2JsonValue.Of(a.EnergyBoost));
+                ao.Set("mass", SC2JsonValue.Of(a.Mass));
+                ao.Set("energy", SC2JsonValue.Of(a.Energy));
+                ao.Set("research", SC2JsonValue.Of(a.Research));
+                ao.Set("unlockResearch", SC2JsonValue.Of(a.UnlockResearch));
+                armiesArray.Add(ao);
+            }
+            o.Set("armies", armiesArray);
+
+            var so2 = SC2JsonValue.NewObject();
+            so2.Set("coop", SC2JsonValue.Of(m.Settings.Coop));
+            so2.Set("humanSlots", SC2JsonValue.Of(m.Settings.HumanSlots));
+            so2.Set("sharedCap", SC2JsonValue.Of(m.Settings.SharedCap));
+            so2.Set("failWhen", SC2JsonValue.Of(m.Settings.FailWhen ?? ""));
+            so2.Set("testStartStage", SC2JsonValue.Of(m.Settings.TestStartStage ?? ""));
+            o.Set("settings", so2);
+            return o;
+        }
+
+        // A save written before the mission graph existed has no "mission" key: an empty, disabled graph.
+        private static SC2MissionDocument ReadMission(SC2JsonValue o)
+        {
+            var m = new SC2MissionDocument
+            {
+                Enabled = o.Get("enabled").AsBool(false),
+                Title = o.Get("title").AsString(""),
+            };
+            foreach (var so in o.Get("stages").Items())
+            {
+                var s = new SC2MissionStage
+                {
+                    Id = so.Get("id").AsString(""),
+                    Name = so.Get("name").AsString(""),
+                    NextNodeId = so.Get("nextNodeId").AsInt(1),
+                };
+                foreach (var no in so.Get("nodes").Items())
+                {
+                    var n = new SC2MissionNode
+                    {
+                        Id = no.Get("id").AsInt(0),
+                        Type = no.Get("type").AsString(""),
+                        X = (float)no.Get("x").AsDouble(0),
+                        Y = (float)no.Get("y").AsDouble(0),
+                    };
+                    foreach (var kv in no.Get("params").Members())
+                        n.Params.Add(new SC2MissionParam { Key = kv.Key, Value = kv.Value.AsString("") });
+                    s.Nodes.Add(n);
+                }
+                foreach (var eo in so.Get("edges").Items())
+                    s.Edges.Add(new SC2MissionEdge
+                    {
+                        FromNode = eo.Get("from").AsInt(0),
+                        FromPort = eo.Get("port").AsString(""),
+                        ToNode = eo.Get("to").AsInt(0),
+                        ToPort = eo.Get("toPort").AsString(SC2MissionNodeCatalog.DefaultInput),
+                    });
+                m.Stages.Add(s);
+            }
+            foreach (var vo in o.Get("variables").Items())
+                m.Variables.Add(new SC2MissionVariable
+                {
+                    Name = vo.Get("name").AsString(""),
+                    Type = vo.Get("type").AsString(SC2MissionVariable.Number),
+                    Initial = vo.Get("initial").AsString(""),
+                });
+            foreach (var bo in o.Get("bases").Items())
+            {
+                var b = new SC2MissionBase
+                {
+                    Id = bo.Get("id").AsString(""),
+                    Army = bo.Get("army").AsString(""),
+                    Marker = bo.Get("marker").AsString(""),
+                    Radius = bo.Get("radius").AsInt(50),
+                    Engineers = bo.Get("engineers").AsInt(2),
+                    StartMode = bo.Get("startMode").AsString(SC2MissionBase.StartFilled),
+                    StartAtBegin = bo.Get("startAtBegin").AsBool(true),
+                };
+                foreach (var go in bo.Get("buildGroups").Items())
+                    b.BuildGroups.Add(new SC2MissionBuildGroup { Group = go.Get("group").AsString(""), Priority = go.Get("priority").AsInt(100) });
+                foreach (var oo in bo.Get("opais").Items())
+                {
+                    var op = new SC2MissionOpAI
+                    {
+                        Name = oo.Get("name").AsString(""),
+                        Type = oo.Get("type").AsString(""),
+                        Thread = oo.Get("thread").AsString(SC2MissionOpAI.RandomRoute),
+                        ChildCount = oo.Get("childCount").AsInt(0),
+                        MaxPlatoons = oo.Get("maxPlatoons").AsInt(1),
+                        AttackDelay = oo.Get("attackDelay").AsInt(0),
+                        Enabled = oo.Get("enabled").AsBool(true),
+                    };
+                    foreach (var c in oo.Get("chains").Items()) op.Chains.Add(c.AsString(""));
+                    b.OpAIs.Add(op);
+                }
+                m.Bases.Add(b);
+            }
+            foreach (var ao in o.Get("armies").Items())
+            {
+                var army = new SC2MissionArmy
+                {
+                    Name = ao.Get("name").AsString(""),
+                    Alias = ao.Get("alias").AsString(""),
+                    Role = ao.Get("role").AsString(SC2MissionArmy.RoleEnemy),
+                    UnitCap = ao.Get("unitCap").AsInt(1000),
+                    MassBoost = ao.Get("massBoost").AsLong(9999999),
+                    EnergyBoost = ao.Get("energyBoost").AsLong(9999999),
+                    Mass = ao.Get("mass").AsInt(2500),
+                    Energy = ao.Get("energy").AsInt(6500),
+                    Research = ao.Get("research").AsInt(10),
+                    UnlockResearch = ao.Get("unlockResearch").AsBool(true),
+                };
+                var colorList = new List<string>();
+                foreach (var c in ao.Get("colors").Items()) colorList.Add(c.AsString(""));
+                if (colorList.Count == 3) army.Colors = colorList.ToArray();
+                m.Armies.Add(army);
+            }
+            var settings = o.Get("settings");
+            m.Settings = new SC2MissionSettings
+            {
+                Coop = settings.Get("coop").AsBool(false),
+                HumanSlots = settings.Get("humanSlots").AsInt(1),
+                SharedCap = settings.Get("sharedCap").AsBool(false),
+                FailWhen = settings.Get("failWhen").AsString(SC2MissionSettings.FailAny),
+                TestStartStage = settings.Get("testStartStage").AsString(""),
+            };
+            return m;
+        }
 
         private static SC2JsonValue WriteLobbyStartPositions(List<SC2LobbyStartPosition> list)
         {

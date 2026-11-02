@@ -99,6 +99,9 @@ namespace SC2.MapEditor.Document
         /// <summary>An imported custom minimap picture as PNG bytes. Empty = the minimap is rendered from the map.</summary>
         public SC2BlobReference CustomMinimapPng;
 
+        /// <summary>The mission graph (Scenario > Mission). With Mission.Enabled, export writes _script.lua from it.</summary>
+        public SC2MissionDocument Mission = new();
+
         public SC2LuaPatchMode ScenarioMode;
         public SC2LuaPatchMode SaveMode;
         public SC2LuaPatchMode ScriptMode;

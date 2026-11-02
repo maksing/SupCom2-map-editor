@@ -144,7 +144,8 @@ public static class SC2EditorTabs
     {
         "Info",
         "Scripts",
-        "Preview"
+        "Preview",
+        "Mission"
     };
 
     public static string[] GetSubtabs(SC2EditorMainTab tab)

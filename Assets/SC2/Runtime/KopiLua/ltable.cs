@@ -64,7 +64,8 @@ namespace KopiLua
 		** for some types, it is better to avoid modulus by power of 2, as
 		** they tend to have many 2 factors.
 		*/
-		public static Node hashmod(Table t, int n) { return gnode(t, (n % ((sizenode(t) - 1) | 1))); }
+		// The remainder is taken on the unsigned value: object hash codes can be negative on some runtimes, which would index before the node array.
+		public static Node hashmod(Table t, int n) { return gnode(t, (int)((uint)n % (uint)((sizenode(t) - 1) | 1))); }
 
 		public static Node hashpointer(Table t, object p) { return hashmod(t, p.GetHashCode()); }
 

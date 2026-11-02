@@ -37,6 +37,8 @@ public sealed class SC2ScenarioShell
     /// <summary>Opens the Lobby Spawns window (owned by SC2GameViewEditorUI,
     /// like the other overlay panels).</summary>
     public System.Action OpenLobbySpawnEditor;
+    /// <summary>Opens the mission editor window (owned by SC2GameViewEditorUI).</summary>
+    public System.Action OpenMissionEditor;
 
     private long _lastActionTimestamp;
 
@@ -113,6 +115,7 @@ public sealed class SC2ScenarioShell
 
         if (subTab == 1) DrawScriptsTab(w);
         else if (subTab == 2) DrawPreviewTab(w);
+        else if (subTab == 3) DrawMissionTab(w);
         else DrawInfoTab(w);
 
         GUILayout.EndVertical();
@@ -163,6 +166,70 @@ public sealed class SC2ScenarioShell
 
         if (!string.IsNullOrEmpty(Data.PlayableAreaName) && !zones.Exists(z => z.Name == Data.PlayableAreaName))
             SC2TerrainShell.DrawUnifiedNote($"⚠ Selected Area '{Data.PlayableAreaName}' no longer exists (renamed/deleted) — pick another.");
+    }
+
+    private SC2MissionCompileResult _missionCompiled;
+    private long _missionCompiledRevision = -1;
+    private SC2MapDocument _missionCompiledFor;
+
+    /// <summary>The Mission sub-tab: whether the graph drives _script.lua, a summary of its state and the button that opens the editor.</summary>
+    private void DrawMissionTab(float w)
+    {
+        var document = _session?.Document;
+        if (document == null)
+        {
+            SC2TerrainShell.DrawUnifiedNote("The mission graph is stored in the map document, which is not loaded.");
+            return;
+        }
+        var mission = document.Scenario.Mission;
+
+        SC2EnvFieldGui.SectionLabel("Mission Graph");
+        SC2TerrainShell.DrawUnifiedNote("A mission built from nodes: stages, objectives, dialogue, cutscenes, enemy bases and co-op. When it is switched on, Export writes _script.lua from the graph instead of the plain script.");
+
+        if (SC2EnvFieldGui.PrimaryButton("Open Mission Editor..."))
+            OpenMissionEditor?.Invoke();
+
+        var enabled = SC2EnvFieldGui.Toggle("Use the graph for _script.lua", mission.Enabled);
+        if (enabled != mission.Enabled)
+        {
+            var next = mission.Clone();
+            next.Enabled = enabled;
+            ApplyMission(enabled ? "Enable Mission Graph" : "Disable Mission Graph", next);
+        }
+
+        if (mission.IsEmpty)
+        {
+            SC2TerrainShell.DrawUnifiedNote("The graph is empty. Open the editor and load a sample, or add stages.");
+            return;
+        }
+
+        var nodeCount = 0;
+        foreach (var s in mission.Stages) nodeCount += s.Nodes.Count;
+        SC2TerrainShell.DrawUnifiedNote(mission.Stages.Count + " stages, " + nodeCount + " nodes, " + mission.Bases.Count + " bases, " + mission.Variables.Count + " variables" +
+            (mission.Settings.Coop ? ", co-op (" + mission.Settings.HumanSlots + " players)" : "") + ".");
+        if (!string.IsNullOrEmpty(mission.Settings.TestStartStage))
+            SC2TerrainShell.DrawUnifiedNote("⚠ Test start stage: '" + mission.Settings.TestStartStage + "'. Export skips the stages before it.");
+
+        if (_missionCompiled == null || _missionCompiledFor != document || _missionCompiledRevision != document.Revision)
+        {
+            _missionCompiled = SC2MissionCompiler.Compile(mission, SC2MissionMapInfoBuilder.From(Data));
+            _missionCompiledFor = document;
+            _missionCompiledRevision = document.Revision;
+        }
+        var errors = _missionCompiled.Issues.FindAll(i => i.Severity == SC2MissionSeverity.Error);
+        var warnings = _missionCompiled.Issues.Count - errors.Count;
+        SC2TerrainShell.DrawUnifiedNote(errors.Count == 0 ? "✔ No errors" + (warnings > 0 ? ", " + warnings + " warning(s)." : ".") : "✖ " + errors.Count + " error(s), " + warnings + " warning(s). See Validation in the editor.");
+        if (mission.Enabled && errors.Count > 0)
+            SC2TerrainShell.DrawUnifiedNote("Export will write the plain script until the errors are fixed.");
+    }
+
+    /// <summary>Writes a new mission graph into the document as one undoable command (the mission editor's edits come through here).</summary>
+    public void ApplyMission(string name, SC2MissionDocument next)
+    {
+        if (_session?.Document == null) return;
+        _session.History.Execute(_session.Document, new SC2ReplaceMissionCommand(name, next));
+        _lastActionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        _missionCompiledRevision = -1;
     }
 
     /// <summary>Minimap + mapshot review — moved here from the Export tab so

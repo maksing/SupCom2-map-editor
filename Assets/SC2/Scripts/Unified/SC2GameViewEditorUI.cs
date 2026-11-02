@@ -313,7 +313,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     private bool AnyModalOpen(bool includeTextureBrowser = true)
     {
         var open = (includeTextureBrowser && SC2TextureBrowser.IsOpen) || (_mapImportPanel?.IsOpen ?? false) || (_infoBdfEditorPanel?.IsOpen ?? false)
-            || (_lobbySpawnPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2CostsGuide.IsViewerOpen || SC2UpdateNotice.IsOpen || SC2BusyOverlay.IsActive;
+            || (_lobbySpawnPanel?.IsOpen ?? false) || (_missionPanel?.IsOpen ?? false) || SC2HotkeysPanel.IsOpen || SC2ThemePanel.IsOpen || SC2CostsGuide.IsViewerOpen || SC2UpdateNotice.IsOpen || SC2BusyOverlay.IsActive;
 #if !UNITY_EDITOR
         // The runtime confirm dialog only exists in a build (the Editor uses its own dialogs).
         open |= SC2RuntimeConfirm.IsOpen;
@@ -1755,6 +1755,24 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Terrain tab's "Imported" subtab (DrawImportedTerrainsLeftPanelContent,
         // wired via SC2TerrainShell.DrawImportedTerrainsContent) instead of a
         // floating overlay card — nothing to draw here anymore.
+
+        // The mission editor is a window of its own, but its dropdowns are the runtime ones, which are drawn after it so their lists
+        // paint on top of it. While one is open the editor is drawn against an Ignore event (as the panels are under a modal), so a
+        // click on the list does not land on an editor control that lies under it; the real event is put back before the overlays.
+        var missionMaskedType = EventType.Ignore;
+        var missionMasked = false;
+#if !UNITY_EDITOR
+        if ((_missionPanel?.IsOpen ?? false) && (SC2RuntimeDropdown.IsAnyOpen || SC2RuntimeObjectPicker.IsAnyOpen || SC2RuntimeColorPalette.IsAnyOpen)
+            && Event.current != null && Event.current.type != EventType.Repaint && Event.current.type != EventType.Layout
+            && Event.current.type != EventType.Used && Event.current.type != EventType.Ignore)
+        {
+            missionMaskedType = Event.current.type;
+            missionMasked = true;
+            Event.current.type = EventType.Ignore;
+        }
+#endif
+        _missionPanel?.DrawOverlay(width, height);
+        if (missionMasked && Event.current != null && Event.current.type == EventType.Ignore) Event.current.type = missionMaskedType;
 
         // Shared catalog browser: the same UI and selection semantics in the
         // Unity Game view and in a standalone build. Draw last so it remains modal.
@@ -3984,7 +4002,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
     {
         EnsureTerrainShell();
         if (_scenarioShell == null)
-            _scenarioShell = new SC2ScenarioShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView, OpenLobbySpawnEditor = OpenLobbySpawnPanel };
+            _scenarioShell = new SC2ScenarioShell(_terrainShell, _mapSession) { RepaintHost = RepaintGameView, OpenLobbySpawnEditor = OpenLobbySpawnPanel, OpenMissionEditor = OpenMissionPanel };
     }
 
     private void DrawExportInspector()
@@ -4273,6 +4291,20 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             ReportStatus = SetStatus,
         };
         _lobbySpawnPanel.Open();
+    }
+
+    // Mission node editor - opened from Scenario > Mission. Edits SC2MapDocument.Scenario.Mission (the generated _script.lua).
+    private SC2MissionPanel _missionPanel;
+
+    private void OpenMissionPanel()
+    {
+        EnsureScenarioShell();
+        _missionPanel ??= new SC2MissionPanel(() => _terrainShell, () => _mapSession, () => _scenarioShell)
+        {
+            RepaintHost = RepaintGameView,
+            ReportStatus = SetStatus,
+        };
+        _missionPanel.Open();
     }
 
     private void OpenInfoBdfEditorPanel()
