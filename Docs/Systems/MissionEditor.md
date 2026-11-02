@@ -1,7 +1,6 @@
 # The mission editor
 
-Status: first draft from reading the code in the working tree on top of commit `73f9a26`; not yet reviewed by a second reader. Priority P2 (a wrong change breaks the exported mission, not saved data). Read [Architecture](../Architecture.md) first.
-**The mission editor was not committed when this was written** (`Scripts/MapDocument/Domain/Mission/`, `Scripts/Unified/Mission/` and the `Mission*Tests.cs` files are untracked, and the files that connect it to the rest of the editor are modified). Describes the working tree.
+Status: first draft from reading the code of commit `4fa4ae8` (the mission editor; its documents were committed as `3077a7d`); not yet reviewed by a second reader. Priority P2 (a wrong change breaks the exported mission, not saved data). Read [Architecture](../Architecture.md) first.
 For the node list see [MissionNodeReference](MissionNodeReference.md); for what the game does with the generated script see [CampaignFramework](../Formats/CampaignFramework.md); for how to use it see the [guide](../Guides/MissionEditorGuide.md).
 
 ## 1. Purpose and boundaries
@@ -203,4 +202,4 @@ Also compile every node of the catalog in the scratch project under Mono (the ru
 
 [ScenarioAndMission](ScenarioAndMission.md), [MissionNodeReference](MissionNodeReference.md), [CampaignFramework](../Formats/CampaignFramework.md), [Guide](../Guides/MissionEditorGuide.md), [Lua files](../Formats/LuaFiles.md), [Export pipeline](ExportPipeline.md),
 [Objects](Objects.md), [Document and persistence](DocumentAndPersistence.md), [Editor vs build](EditorVsBuild.md), [Interactions: objects and scenario](../Interactions/ObjectsAndScenario.md).
-Last reviewed: author, code reading, working tree on commit `73f9a26`. Second reader: not yet.
+Last reviewed: author, code reading, commit `4fa4ae8`. Second reader: not yet.

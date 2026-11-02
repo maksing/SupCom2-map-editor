@@ -1,6 +1,6 @@
 # Mission node reference
 
-Status: generated from `SC2MissionNodeCatalog.All` (the working tree on top of commit `73f9a26`, 177 nodes); not yet reviewed by a second reader. Companion of [MissionEditor](MissionEditor.md); for use see the [guide](../Guides/MissionEditorGuide.md).
+Status: generated from `SC2MissionNodeCatalog.All` (commit `4fa4ae8`, 177 nodes); not yet reviewed by a second reader. Companion of [MissionEditor](MissionEditor.md); for use see the [guide](../Guides/MissionEditorGuide.md).
 **When a node is added, renamed or changed, update this page**: `MissionNodeReferenceTests` fails when a node type is missing from it.
 
 How to read the tables:

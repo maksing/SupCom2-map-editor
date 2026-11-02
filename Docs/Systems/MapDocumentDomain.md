@@ -41,7 +41,7 @@ A domain called "Assets" was planned and is **not** in the root.
 | Environment | `SC2EnvironmentDocument` (working header, `SC2EnvironmentTextureExport`) | `SC2EnvironmentLegacyBridge` | `SC2EnvironmentValidator` | `SC2SetEnvironmentHeaderCommand`, `SC2SetEnvironmentTexturePathCommand`, `SC2SetEnvironmentTextureExportCommand` |
 | Scenario | `SC2ScenarioDocument` (known fields, `SC2LobbyStartPosition`, the mission) | `SC2ScenarioLegacyBridge` | `SC2ScenarioValidator` | `SC2SetScenarioNameCommand`, `SC2SetLobbyStartPositionsCommand` |
 | Decals | `SC2DecalsDocument` | `SC2DecalsLegacyBridge` | `SC2DecalsValidator` | `SC2ReplaceDecalsStateCommand`, `SC2SetDecalsAtlasPathCommand` |
-| Mission (inside Scenario; uncommitted work) | `SC2MissionDocument` | none | `SC2MissionValidator`, `SC2LuaSyntaxCheck` | `SC2ReplaceMissionCommand` |
+| Mission (inside Scenario) | `SC2MissionDocument` | none | `SC2MissionValidator`, `SC2LuaSyntaxCheck` | `SC2ReplaceMissionCommand` |
 
 Each bridge has a `...ScriptableObject` partial that does the work against the live `SC2TerrainData` (kept apart so the document layer stays free of Unity objects). The whole-document pair is `SC2MapDocumentToLegacyBridge` (`BuildFromLegacy`, `ApplyToLegacy`).
 

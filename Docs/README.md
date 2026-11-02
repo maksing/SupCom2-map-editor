@@ -133,7 +133,7 @@ Priority: **P1** = a wrong change loses user data or breaks the exported map; **
 | change a dialog or anything that must work in a build | [EditorVsBuild](Systems/EditorVsBuild.md), [EditorUi](Systems/EditorUi.md) |
 | add a hotkey, a tab or a menu entry | [EditorUi](Systems/EditorUi.md) |
 | add a new marker or object type | [Objects](Systems/Objects.md) |
-| work on the mission editor | [MissionEditor](Systems/MissionEditor.md) (uncommitted when it was written), [MissionNodeReference](Systems/MissionNodeReference.md) |
+| work on the mission editor | [MissionEditor](Systems/MissionEditor.md), [MissionNodeReference](Systems/MissionNodeReference.md) |
 | add or change a mission node | [MissionEditor](Systems/MissionEditor.md) section 7, then update [MissionNodeReference](Systems/MissionNodeReference.md) |
 | find out what the game does with a mission script | [CampaignFramework](Formats/CampaignFramework.md) |
 | make a release | [TestsAndRelease](Systems/TestsAndRelease.md), [ProjectAndBuildSettings](Systems/ProjectAndBuildSettings.md) |

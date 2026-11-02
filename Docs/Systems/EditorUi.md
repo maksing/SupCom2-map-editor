@@ -30,7 +30,7 @@ UI state lives in the host and `SC2EditorContext`, not in the map: the main tab 
 Wireframe), the dirty flags. `StartupComplete` is a public field so that the editor's field serialization carries it across a domain reload. **Per-user preferences** (hotkeys under `SC2.Hotkeys.v1`, theme colours, UI scale, visibility, autosave and backup counts, update-check opt-out, the
 skipped version, the game install root) are in PlayerPrefs. None of it enters the map document, so the same map looks and behaves the same for anyone, and none of it appears as a diff in a saved map.
 
-The main tabs are Terrain (Geometry, Materials, Pairs, Paint Materials, Simplified, Imported, Water, Lighting Bake, Background), Costs, Collision2, Objects (Armies, Units, Props, Markers, Paths, Areas, Chains), Decals, Environment (sixteen sub-tabs), Scenario (Info, Scripts, Preview, and Mission, which exists only in the uncommitted working tree of the mission editor), Import, Export (Export,
+The main tabs are Terrain (Geometry, Materials, Pairs, Paint Materials, Simplified, Imported, Water, Lighting Bake, Background), Costs, Collision2, Objects (Armies, Units, Props, Markers, Paths, Areas, Chains), Decals, Environment (sixteen sub-tabs), Scenario (Info, Scripts, Preview, and Mission, the entry to the [mission editor](MissionEditor.md)), Import, Export (Export,
 Validation) and Diagnostics (Import, Export, Scene, Logs). **The order of the sub-tab arrays matters**: the shells switch on the index.
 
 ## 4. Flows

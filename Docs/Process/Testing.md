@@ -98,7 +98,7 @@ This decides where a testable rule has to live.
 
 Recorded on commit `17863e4` with `dotnet test` on Windows:
 
-- Re-run on 2026-11-02 on top of commit `73f9a26` with the uncommitted mission editor and its tests: 1947 tests, 1946 pass, the same one known failure (the mission tests are `Mission*Tests.cs`; `MissionNodeReferenceTests` also reads `Docs/Systems/MissionNodeReference.md`).
+- Re-run on 2026-11-02 on commit `73f9a26` plus the mission editor and its tests (committed right after as `4fa4ae8`): 1947 tests, 1946 pass, the same one known failure (the mission tests are `Mission*Tests.cs`; `MissionNodeReferenceTests` also reads `Docs/Systems/MissionNodeReference.md`).
 - Earlier run: 1939 tests, 1938 pass, **1 known failure**: `CostsDocumentBridgeTests.BuildFromLegacy_DetectsPlayableWaterProfile`
   (expected `PlayableWater`, got `ImportedCustom`). It predates the work of that period and has not been fixed or explained here. Until it is,
   a run that shows only this failure is the baseline; any other failure is new and is yours.

@@ -1,6 +1,6 @@
 # Objects, armies, symmetry, the lobby, the mission and the Lua files
 
-Status: first draft from reading the call sites listed below at commit `17863e4`; the mission editor part describes uncommitted work and may change; not yet reviewed by a second reader. Read [Objects](../Systems/Objects.md), [Scenario and mission](../Systems/ScenarioAndMission.md) and [Lua files](../Formats/LuaFiles.md) first.
+Status: first draft from reading the call sites listed below at commit `17863e4`; the mission editor part is from the code of commit `4fa4ae8`; not yet reviewed by a second reader. Read [Objects](../Systems/Objects.md), [Scenario and mission](../Systems/ScenarioAndMission.md) and [Lua files](../Formats/LuaFiles.md) first.
 
 The Objects tab owns the map's points and units. Four other systems depend on them: the Lua files, the lobby, the mission and the reference units. Symmetry and the ground both reach into every placement.
 
@@ -66,8 +66,8 @@ Renaming or deleting an object that a mission node names makes the validator rep
 
 ## 6. Tests and verification
 
-`ObjectsCommandTests`, `ObjectsDocumentBridgeTests`, `ObjectsExpandedCommandTests`, `ObjectsLuaCharacterizationTests` (EditMode), `LuaBlockParsingTests`, `LobbySpawnTests`, `MassSymmetryTests`, `Symmetry*Tests`, `PropFacingTests`, `PropHeightmapTests`, `ScenarioCommandTests`, `Mission*Tests` (untracked). There is no test that renames an army and checks the lobby, `_scenario.lua`, `_save.lua` and the mission together; export a map with two armies, rename one, undo, and compare the files ([Verification](../Process/Verification.md)).
+`ObjectsCommandTests`, `ObjectsDocumentBridgeTests`, `ObjectsExpandedCommandTests`, `ObjectsLuaCharacterizationTests` (EditMode), `LuaBlockParsingTests`, `LobbySpawnTests`, `MassSymmetryTests`, `Symmetry*Tests`, `PropFacingTests`, `PropHeightmapTests`, `ScenarioCommandTests`, `Mission*Tests`. There is no test that renames an army and checks the lobby, `_scenario.lua`, `_save.lua` and the mission together; export a map with two armies, rename one, undo, and compare the files ([Verification](../Process/Verification.md)).
 
 ## 7. Unverified
 
-The sequence of the rename cascade and the export abort are from the code; no map was exported for this page. The mission editor is uncommitted and may have changed.
+The sequence of the rename cascade and the export abort are from the code; no map was exported for this page. The mission editor part is from the code of commit `4fa4ae8` and no exported map was run in the game.
