@@ -57,7 +57,8 @@ Priority: **P1** = a wrong change loses user data or breaks the exported map; **
 | Reference units, buildable overlay, intel circles | P3 | [ReferenceUnits](Systems/ReferenceUnits.md) |
 | Decals | P2 | [Decals](Systems/Decals.md) |
 | Environment (`info.bdf`) | P3 | [Environment](Systems/Environment.md) |
-| Scenario, lobby positions, Lua files, mission editor | P2 | [ScenarioAndMission](Systems/ScenarioAndMission.md) |
+| Scenario, lobby positions, Lua files | P2 | [ScenarioAndMission](Systems/ScenarioAndMission.md) |
+| The mission editor: node graph compiled into `_script.lua` | P2 | [MissionEditor](Systems/MissionEditor.md), [node reference](Systems/MissionNodeReference.md) |
 
 ### The game's files
 
@@ -66,8 +67,15 @@ Priority: **P1** = a wrong change loses user data or breaks the exported map; **
 | The container, strings and pointers, the spatial tree | [Container](Formats/Container.md), [String pool](Formats/StringPool.md), [Spatial tree](Formats/SpatialTree.md) |
 | One page per file | [Terrain](Formats/Terrain.md), [Hfield](Formats/Hfield.md), [Costs](Formats/Costs.md), [Collision2](Formats/Collision2.md), [Info](Formats/Info.md), [MapObjs](Formats/MapObjs.md), [Decals](Formats/Decals.md) |
 | Texture files (masks, point clouds, minimap, map shot, water depth) and the Lua files | [Texture files](Formats/TexturesAndMasks.md), [Lua files](Formats/LuaFiles.md) |
+| What the game's Lua does with a mission script (campaign setup, armies, AI, cinematics, menus) | [CampaignFramework](Formats/CampaignFramework.md) |
 | The code that reads and writes them, and the smart export layer | [BdfIO](Systems/BdfIO.md), [SmartExport](Systems/SmartExport.md) |
 | Index | [Formats](Formats/README.md) |
+
+### For map makers
+
+| Guide | Read it when |
+|---|---|
+| [Making a mission](Guides/MissionEditorGuide.md) | you want to build objectives, spawns, cutscenes, AI bases, co-op, loops or a difficulty menu without writing Lua |
 
 ### Files in and textures
 
@@ -115,7 +123,9 @@ Priority: **P1** = a wrong change loses user data or breaks the exported map; **
 | change a dialog or anything that must work in a build | [EditorVsBuild](Systems/EditorVsBuild.md), [EditorUi](Systems/EditorUi.md) |
 | add a hotkey, a tab or a menu entry | [EditorUi](Systems/EditorUi.md) |
 | add a new marker or object type | [Objects](Systems/Objects.md) |
-| work on the mission editor | [ScenarioAndMission](Systems/ScenarioAndMission.md) (the mission editor was uncommitted when it was written) |
+| work on the mission editor | [MissionEditor](Systems/MissionEditor.md) (uncommitted when it was written), [MissionNodeReference](Systems/MissionNodeReference.md) |
+| add or change a mission node | [MissionEditor](Systems/MissionEditor.md) section 7, then update [MissionNodeReference](Systems/MissionNodeReference.md) |
+| find out what the game does with a mission script | [CampaignFramework](Formats/CampaignFramework.md) |
 | make a release | [TestsAndRelease](Systems/TestsAndRelease.md), [ProjectAndBuildSettings](Systems/ProjectAndBuildSettings.md) |
 | something works in the editor but is invisible in a player | [EditorVsBuild](Systems/EditorVsBuild.md), [ProjectAndBuildSettings](Systems/ProjectAndBuildSettings.md), [Shaders](Systems/Shaders.md) |
 | change what a game file contains byte by byte | [Formats](Formats/README.md), [BdfIO](Systems/BdfIO.md) |

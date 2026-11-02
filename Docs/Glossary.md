@@ -75,4 +75,9 @@ Terms as the code uses them. Status: first draft from reading the code at commit
 | **Working header** | The document's copy of the environment header, kept current every frame; it wins over the data's header until a save commits it. |
 | **Carry-across** | Copying document-only data (lobby positions, mission, decals, imported entries and masks) into the freshly built document at save, and back into the session at load. |
 | **Candidate (undo)** | One of the eight entries of the global undo dispatcher: a shell's availability test and the timestamp of its last action ([Undo](Interactions/UndoAcrossSystems.md)). |
+| **Mission graph** (`SC2MissionDocument`) | The node graph of a map, compiled into the whole `_script.lua` on export ([MissionEditor](Systems/MissionEditor.md)). |
+| **Stage** | A tab of the mission graph: its own set of nodes and one Lua start function; stages are chained with `Advance to stage`. |
+| **Node, port, wire** | A step of the mission graph (a catalog entry with typed parameters), the named places on it where a wire ends (inputs, left) or starts (outputs, right), and the connection that runs the next node. A node marked "later" only arms something and runs its outputs from the game. |
+| **SCED region** | A part of the generated `_script.lua` fenced by `-- SCED:begin <id> hash=...` / `-- SCED:end <id>`; the hash shows whether it was edited by hand. |
+| **INITIAL group** | The unit group of an army that the game creates, with all its subgroups, when the map loads ([CampaignFramework](Formats/CampaignFramework.md)). |
 | **Polled counter** | A version number that consumers compare with the one they last used (`TerrainGeometryVersion`, `RnmBakeGeneration`, `Document.Revision`). |

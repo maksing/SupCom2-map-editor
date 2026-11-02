@@ -253,6 +253,12 @@ real `*_scenario.lua` corpus (56/56 now pass, including the map that
 originally surfaced the §4 culture bug) plus a synthetic fixture, and are
 what re-surfaced and confirmed the §4 fix in the first place.
 
+## `ltable.cs`: `hashmod` takes the remainder of an unsigned value
+
+`hashmod` (`hashpointer`) computed `n % ((sizenode - 1) | 1)` on a signed `int` taken from `object.GetHashCode()`. Under Unity's Mono runtime an object hash code can be negative; the remainder was then negative and indexed
+before the node array (`IndexOutOfRangeException`). `luaD_rawrunprotected` swallows any exception and returns `-1`, so `luaL_loadbuffer` failed - intermittently, depending on the hash codes of that run - on scripts that put a `nil` constant in an expression (the mission editor's generated Lua).
+The standalone .NET tests never reproduced it (their hash codes are positive). Fixed by `(int)((uint)n % (uint)((sizenode(t) - 1) | 1))`, identical for a non-negative `n`. Found by compiling every node of the mission catalog 30 times inside Unity.
+
 ## Not yet done
 
 - Only compilation was verified in the Unity Editor, not runtime behavior —

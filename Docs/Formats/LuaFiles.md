@@ -55,7 +55,7 @@ so the Armies table, the start markers and the scenario file always agree. A uni
 
 Almost entirely fixed engine boilerplate (confirmed against a real vanilla file): `OnPopulate` (initialize armies, camera defaults `MinSpinPitch`, `MaxZoomMult`, `FarZoom`, and the playable-area call), `OnStart` (the multiplayer music cue), and the five debug hotkey handlers `OnShiftF3`, `OnCtrlF3`, `OnShiftF4`, `OnCtrlF4`, `OnShiftF5`. The **only per-map line** is
 `import('/lua/sim/ScenarioFramework.lua').SetPlayableArea('<area>')`, written only when an area is chosen (the Scripts tab, else the first area with role Playable); with none the line is omitted rather than called with an empty string. It is always regenerated from this skeleton, never patched from an original (an original is bytecode),
-unless the mission editor is in use, in which case the Lua compiled from the mission graph replaces it ([Scenario and mission](../Systems/ScenarioAndMission.md)).
+unless the mission editor is in use, in which case the Lua compiled from the mission graph replaces the whole file ([Mission editor](../Systems/MissionEditor.md) for its regions and function names; [CampaignFramework](CampaignFramework.md) for what the game does with such a script). A graph with errors stops the export instead of writing the plain script.
 
 ## Rules
 

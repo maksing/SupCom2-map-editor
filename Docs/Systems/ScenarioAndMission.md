@@ -1,7 +1,7 @@
 # Scenario, lobby positions, Lua files and the mission editor
 
 Status: first draft from reading the code at commit `17863e4` and the working tree; not yet reviewed by a second reader. Priority P2. Read [Architecture](../Architecture.md) first.
-**The mission editor (`Scripts/Unified/Mission`, `Scripts/MapDocument/Domain/Mission`) was not committed when this was written** (it is another work stream's untracked files); its description is of the working tree and may change.
+**The mission editor (`Scripts/Unified/Mission`, `Scripts/MapDocument/Domain/Mission`) was not committed when this was written** (untracked files); it now has its own documents: [MissionEditor](MissionEditor.md) (how it works), [MissionNodeReference](MissionNodeReference.md), [CampaignFramework](../Formats/CampaignFramework.md) (what the game does with the script) and the [guide](../Guides/MissionEditorGuide.md). The mission parts below are a summary.
 
 ## 1. Purpose and boundaries
 
@@ -67,7 +67,7 @@ base definitions and settings.
 **How to edit it safely.** Change the Lua writers together with a test that parses the output. Keep `ARMY_*` ordering and the lobby rename cascade in step with the Objects shell.
 
 **Tests today**: `ScenarioCommandTests`, `ScenarioDocumentBridgeTests`, `LobbySpawnTests`, `LuaBlockParsingTests`, `ScdEntryPointResolverTests`, `MissionGraphTests`, `MissionGraphFeatureTests`, `MissionNodeLibraryTests`, `MissionPortsAndLoopsTests`,
-`MissionCampaignScriptTests` (these mission tests are also untracked). The shells have no unit test.
+`MissionCampaignScriptTests`, `MissionReviewFixTests`, `MissionNodeReferenceTests` (these mission tests are also untracked; see [MissionEditor](MissionEditor.md) section 8). The shells have no unit test.
 
 **Tests a change must add.** A writer change: a test that regenerates from a fixture and re-parses. A mission node: the generated Lua of a small graph and the validator outcome.
 

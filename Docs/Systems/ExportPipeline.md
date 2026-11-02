@@ -46,6 +46,7 @@ Textures/...   copied texture files (see below)
 
 1. `SC2ExportPanel.RunExport` saves the terrain state first (`SaveTerrainState`), then runs the export on a worker thread behind the busy overlay; anything that needs
    the main thread (textures, the game archive) goes through `SC2BusyOverlay.OnMain`.
+1a. **The mission script** (`RegenerateScriptWithMission`, called at the very start of `BuildExportArtifacts`, before any file is written): with the mission graph switched on and not empty, the whole `_script.lua` is compiled from it and syntax-checked; **an error in the graph or a Lua that does not compile stops the export** with `Export failed: the mission graph has N error(s)...` (and nothing is packed into an archive) - it never falls back to the plain script. See [MissionEditor](MissionEditor.md) section 4.7.
 2. **Layers**: `SC2TerrainLayerBuilder.Build` buckets triangles by pair and simplifies each pair by its ratio, keeping the map's outer ring and the pair borders.
    Each built layer becomes a `TerrainLayer` with its vertices (UV1 from `SC2TerrainUv1Unwrap`, UV2 for the mask lookup) and a `TerrainMaterial`.
 3. **Materials**: every slot goes through `RegTex` / `ResolveRawResourcePath`: an `archive:` marker is resolved to the game path (vanilla textures are referenced, not

@@ -19,6 +19,7 @@ Read [BdfIO](../Systems/BdfIO.md) first for the container, padding and offset-ta
 | `decals.win.bdf` and its atlases | [Decals](Decals.md) | `Formats/Decals/DecalsBdf.cs`, `DecalsSpatialBuilder.cs` |
 | Lighting mask textures, point clouds, minimap, map shot, water depth, material textures | [Texture files](TexturesAndMasks.md) | `SC2RnmMaskBaker`, `SC2PointCloudBaker`, `SC2DdsEncoder` |
 | `_scenario.lua`, `_save.lua`, `_script.lua` | [Lua files](LuaFiles.md) | `SC2ObjectsExport` (the live path; the older `SC2ScenarioLuaWriter` and `SC2SaveLuaWriter` serve only the editor-only export window) |
+| What the game's Lua does with a mission `_script.lua` (campaign setup, armies, AI, cinematics, menus) | [CampaignFramework](CampaignFramework.md) | the mission compiler (`SC2MissionCompiler`), described in [MissionEditor](../Systems/MissionEditor.md) |
 
 The order in which the export writes them, and the rules about paths, is in the [export pipeline](../Systems/ExportPipeline.md).
 
