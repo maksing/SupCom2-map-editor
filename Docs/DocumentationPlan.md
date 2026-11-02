@@ -81,6 +81,7 @@ exported map, **P2** = large or often changed, **P3** = self-contained and stabl
 | 32 | Editor-only tools and the older scene-based workflow | `Assets/SC2/Editor`, scene data carriers | P3 |
 | 33 | The standalone Info.bdf editor | `Tools~/InfoBdfEditor` | P3 |
 | 34 | Interactions between systems (mechanisms, data ownership, life of an edit, height and water, masks and lighting, textures, objects and scenario, undo, input, save and export, change impact) | `Docs/Interactions/` | P1 |
+| 35 | Orientation: live routes and legacy, the big files, sources of truth and the field route, known risks | `Docs/Orientation/` | P1 |
 
 Cross-cutting documents (not systems, but every system document points at them):
 

@@ -105,4 +105,4 @@ shared material list, `SC2SharedMaterials.Sync`).
 
 ## 7. Where each system is described
 
-See [the index](README.md). How the systems depend on each other, with every event, counter and order of operations: [Interactions](Interactions/README.md). The game's file layouts are in [Formats](Formats/README.md). The systems are numbered as in `DocumentationPlan.md`, plus the ones added while writing (Collision2 and the catalogues listed in the index).
+See [the index](README.md). Before a first change read [Orientation](Orientation/README.md): the live routes against the legacy ones, the big files and the sources of truth. How the systems depend on each other, with every event, counter and order of operations: [Interactions](Interactions/README.md). The game's file layouts are in [Formats](Formats/README.md). The systems are numbered as in `DocumentationPlan.md`, plus the ones added while writing (Collision2 and the catalogues listed in the index).

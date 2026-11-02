@@ -96,6 +96,16 @@ Priority: **P1** = a wrong change loses user data or breaks the exported map; **
 | Editor-only tools and the older scene-based workflow | P3 | [EditorOnlyAndLegacy](Systems/EditorOnlyAndLegacy.md) |
 | The standalone Info.bdf editor | P3 | [InfoBdfEditorTool](Systems/InfoBdfEditorTool.md) |
 
+## Orientation: where to work
+
+| Document | Question it answers |
+|---|---|
+| [Orientation](Orientation/README.md) | the standard route for a change, and which route to start from for each job |
+| [Live routes and legacy](Orientation/LiveRoutesAndLegacy.md) | which code is live, shared, legacy or unused, and how to check before editing |
+| [The big files](Orientation/BigFiles.md) | what is where in the six largest files and how to work inside them |
+| [Sources of truth](Orientation/SourcesOfTruth.md) | which copy of the data is authoritative when, and the route a new field must take |
+| [Known risks](Orientation/KnownRisks.md) | the structural risks and the open defects found so far |
+
 ## How the systems work together
 
 | Document | Question it answers |

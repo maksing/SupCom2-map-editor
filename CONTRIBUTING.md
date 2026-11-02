@@ -5,6 +5,7 @@ This is a short guide; the three documents it links to hold the detail.
 - [Editing](Docs/Process/Editing.md): how to change the code safely, and the rules the project keeps.
 - [Testing](Docs/Process/Testing.md): which test goes where, how to run the tests, what a change must test.
 - [Verification](Docs/Process/Verification.md): how to check a change beyond the tests, and how to report it.
+- [Orientation](Docs/Orientation/README.md): which route is live and which is legacy, the big files, where the data is authoritative, the known risks. Read it before your first change.
 - [The documentation index](Docs/README.md): every system, every game file format and how the systems interact; [Change impact](Docs/Interactions/ChangeImpact.md) says what else to check for each kind of change.
 - [The documentation plan](Docs/DocumentationPlan.md): how the documentation is organised and kept true.
 
