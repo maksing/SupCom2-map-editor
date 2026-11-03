@@ -86,6 +86,7 @@ public sealed partial class SC2MissionPanel
             return;
         }
         IsOpen = true;
+        _pendingListSlots.Clear();
         _work = session.Document.Scenario.Mission.Clone();
         _syncedRevision = session.Document.Revision;
         _dirty = false;

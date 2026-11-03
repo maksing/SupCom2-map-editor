@@ -65,7 +65,7 @@ Other samples: **Hold the line (co-op)** (cutscene, dialogue, enemy base with an
 
 **Objectives.** The *Objectives* category: kill, protect, capture, kill or capture, units in an area, a timer, an army statistic, a research, looking at markers, and a manual one. An objective gives `completed` and `failed` outputs. *Resolve objective* finishes one from another place by its node number.
 
-**Spawn, orders, units.** *Spawn group* creates a group and remembers it; *Give order* and the many *Units* nodes (move, attack-move, patrol, give to an army, veterancy, health, shields...) act on a group or a unit by name.
+**Spawn, orders, units.** *Spawn group* creates one or more groups and remembers them; *Give order* and the many *Units* nodes (move, attack-move, patrol, veterancy, health, shields...) act on a group or a unit by name. A node that works on the units of a group takes **several groups**: the *Groups* parameter has one dropdown per group, **X** removes one and **+ Add a group** adds another (the objectives *kill / protect / capture* then watch all their units together, *Spawn group* creates each group). The nodes that handle a group as a whole (*Spawn group as platoon*, *Platoon order*, *Give group to army*, the transport nodes, *A group that exists only in the cutscene*) keep a single group.
 
 **A cutscene.** Use the NIS nodes: *Cutscene: begin* ... camera moves, dialogue, fades ... *Cutscene: end*. The begin node locks the player's input and shows the black bars; **the end node gives the game back - a cutscene that is begun and cannot reach an end node is reported**. The *simple cutscene* nodes
 (begin, camera move, end) are the short form of the same thing.

@@ -90,7 +90,7 @@ public class MissionGraphTests
 
         var issues = SC2MissionValidator.Validate(doc);
 
-        Assert.Contains(issues, i => i.Severity == SC2MissionSeverity.Error && i.Message.Contains("Group is not set"));
+        Assert.Contains(issues, i => i.Severity == SC2MissionSeverity.Error && i.Message.Contains("Groups is not set"));
         Assert.Contains(issues, i => i.Severity == SC2MissionSeverity.Error && i.Message.Contains("'nowhere'"));
         Assert.True(SC2MissionCompiler.Compile(doc).HasErrors);
     }

@@ -415,6 +415,20 @@ namespace SC2.MapEditor.Document
                         if (Required(stage, node, p, value, issues) && map?.Chains != null && !map.Chains.Contains(value))
                             issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, node.Id, "The map has no chain '" + value + "'."));
                         break;
+                    case SC2MissionParamKind.GroupList:
+                        if (SC2MissionNodeCatalog.SplitList(value).Count == 0)
+                            issues.Add(Issue(SC2MissionSeverity.Error, stage.Id, node.Id, p.Label + " is not set."));
+                        else
+                            foreach (var item in SC2MissionNodeCatalog.SplitList(value))
+                            {
+                                if (item.Contains("'") || item.Contains("\"") || item.Contains("\\"))
+                                    issues.Add(Issue(SC2MissionSeverity.Error, stage.Id, node.Id, p.Label + ": '" + item + "' has a quote or backslash in it."));
+                                else if (map?.Groups != null && !GroupExists(map, node.GetParam("army"), item))
+                                    issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, node.Id, node.GetParam("army") + " has no group '" + item + "'."));
+                                else if (GroupIsEmpty(map, node.GetParam("army"), item))
+                                    issues.Add(Issue(SC2MissionSeverity.Error, stage.Id, node.Id, "The group '" + item + "' of " + node.GetParam("army") + " has no units: the game raises an error when it creates an empty group."));
+                            }
+                        break;
                     case SC2MissionParamKind.Group:
                         if (Required(stage, node, p, value, issues) && map?.Groups != null && !GroupExists(map, node.GetParam("army"), value))
                             issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, node.Id, node.GetParam("army") + " has no group '" + value + "'."));
@@ -472,9 +486,10 @@ namespace SC2.MapEditor.Document
                 case SC2MissionNodeCatalog.GiveOrder:
                 {
                     var army = node.GetParam("army");
-                    var group = node.GetParam("group");
-                    if (army.Length > 0 && group.Length > 0 && !spawned.Contains(army + "/" + group))
-                        issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, node.Id, "No Spawn group node creates " + army + "/" + group + "; this only works if the group already exists when the node runs."));
+                    if (army.Length > 0)
+                        foreach (var group in SC2MissionNodeCatalog.SplitList(node.GetParam("group")))
+                            if (!spawned.Contains(army + "/" + group))
+                                issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, node.Id, "No Spawn group node creates " + army + "/" + group + "; this only works if the group already exists when the node runs."));
                     break;
                 }
                 case SC2MissionNodeCatalog.ObjectiveResolve:
@@ -581,7 +596,8 @@ namespace SC2.MapEditor.Document
             foreach (var stage in doc.Stages)
                 foreach (var node in stage.Nodes)
                     if (node.Type == SC2MissionNodeCatalog.SpawnGroup)
-                        set.Add(node.GetParam("army") + "/" + node.GetParam("group"));
+                        foreach (var group in SC2MissionNodeCatalog.SplitList(node.GetParam("group")))
+                            set.Add(node.GetParam("army") + "/" + group);
             return set;
         }
 

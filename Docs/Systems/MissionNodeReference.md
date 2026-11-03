@@ -20,7 +20,7 @@ How to read the tables:
 | Timer | `timer` | `in` | `fired` *(later)* | Seconds [number] = 30 |
 | Area entered | `area_entered` | `in` | `entered` *(later)* | Area [area]; Army whose units count [army] = ARMY_1; Categories [categories] = categories.ALLUNITS; Units needed [number] = 1; Only once [bool] = true |
 | Unit killed | `unit_killed` | `in` | `killed` *(later)* | Army [army]; Unit [unit] |
-| Group killed | `group_killed` | `in` | `killed` *(later)* | Army [army]; Group [group] |
+| Group killed | `group_killed` | `in` | `killed` *(later)* | Army [army]; Groups [group list] |
 | Unit damaged | `unit_damaged` | `in` | `hit` *(later)* | Army [army]; Unit [unit]; Damage at least [number] = 0; Only once [bool] = true |
 | Unit health | `unit_health` | `in` | `reached` *(later)* | Army [army]; Unit [unit]; Health ratio (0 to 1) [number] = 0.5; Fires when it falls below (off: rises above) [bool] = true; Only once [bool] = true |
 | Unit reached marker | `unit_at_marker` | `in` | `arrived` *(later)* | Army [army]; Unit [unit]; Marker [marker]; Within (distance) [number] = 20 |
@@ -39,19 +39,19 @@ How to read the tables:
 | Platoon killed | `platoon_killed` | `in` | `killed` *(later)* | Army [army]; Group [group] |
 | Research completed | `research_done` | `in` | `done` *(later)* | Army [army] = ARMY_1; Research name [text] |
 | Every N seconds | `repeat_timer` | `in` | `tick` *(later)* | Every (seconds) [number] = 60; Stop after (0 = never) [number] = 0 |
-| Some of a group killed | `group_partly_killed` | `in` | `killed` *(later)* | Army [army]; Group [group]; Units that must die [number] = 1 |
+| Some of a group killed | `group_partly_killed` | `in` | `killed` *(later)* | Army [army]; Groups [group list]; Units that must die [number] = 1 |
 
 ## Objectives (11)
 
 | Node | Type | Inputs | Outputs | Parameters |
 |---|---|---|---|---|
-| Objective: kill group | `objective_kill` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Destroy the enemy; Description [text]; Army [army]; Group [group] |
-| Objective: protect group | `objective_protect` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Protect the base; Description [text]; Army [army]; Group [group]; Hold for (seconds) [number] = 300 |
-| Objective: capture group | `objective_capture` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Capture the structures; Description [text]; Army [army]; Group [group] |
+| Objective: kill group | `objective_kill` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Destroy the enemy; Description [text]; Army [army]; Groups [group list] |
+| Objective: protect group | `objective_protect` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Protect the base; Description [text]; Army [army]; Groups [group list]; Hold for (seconds) [number] = 300 |
+| Objective: capture group | `objective_capture` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Capture the structures; Description [text]; Army [army]; Groups [group list] |
 | Objective: units in area | `objective_area` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Reach the area; Description [text]; Area [area]; Army whose units count [army] = ARMY_1; Categories [categories] = categories.ALLUNITS; Compare [choice] {>=/<=/>/</==} = >=; Count [number] = 1 |
 | Objective: timer | `objective_timer` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Survive; Description [text]; Seconds [number] = 300; When it runs out [choice] {complete/failed} = complete |
 | Resolve objective | `objective_resolve` | `in` | `out` | Objective node (#) [number] = 1; Result [choice] {complete/failed} = complete |
-| Objective: kill or capture group | `objective_kill_or_capture` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Take out the enemy; Description [text]; Army [army]; Group [group] |
+| Objective: kill or capture group | `objective_kill_or_capture` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Take out the enemy; Description [text]; Army [army]; Groups [group list] |
 | Objective: manual (Resolve objective ends it) | `objective_basic` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Complete the task; Description [text]; Icon [choice] {kill/capture/build/protect/timer/move/reclaim/repair/locate/group} = locate |
 | Objective: army statistic | `objective_army_stat` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Build up; Description [text]; Army [army] = ARMY_1; Icon [choice] {kill/capture/build/protect/timer/move/reclaim/repair/locate/group} = build; Statistic [choice] {Units_Active/Units_Killed/Units_History/Enemies_Killed} = Units_Active; Compare [choice] {>=/<=/>/</==} = >=; Value [number] = 1; Unit categories [categories] = categories.ALLUNITS |
 | Objective: research | `objective_research` | `in` | `completed`, `failed` *(later)* | Kind [choice] {primary/secondary} = primary; Title [text] = Learn the technology; Description [text]; Army [army] = ARMY_1; Research names (comma separated) [namelist]; How many (0 = all) [number] = 0 |
@@ -64,21 +64,21 @@ How to read the tables:
 | Create unit | `create_unit` | `in` | `out` | Army [army]; Unit [unit] |
 | Spawn group as platoon | `spawn_platoon` | `in` | `out` | Army [army]; Group [group]; Formation [choice] {AttackFormation/GrowthFormation/NoFormation} = AttackFormation |
 | Platoon order along a chain | `platoon_order` | `in` | `out` | Army [army]; Group [group]; Order [choice] {patrol/move/attack} = patrol; Chain [chain] |
-| Group patrols a chain in random order | `group_random_patrol` | `in` | `out` | Army [army]; Group [group]; Chain [chain] |
-| Group goes to a marker | `group_move_marker` | `in` | `out` | Army [army]; Group [group]; Marker [marker]; Order [choice] {move/attack-move/patrol} = move; Cancel its earlier orders first [bool] = true |
-| Group attacks a unit | `group_attack_unit` | `in` | `out` | Army [army]; Group [group]; Target's army [army]; Target unit [unit] |
-| Group guards a unit | `group_guard_unit` | `in` | `out` | Army [army]; Group [group]; Guarded unit's army [army]; Guarded unit [unit] |
-| Stop a group | `group_stop` | `in` | `out` | Army [army]; Group [group]; How [choice] {clear/stop} = clear |
+| Group patrols a chain in random order | `group_random_patrol` | `in` | `out` | Army [army]; Groups [group list]; Chain [chain] |
+| Group goes to a marker | `group_move_marker` | `in` | `out` | Army [army]; Groups [group list]; Marker [marker]; Order [choice] {move/attack-move/patrol} = move; Cancel its earlier orders first [bool] = true |
+| Group attacks a unit | `group_attack_unit` | `in` | `out` | Army [army]; Groups [group list]; Target's army [army]; Target unit [unit] |
+| Group guards a unit | `group_guard_unit` | `in` | `out` | Army [army]; Groups [group list]; Guarded unit's army [army]; Guarded unit [unit] |
+| Stop a group | `group_stop` | `in` | `out` | Army [army]; Groups [group list]; How [choice] {clear/stop} = clear |
 | Unit goes to a marker | `unit_move_marker` | `in` | `out` | Army [army]; Unit [unit]; Marker [marker]; Order [choice] {move/attack-move/patrol} = move; Cancel its earlier orders first [bool] = true |
-| Protect or kill group | `group_state` | `in` | `out` | Army [army]; Group [group]; Action [choice] {protect/unprotect/restrict-death/allow-death/kill/destroy} = protect |
+| Protect or kill group | `group_state` | `in` | `out` | Army [army]; Groups [group list]; Action [choice] {protect/unprotect/restrict-death/allow-death/kill/destroy} = protect |
 | Protect or kill unit | `unit_state` | `in` | `out` | Army [army]; Unit [unit]; Action [choice] {protect/unprotect/restrict-death/allow-death/kill/destroy} = protect |
-| Set group veterancy | `group_veterancy` | `in` | `out` | Army [army]; Group [group]; Level (0 to 5) [number] = 1 |
+| Set group veterancy | `group_veterancy` | `in` | `out` | Army [army]; Groups [group list]; Level (0 to 5) [number] = 1 |
 | Set unit veterancy | `unit_veterancy` | `in` | `out` | Army [army]; Unit [unit]; Level (0 to 5) [number] = 1 |
 | Give group to army | `group_give` | `in` | `out` | Army [army]; Group [group]; New owner [army] |
 | Give unit to army | `unit_give` | `in` | `out` | Army [army]; Unit [unit]; New owner [army] |
 | Name a unit | `unit_name` | `in` | `out` | Army [army]; Unit [unit]; Name [text] |
 | Unit: what can happen to it | `unit_flags` | `in` | `out` | Army [army]; Unit [unit]; Can be killed [bool] = true; Enemies can target it [bool] = true; Can be captured [bool] = true; Can be reclaimed [bool] = true; The player can select it [bool] = true; Takes damage [bool] = true |
-| Group: what can happen to it | `group_flags` | `in` | `out` | Army [army]; Group [group]; Can be killed [bool] = true; Enemies can target it [bool] = true; Can be captured [bool] = true; Can be reclaimed [bool] = true; The player can select it [bool] = true; Takes damage [bool] = true |
+| Group: what can happen to it | `group_flags` | `in` | `out` | Army [army]; Groups [group list]; Can be killed [bool] = true; Enemies can target it [bool] = true; Can be captured [bool] = true; Can be reclaimed [bool] = true; The player can select it [bool] = true; Takes damage [bool] = true |
 | Set a unit's health | `unit_max_health` | `in` | `out` | Army [army]; Unit [unit]; Maximum health [number] = 5000; Heal it to full [bool] = true |
 | Set a unit's speed and build rate | `unit_tuning` | `in` | `out` | Army [army]; Unit [unit]; Speed multiplier (0 = unchanged) [number] = 1; Build rate (0 = unchanged) [number] = 0 |
 | Switch a weapon on or off | `unit_weapon` | `in` | `out` | Army [army]; Unit [unit]; Weapon label [text]; Enabled [bool] = true |
@@ -97,8 +97,8 @@ How to read the tables:
 
 | Node | Type | Inputs | Outputs | Parameters |
 |---|---|---|---|---|
-| Spawn group | `spawn_group` | `in` | `out` | Army [army]; Group [group] |
-| Give order | `give_order` | `in` | `out` | Army [army]; Group [group]; Order [choice] {patrol/move/attack-move} = patrol; Chain [chain] |
+| Spawn group | `spawn_group` | `in` | `out` | Army [army]; Groups [group list] |
+| Give order | `give_order` | `in` | `out` | Army [army]; Groups [group list]; Order [choice] {patrol/move/attack-move} = patrol; Chain [chain] |
 | Dialogue | `dialogue` | `in` | `done` *(later)* | Speaker [text]; Text [text]; Shown for (seconds) [number] = 5; Video file (optional) [text]; Voice bank (optional) [text]; Voice cue (optional) [text] |
 | Show text | `show_text` | `in` | `out` | Text [text]; For (seconds) [number] = 5; Where [choice] {center/leftbottom} = center |
 | Write to the game log | `log_message` | `in` | `out` | Text [text] |
@@ -158,7 +158,7 @@ How to read the tables:
 | Cutscene: change the field of view | `nis_set_fov` | `in` | `out` | Field of view [number] = 55; Over (seconds) [number] = 0 |
 | Cutscene: spin the camera | `nis_spin` | `in` | `out` | Degrees per second [number, signed] = 10; For (seconds) [number] = 5 |
 | Cutscene: camera follows a unit | `nis_track_unit` | `in` | `out` | Army [army]; Unit [unit]; Heading (180 = the unit's front) [number, signed] = 135; Pitch (90 = from above) [number, signed] = 35; Distance [number] = 60; Time to get there [number] = 2; Offset X [number, signed] = 0; Offset Y [number, signed] = 0; Offset Z [number, signed] = 0 |
-| Cutscene: camera follows a group | `nis_track_group` | `in` | `out` | Army [army]; Group [group]; Zoom [number] = 60; Time to get there [number] = 2 |
+| Cutscene: camera follows a group | `nis_track_group` | `in` | `out` | Army [army]; Groups [group list]; Zoom [number] = 60; Time to get there [number] = 2 |
 | Cutscene: fade the screen | `nis_fade` | `in` | `done` *(later)* | Fade [choice] {out/in/out to white/in from white} = out; Seconds [number] = 2 |
 | Cutscene: dialogue | `nis_dialog` | `in` | `done` *(later)* | Speaker [text]; Text [text]; Shown for (seconds) [number] = 5; Video file (optional) [text]; Voice bank (optional) [text]; Voice cue (optional) [text]; Wait for the line [choice] {wait/go on at once} = wait |
 | Cutscene: show the mission title | `nis_title` | `in` | `out` | Title [text] |
@@ -166,9 +166,9 @@ How to read the tables:
 | Cutscene: reveal around a marker | `nis_viz_marker` | `in` | `out` | Marker [marker]; Radius [number] = 100; For (seconds, 0 = until the end) [number] = 0 |
 | Cutscene: arrow at a marker | `nis_arrow` | `in` | `out` | Marker [marker]; Height (0 = default) [number] = 0 |
 | Cutscene: show or hide a unit | `nis_unit_visible` | `in` | `out` | Army [army]; Unit [unit]; Mode [choice] {show/hide} = hide |
-| Cutscene: show or hide a group | `nis_group_visible` | `in` | `out` | Army [army]; Group [group]; Mode [choice] {show/hide} = hide |
+| Cutscene: show or hide a group | `nis_group_visible` | `in` | `out` | Army [army]; Groups [group list]; Mode [choice] {show/hide} = hide |
 | Cutscene: move a unit to a marker at once | `nis_warp_unit` | `in` | `out` | Army [army]; Unit [unit]; Marker [marker] |
-| Cutscene: move a group to a marker at once | `nis_warp_group` | `in` | `out` | Army [army]; Group [group]; Marker [marker] |
+| Cutscene: move a group to a marker at once | `nis_warp_group` | `in` | `out` | Army [army]; Groups [group list]; Marker [marker] |
 | Cutscene: a unit that exists only in it | `nis_create_unit` | `in` | `out` | Army [army]; Unit [unit] |
 | Cutscene: a group that exists only in it | `nis_create_group` | `in` | `out` | Army [army]; Group [group] |
 | Cutscene: a commander climbs out | `nis_unhunker` | `in` | `out` | Army [army]; Unit [unit] |
@@ -178,7 +178,7 @@ How to read the tables:
 | Cutscene: camera circles a unit | `nis_spin_around` | `in` | `out` | Army [army]; Unit [unit]; Start heading [number, signed] = 135; Pitch [number, signed] = 30; Rotations per second [number] = 0.03; Distance [number] = 50; For (seconds) [number] = 10 |
 | Cutscene: camera on a unit's nose | `nis_nose_cam` | `in` | `out` | Army [army]; Unit [unit]; Pitch adjustment [number, signed] = 0; Zoom [number] = 10; For (seconds) [number] = 5; Time to get there [number] = 1 |
 | Cutscene: stop following | `nis_clear_tracking` | `in` | `out` | Zoom [number] = 60; Over (seconds) [number] = 2 |
-| Cutscene: group follows a chain | `nis_group_move_chain` | `in` | `done` *(later)* | Army [army]; Group [group]; Chain [chain] |
+| Cutscene: group follows a chain | `nis_group_move_chain` | `in` | `done` *(later)* | Army [army]; Groups [group list]; Chain [chain] |
 | Cutscene: hide a unit and move it | `nis_hide_warp` | `in` | `out` | Army [army]; Unit [unit]; Marker [marker] |
 | Cutscene: smooth camera starts and stops | `nis_ease` | `in` | `out` | Camera moves [choice] {smooth/linear} = smooth |
 
@@ -231,7 +231,7 @@ How to read the tables:
 | Repeat N times | `loop_repeat` | `start`, `next`, `break` | `body`, `done`, `stopped` *(later)* | Rounds [number] = 3; Next round by itself [bool] = false; Pause between rounds (seconds) [number] = 0; Store the round number (1, 2...) in variable [variable, optional] |
 | Repeat while a variable matches | `loop_while` | `start`, `next`, `break` | `body`, `done`, `stopped` *(later)* | Store in variable [variable]; Compare [choice] {==/~=/>/>=/</<=} = ==; Value [text] = 1; Next round by itself [bool] = false; Pause between rounds (seconds) [number] = 0.5; Most rounds (a safety stop) [number] = 1000; Store the round number (1, 2...) in variable [variable, optional] |
 | Repeat every N seconds until stopped | `loop_forever` | `start`, `stop`, `pause`, `resume` | `tick`, `stopped` *(later)* | Seconds between ticks (at least 0.1) [number] = 5; First tick right away [bool] = false; Store the tick number (1, 2...) in variable [variable, optional] |
-| For each unit in a group | `loop_foreach` | `start`, `next`, `break` | `each`, `done`, `stopped` *(later)* | Army [army]; Group [group]; Next round by itself [bool] = false; Pause between units (seconds) [number] = 0; Store the number of the unit (1, 2...) in variable [variable, optional] |
+| For each unit in a group | `loop_foreach` | `start`, `next`, `break` | `each`, `done`, `stopped` *(later)* | Army [army]; Groups [group list]; Next round by itself [bool] = false; Pause between units (seconds) [number] = 0; Store the number of the unit (1, 2...) in variable [variable, optional] |
 | Loop unit: kill it | `loop_unit_kill` | `in` | `out` | Loop node number (the # of the 'For each unit' node) [number] |
 | Loop unit: remove it | `loop_unit_remove` | `in` | `out` | Loop node number (the # of the 'For each unit' node) [number] |
 | Loop unit: stop its orders | `loop_unit_stop` | `in` | `out` | Loop node number (the # of the 'For each unit' node) [number] |

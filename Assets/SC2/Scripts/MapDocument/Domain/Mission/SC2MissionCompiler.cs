@@ -135,6 +135,21 @@ namespace SC2.MapEditor.Document
             sb.Append("end\n");
             sb.Append("\n");
             sb.Append("local function SCED_Group(army, name)\n");
+            // a node may name several groups, separated by commas: it then gets the units of all of them in one table
+            sb.Append("\tif string.find(name, ',', 1, true) then\n");
+            sb.Append("\t\tlocal merged = {}\n");
+            sb.Append("\t\tfor part in string.gfind(name, '[^,]+') do\n");
+            sb.Append("\t\t\tlocal trimmed = string.gsub(part, '^%s*(.-)%s*$', '%1')\n");
+            sb.Append("\t\t\tlocal one = ScenarioInfo.SCED.groups[army .. '/' .. trimmed]\n");
+            sb.Append("\t\t\tif one then\n");
+            sb.Append("\t\t\t\tfor index, unit in one do table.insert(merged, unit) end\n");
+            sb.Append("\t\t\telse\n");
+            sb.Append("\t\t\t\tWARN('SCED: group ', army, '/', trimmed, ' was not spawned')\n");
+            sb.Append("\t\t\tend\n");
+            sb.Append("\t\tend\n");
+            sb.Append("\t\tif table.getn(merged) == 0 then return nil end\n");
+            sb.Append("\t\treturn merged\n");
+            sb.Append("\tend\n");
             sb.Append("\tlocal group = ScenarioInfo.SCED.groups[army .. '/' .. name]\n");
             sb.Append("\tif not group then WARN('SCED: group ', army, '/', name, ' was not spawned') end\n");
             sb.Append("\treturn group\n");
@@ -567,6 +582,23 @@ namespace SC2.MapEditor.Document
                     sb.Append("\t\tLOG('SCED: group ").Append(LogText(GroupKey(node))).Append(" was not spawned')\n");
                     sb.Append("\tend\n");
                     break;
+                case SC2MissionNodeCatalog.SpawnGroup when node.GetParam("group").Contains(","):
+                    // several groups: each is created on its own and kept under its own key, so a later node may name any of them
+                    foreach (var name in SC2MissionNodeCatalog.SplitList(node.GetParam("group")))
+                    {
+                        var key = Quote(node.GetParam("army") + "/" + name);
+                        sb.Append("\tdo\n");
+                        sb.Append("\t\tlocal ok, group = pcall(ScenarioUtils.CreateArmyGroup, ").Append(Quote(node.GetParam("army"))).Append(", ").Append(Quote(name)).Append(")\n");
+                        sb.Append("\t\tif ok and group and table.getn(group) > 0 then\n");
+                        sb.Append("\t\t\tScenarioInfo.SCED.groups[").Append(key).Append("] = group\n");
+                        sb.Append("\t\t\tLOG('SCED: spawned ', table.getn(group), ' units of ").Append(LogText(node.GetParam("army") + "/" + name)).Append("')\n");
+                        sb.Append("\t\telse\n");
+                        sb.Append("\t\t\tWARN('SCED: the group ").Append(LogText(node.GetParam("army") + "/" + name)).Append(" created no units: ', ok and 'it is empty' or group)\n");
+                        sb.Append("\t\tend\n");
+                        sb.Append("\tend\n");
+                    }
+                    sb.Append("\t").Append(PortFunction(stage, node.Id, "out")).Append("()\n");
+                    break;
                 case SC2MissionNodeCatalog.SpawnGroup:
                     // CreateArmyGroup raises an error for a group that does not exist or holds no units; the log gets the reason and the chain goes on.
                     sb.Append("\tlocal ok, group = pcall(ScenarioUtils.CreateArmyGroup, ").Append(Quote(node.GetParam("army"))).Append(", ").Append(Quote(node.GetParam("group"))).Append(")\n");
@@ -812,8 +844,15 @@ namespace SC2.MapEditor.Document
             return parts.Count == 0 ? "{}" : "{ " + string.Join(", ", parts) + " }";
         }
 
-        private static void AppendGroupLookup(StringBuilder sb, SC2MissionNode node) =>
-            sb.Append("\tlocal group = ScenarioInfo.SCED.groups[").Append(Quote(GroupKey(node))).Append("]\n");
+        private static void AppendGroupLookup(StringBuilder sb, SC2MissionNode node)
+        {
+            // several groups: the helper joins their units; one group is read as it always was
+            if (node.GetParam("group").Contains(","))
+                sb.Append("\tlocal group = SCED_Group(").Append(Quote(node.GetParam("army"))).Append(", ")
+                    .Append(Quote(string.Join(",", SC2MissionNodeCatalog.SplitList(node.GetParam("group"))))).Append(")\n");
+            else
+                sb.Append("\tlocal group = ScenarioInfo.SCED.groups[").Append(Quote(GroupKey(node))).Append("]\n");
+        }
 
         private static void AppendOrder(StringBuilder sb, SC2MissionNode node)
         {

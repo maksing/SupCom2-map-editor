@@ -12,7 +12,7 @@ namespace SC2.MapEditor.Document
             ["area_entered"] = "Fires when units of an army enter an area of the map: once, or every time.",
             ["unit_killed"] = "Fires when a named unit of the map is destroyed.",
             ["group_killed"] = "Fires when every unit of a group has been destroyed.",
-            ["spawn_group"] = "Creates a unit group of the map for an army. A group that lies inside INITIAL already exists when the map loads.",
+            ["spawn_group"] = "Creates one or more unit groups of the map for an army. A group that lies inside INITIAL already exists when the map loads.",
             ["give_order"] = "Orders a spawned group to move, attack-move or patrol along a chain.",
             ["objective_kill"] = "Shows an objective to destroy a group. Runs completed when it is gone, failed if the objective fails.",
             ["objective_protect"] = "Shows an objective to keep a group alive, optionally for a time.",

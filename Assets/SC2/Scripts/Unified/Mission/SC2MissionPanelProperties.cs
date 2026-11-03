@@ -81,11 +81,11 @@ public sealed partial class SC2MissionPanel
     }
 
     /// <summary>A dropdown over options. A value the list does not have (a name the map lost) stays selectable, marked as missing.</summary>
-    private bool ChoiceEdit(string label, ref string value, IList<string> options, bool allowNone, string undo)
+    private bool ChoiceEdit(string label, ref string value, IList<string> options, bool allowNone, string undo, string noneLabel = "(none)")
     {
         if (!string.IsNullOrEmpty(label)) FieldLabel(label);
         var items = new List<string>();
-        if (allowNone) items.Add("(none)");
+        if (allowNone) items.Add(noneLabel);
         items.AddRange(options);
         var index = allowNone ? 0 : -1;
         for (var i = 0; i < options.Count; i++)
@@ -199,6 +199,9 @@ public sealed partial class SC2MissionPanel
             case SC2MissionParamKind.Code:
                 changed = TextEdit(p.Label, ref value, key, undo, multiline: true);
                 break;
+            case SC2MissionParamKind.GroupList:
+                changed = GroupListEdit(p.Label, ref value, OptionsFor(p.Kind, node), key, undo);
+                break;
             case SC2MissionParamKind.Categories:
             {
                 var preset = "";
@@ -223,6 +226,59 @@ public sealed partial class SC2MissionPanel
         if (changed) node.SetParam(p.Key, value);
     }
 
+    /// <summary>The empty slots a group list shows below its groups (a slot is made by "+ Add a group" and only becomes part of the value when a
+    /// group is picked in it), by the key of the parameter.</summary>
+    private readonly Dictionary<string, int> _pendingListSlots = new();
+
+    /// <summary>A list of group names: one dropdown per group with a button that removes it, and a button that adds an empty slot to pick
+    /// the next group in. Without groups to pick from (the map has none for this army) the names are typed, separated by commas.</summary>
+    private bool GroupListEdit(string label, ref string value, string[] options, string key, string undo)
+    {
+        if (options == null || options.Length == 0)
+            return TextEdit(label + "  (names separated by commas)", ref value, key, undo);
+
+        FieldLabel(label);
+        var items = SC2MissionNodeCatalog.SplitList(value);
+        var changed = false;
+        for (var i = 0; i < items.Count; i++)
+        {
+            GUILayout.BeginHorizontal();
+            var item = items[i];
+            if (ChoiceEdit(null, ref item, options, false, undo)) { items[i] = item; changed = true; }
+            var remove = items.Count > 1 && GUILayout.Button("X", GUILayout.Width(S(26f)), GUILayout.Height(S(22f)));
+            GUILayout.EndHorizontal();
+            if (remove)
+            {
+                items.RemoveAt(i);
+                Mutate(undo);
+                changed = true;
+                break;
+            }
+        }
+
+        // the empty slot: nothing is assigned until a group is picked in it
+        _pendingListSlots.TryGetValue(key, out var pending);
+        if (pending > 0)
+        {
+            GUILayout.BeginHorizontal();
+            var picked = "";
+            if (ChoiceEdit(null, ref picked, options.Where(o => !items.Contains(o)).ToArray(), true, undo, "(choose a group)") && picked.Length > 0)
+            {
+                items.Add(picked);
+                _pendingListSlots[key] = 0;
+                changed = true;
+            }
+            if (GUILayout.Button("X", GUILayout.Width(S(26f)), GUILayout.Height(S(22f)))) _pendingListSlots[key] = 0;
+            GUILayout.EndHorizontal();
+        }
+
+        GUI.enabled = pending == 0 && options.Any(o => !items.Contains(o));
+        if (GUILayout.Button("+ Add a group", GUILayout.Height(S(22f)))) _pendingListSlots[key] = 1;
+        GUI.enabled = true;
+        if (changed) value = string.Join(", ", items);
+        return changed;
+    }
+
     /// <summary>The names a picker offers for a parameter, or null when the map gives none to choose from (then it is typed).</summary>
     private string[] OptionsFor(SC2MissionParamKind kind, SC2MissionNode node)
     {
@@ -233,6 +289,7 @@ public sealed partial class SC2MissionPanel
             case SC2MissionParamKind.Marker: return SC2MissionMapInfoBuilder.Sorted(_mapInfo.Markers);
             case SC2MissionParamKind.Chain: return SC2MissionMapInfoBuilder.Sorted(_mapInfo.Chains);
             case SC2MissionParamKind.Group:
+            case SC2MissionParamKind.GroupList:
                 return _mapInfo.Groups.TryGetValue(node.GetParam("army"), out var groups) ? SC2MissionMapInfoBuilder.Sorted(groups) : new string[0];
             case SC2MissionParamKind.Unit:
                 return _mapInfo.Units.TryGetValue(node.GetParam("army"), out var units) ? SC2MissionMapInfoBuilder.Sorted(units) : new string[0];

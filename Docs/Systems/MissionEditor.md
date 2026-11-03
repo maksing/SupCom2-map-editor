@@ -62,7 +62,7 @@ undo/redo counters (the steps it made) and enables its buttons only while the sh
 
 | Region | Content |
 |---|---|
-| `common` | imports; the state table `ScenarioInfo.SCED`; the variables' start values; helpers (`SCED_HasArmy`, `SCED_FindUnit`, `SCED_Group`, `SCED_Platoon`, `SCED_HumanCount`); the loop engine (`SCED_LoopRound`, `SCED_LoopStop`) only when a loop node exists; the co-op watcher; the army report; `SCED_BuildBases`, `SCED_Setup`, `SCED_Begin` |
+| `common` | imports; the state table `ScenarioInfo.SCED`; the variables' start values; helpers (`SCED_HasArmy`, `SCED_FindUnit`, `SCED_Group` (a name with commas, as the `GroupList` parameter writes it, returns one table with the units of every named group), `SCED_Platoon`, `SCED_HumanCount`); the loop engine (`SCED_LoopRound`, `SCED_LoopStop`) only when a loop node exists; the co-op watcher; the army report; `SCED_BuildBases`, `SCED_Setup`, `SCED_Begin` |
 | `armies` | the army block of every campaign script: `ScenarioInfo.ARMY_<alias> = <index>`, `ScenarioInfo.AssignedObjectives = {}`, colour and tuning tables, the `local ARMY_<alias>` copies, `SCED_ResolveArmies`, then `doscript '/lua/ai/campaign/system/CAIInitializeSystems.lua'` unconditionally |
 | `bases` | `SCED_Bases_Setup`: one block per base (BaseManager, build groups, OpAI, start); only when there are bases |
 | one per stage | `SCED_<stage>_Start`, then for every node its output functions and its input functions |

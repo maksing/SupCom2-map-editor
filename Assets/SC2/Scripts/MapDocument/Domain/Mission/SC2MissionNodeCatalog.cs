@@ -37,7 +37,10 @@ namespace SC2.MapEditor.Document
         /// <summary>Marker names separated by commas.</summary>
         MarkerList,
         /// <summary>Army names separated by commas (ARMY_1, ARMY_2).</summary>
-        ArmyList
+        ArmyList,
+        /// <summary>The names of one or more unit groups of the node's army, separated by commas. One name works as before; with several the
+        /// node acts on all the units of all the groups (a Spawn group node creates each group).</summary>
+        GroupList
     }
 
     public sealed class SC2MissionParamDef
@@ -207,6 +210,18 @@ namespace SC2.MapEditor.Document
         private static SC2MissionParamDef P(string key, string label, SC2MissionParamKind kind, string def = "", string[] choices = null) =>
             new() { Key = key, Label = label, Kind = kind, Default = def, Choices = choices };
 
+        /// <summary>The names in a comma separated list, trimmed, without the empty ones.</summary>
+        public static List<string> SplitList(string commaSeparated)
+        {
+            var items = new List<string>();
+            foreach (var part in (commaSeparated ?? "").Split(','))
+            {
+                var trimmed = part.Trim();
+                if (trimmed.Length > 0) items.Add(trimmed);
+            }
+            return items;
+        }
+
         /// <summary>The kinds of parameter whose text is a Lua expression or a list that the compiler writes out as it is understood.</summary>
         public static bool IsList(SC2MissionParamKind kind) =>
             kind == SC2MissionParamKind.NameList || kind == SC2MissionParamKind.MarkerList || kind == SC2MissionParamKind.ArmyList;
@@ -245,15 +260,15 @@ namespace SC2.MapEditor.Document
             new() { Type = UnitKilled, Title = "Unit killed", Category = "Events", Defers = true, Ports = new[] { "killed" },
                 Params = new[] { P("army", "Army", SC2MissionParamKind.Army), P("unit", "Unit", SC2MissionParamKind.Unit) } },
             new() { Type = GroupKilled, Title = "Group killed", Category = "Events", Defers = true, Ports = new[] { "killed" },
-                Params = new[] { P("army", "Army", SC2MissionParamKind.Army), P("group", "Group", SC2MissionParamKind.Group) } },
+                Params = new[] { P("army", "Army", SC2MissionParamKind.Army), P("group", "Groups", SC2MissionParamKind.GroupList) } },
 
             new() { Type = ObjectiveKill, Title = "Objective: kill group", Category = "Objectives", Defers = true, Ports = new[] { "completed", "failed" },
-                Params = Concat(ObjectiveHeader("Destroy the enemy"), P("army", "Army", SC2MissionParamKind.Army), P("group", "Group", SC2MissionParamKind.Group)) },
+                Params = Concat(ObjectiveHeader("Destroy the enemy"), P("army", "Army", SC2MissionParamKind.Army), P("group", "Groups", SC2MissionParamKind.GroupList)) },
             new() { Type = ObjectiveProtect, Title = "Objective: protect group", Category = "Objectives", Defers = true, Ports = new[] { "completed", "failed" },
-                Params = Concat(ObjectiveHeader("Protect the base"), P("army", "Army", SC2MissionParamKind.Army), P("group", "Group", SC2MissionParamKind.Group),
+                Params = Concat(ObjectiveHeader("Protect the base"), P("army", "Army", SC2MissionParamKind.Army), P("group", "Groups", SC2MissionParamKind.GroupList),
                     P("seconds", "Hold for (seconds)", SC2MissionParamKind.Number, "300")) },
             new() { Type = ObjectiveCapture, Title = "Objective: capture group", Category = "Objectives", Defers = true, Ports = new[] { "completed", "failed" },
-                Params = Concat(ObjectiveHeader("Capture the structures"), P("army", "Army", SC2MissionParamKind.Army), P("group", "Group", SC2MissionParamKind.Group)) },
+                Params = Concat(ObjectiveHeader("Capture the structures"), P("army", "Army", SC2MissionParamKind.Army), P("group", "Groups", SC2MissionParamKind.GroupList)) },
             new() { Type = ObjectiveArea, Title = "Objective: units in area", Category = "Objectives", Defers = true, Ports = new[] { "completed", "failed" },
                 Params = Concat(ObjectiveHeader("Reach the area"), P("area", "Area", SC2MissionParamKind.Area),
                     P("army", "Army whose units count", SC2MissionParamKind.Army, "ARMY_1"),
@@ -271,11 +286,11 @@ namespace SC2.MapEditor.Document
                 } },
 
             new() { Type = SpawnGroup, Title = "Spawn group", Category = "Actions", Ports = new[] { "out" },
-                Params = new[] { P("army", "Army", SC2MissionParamKind.Army), P("group", "Group", SC2MissionParamKind.Group) } },
+                Params = new[] { P("army", "Army", SC2MissionParamKind.Army), P("group", "Groups", SC2MissionParamKind.GroupList) } },
             new() { Type = GiveOrder, Title = "Give order", Category = "Actions", Ports = new[] { "out" },
                 Params = new[]
                 {
-                    P("army", "Army", SC2MissionParamKind.Army), P("group", "Group", SC2MissionParamKind.Group),
+                    P("army", "Army", SC2MissionParamKind.Army), P("group", "Groups", SC2MissionParamKind.GroupList),
                     P("order", "Order", SC2MissionParamKind.Choice, "patrol", new[] { "patrol", "move", "attack-move" }),
                     P("chain", "Chain", SC2MissionParamKind.Chain),
                 } },

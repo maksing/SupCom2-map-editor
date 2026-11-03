@@ -178,6 +178,13 @@ public static class SC2MissionClickCheck
             var frame = Get<SC2MissionDocument>("_work").FindStage("stage1").AddNode("comment", -30f, -30f);
             frame.SetParam("text", "Setup"); frame.SetParam("width", "560"); frame.SetParam("height", "300"); frame.SetParam("color", "blue");
         });
+        Add("spawn_groups", () =>
+        {
+            Set("_tab", "all");
+            var spawn = Get<SC2MissionDocument>("_work").FindStage("all").Nodes.First(n => n.Type == "spawn_group");
+            spawn.SetParam("group", "OUTPOST, GROUP_B");
+            Set("_selNode", spawn.Id);
+        });
         Add("quick_add", () => { Set("_tab", "waves"); PanelMethod("OpenQuickAdd").Invoke(panel, new object[] { new Vector2(330f, 260f), new Vector2(330f, 260f), 0, "out" }); });
         Add("waves_loop", () => { Set("_tab", "waves"); Set("_selNode", 1); });
         Add("stage1_edge", () => { Set("_tab", "stage1"); Set("_selEdge", 0); });
@@ -417,6 +424,22 @@ public static class SC2MissionClickCheck
             FlowCheck("dropping a library button on the canvas adds that node (" + total + " -> " + stage.Nodes.Count + ")", made != null && made.Type == "victory");
         }
 
+        // "+ Add a group" makes an empty slot and assigns nothing until a group is picked in it
+        NewPanel(); Set("_tab", "all");
+        var spawnNode = Get<SC2MissionDocument>("_work").FindStage("all").Nodes.First(n => n.Type == "spawn_group");
+        Set("_selNode", spawnNode.Id);
+        Pump(); Pump();
+        var groupBefore = spawnNode.GetParam("group");
+        var added = ClickLabel("Button", "+ Add a group");
+        Pump();
+        var pendingSlots = (System.Collections.IDictionary)typeof(SC2MissionPanel).GetField("_pendingListSlots", Flags).GetValue(panel);
+        var slotCount = 0;
+        foreach (System.Collections.DictionaryEntry slot in pendingSlots) slotCount += (int)slot.Value;
+        FlowCheck("+ Add a group was found and clicked", added);
+        FlowCheck("it adds an empty slot and no group (" + groupBefore + " -> " + spawnNode.GetParam("group") + ", slots " + slotCount + ")",
+            spawnNode.GetParam("group") == groupBefore && slotCount == 1);
+        FlowCheck("the empty slot offers the choice text", Find("Popup", "(choose a group)") != null || MissionProbe.Controls.Any(c => c.Kind == "Popup"));
+
         var recent = (System.Collections.IList)typeof(SC2MissionPanel).GetField("_recent", StaticFlags).GetValue(null);
         FlowCheck("the added node is the first of the recent nodes (" + (recent.Count > 0 ? recent[0] : "none") + ")", recent.Count > 0 && (string)recent[0] == "victory");
     }
@@ -633,6 +656,7 @@ public static class SC2MissionClickCheck
         data.ObjZones.Add(new SC2ObjZone { Id = 1, Name = "AREA_1" });
         data.ObjChains.Add(new SC2ObjChain { Id = 1, Name = "RAID_1" });
         data.ObjUnits.Add(new SC2ObjUnitNode { Id = 1, ArmyName = "ARMY_2", Name = "OUTPOST", IsGroup = true });
+        data.ObjUnits.Add(new SC2ObjUnitNode { Id = 2, ArmyName = "ARMY_2", Name = "GROUP_B", IsGroup = true });
         shell = ScriptableObject.CreateInstance<SC2TerrainShell>();
         shell.SetData(data, "clickcheck");
 
