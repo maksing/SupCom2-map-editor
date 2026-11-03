@@ -3780,7 +3780,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Also gated on costsTabActive: OverlayCosts alone should only show
         // the overlay, never let painting fire from a different tab.
         var mousePos = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
-        var allowInput = costsTabActive && Event.current != null && !IsMouseOverUi(mousePos);
+        var allowInput = costsTabActive && Event.current != null && !IsMouseOverUi(mousePos) && !CameraOwnsLeftButton(Event.current);
         // A single unhandled exception here (e.g. a null shader, per the
         // "Value cannot be null. Parameter name: shader" class of bug already
         // hit and fixed elsewhere in this project) would otherwise propagate
@@ -4179,7 +4179,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var camera = ResolveCamera();
         if (camera == null) return;
         var mousePosition = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
-        var allowInput = Event.current != null && !IsMouseOverUi(mousePosition);
+        var allowInput = Event.current != null && !IsMouseOverUi(mousePosition) && !CameraOwnsLeftButton(Event.current);
         _referenceUnitsShell.OnGameViewGUI(camera, _viewportRect, mousePosition, allowInput, OverlayReferenceUnits, TryRaycastForPlacement);
     }
 
@@ -4382,7 +4382,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
             return;
 
         var mousePos = Event.current != null ? Event.current.mousePosition : new Vector2(-1f, -1f);
-        var allowInput = objectsTabActive && Event.current != null && !IsMouseOverUi(mousePos);
+        var allowInput = objectsTabActive && Event.current != null && !IsMouseOverUi(mousePos) && !CameraOwnsLeftButton(Event.current);
         if (Event.current != null && objectsTabActive && (Event.current.rawType == EventType.MouseDrag || Event.current.rawType == EventType.MouseUp) && _objectsShell.DragDiagWanted)
             Debug.Log($"[SC2DragDiag] {Event.current.rawType} reaches the objects handler: type={Event.current.type} allowInput={allowInput} hot={GUIUtility.hotControl} tool={_tool}");
         // Same contain-the-exception reasoning as HandleCostsGameViewInput —
@@ -7978,6 +7978,28 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         // Whatever of the bar the cells above left alone (its border, the gaps) still belongs to it, not to the viewport behind.
         if (interactive && e.type != EventType.Used && (e.type == EventType.MouseDown || e.type == EventType.MouseUp || e.type == EventType.MouseDrag) && rect.Contains(e.mousePosition))
             e.Use();
+    }
+
+    /// <summary>True while the camera owns the left mouse button: this MouseDown presses a Camera.* binding, or a camera drag that started
+    /// that way is still held. The viewport tools run before <see cref="HandleGameViewNavigation"/> sees the event, so a tool that takes a
+    /// left press (a box select, a brush, a click to place) would use it first and the camera, which skips a used event, would never
+    /// start. Only the left button is claimed: the other buttons are not read by the tools, and Camera.Fly's right button is also the
+    /// tools' cancel.</summary>
+    private bool CameraOwnsLeftButton(Event e)
+    {
+        if (e == null || e.button != 0) return false;
+        switch (e.type)
+        {
+            case EventType.MouseDown:
+                return SC2Hotkeys.MatchesMouseDown("Camera.Pan", e)
+                    || SC2Hotkeys.MatchesMouseDown("Camera.Orbit", e)
+                    || SC2Hotkeys.MatchesMouseDown("Camera.Fly", e);
+            case EventType.MouseDrag:
+            case EventType.MouseUp:
+                return _orbiting || _panning || _flying;
+            default:
+                return false;
+        }
     }
 
     private bool IsMouseOverUi(Vector2 mouse)

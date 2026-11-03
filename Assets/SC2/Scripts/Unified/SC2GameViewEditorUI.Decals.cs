@@ -73,7 +73,7 @@ public sealed partial class SC2GameViewEditorUI
             return;
 
         var mouse = Event.current.mousePosition;
-        var allowInput = _viewportRect.Contains(mouse) && !IsMouseOverUi(mouse);
+        var allowInput = _viewportRect.Contains(mouse) && !IsMouseOverUi(mouse) && !CameraOwnsLeftButton(Event.current);
         _decalsShell.OnGameViewGUI(camera, _viewportRect, mouse, allowInput);
     }
 }
