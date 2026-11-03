@@ -591,6 +591,12 @@ public sealed partial class SC2MissionPanel
         var c = FrameColor(node.GetParam("color", "gray"));
         FillRect(rect, new Color(c.r, c.g, c.b, 0.10f));
         FrameRectOutline(rect, new Color(c.r, c.g, c.b, selected ? 1f : 0.55f));
+        if (selected)
+        {
+            // a selected frame has a thick outline
+            FrameRectOutline(new Rect(rect.x + 1f, rect.y + 1f, rect.width - 2f, rect.height - 2f), new Color(1f, 0.9f, 0.3f, 1f));
+            FrameRectOutline(new Rect(rect.x + 2f, rect.y + 2f, rect.width - 4f, rect.height - 4f), new Color(1f, 0.9f, 0.3f, 1f));
+        }
         var header = Zr(new Rect(box.Rect.x, box.Rect.y, box.Rect.width, box.HeaderHeight), z);
         FillRect(header, new Color(c.r, c.g, c.b, selected ? 0.45f : 0.28f));
         GUI.Label(new Rect(header.x + S(8f) * z, header.y, header.width - S(16f) * z, header.height), node.GetParam("text", "Group"), _nodeTitleStyle);
@@ -658,9 +664,16 @@ public sealed partial class SC2MissionPanel
                 : issues.y > 0 ? new Color(0.95f, 0.70f, 0.20f, 0.95f)
                 : node.Id == _hoverNode ? new Color(1f, 1f, 1f, 0.6f)
                 : new Color(0f, 0f, 0f, 0.8f);
-            FillRect(new Rect(rect.x - 1f, rect.y - 1f, rect.width + 2f, rect.height + 2f), border);
-            FillRect(rect, new Color(0.16f, 0.17f, 0.20f, 1f));
-            FillRect(new Rect(rect.x, rect.y, rect.width, header), color);
+            // a selected node has a thick bright border and a soft glow around it, so it is found at a glance among many
+            var edge = selected ? Mathf.Max(3f, S(3.5f) * z) : 1f;
+            if (selected)
+            {
+                var glow = edge + Mathf.Max(3f, S(5f) * z);
+                FillRect(new Rect(rect.x - glow, rect.y - glow, rect.width + glow * 2f, rect.height + glow * 2f), new Color(1f, 0.9f, 0.3f, 0.2f));
+            }
+            FillRect(new Rect(rect.x - edge, rect.y - edge, rect.width + edge * 2f, rect.height + edge * 2f), border);
+            FillRect(rect, selected ? new Color(0.20f, 0.21f, 0.25f, 1f) : new Color(0.16f, 0.17f, 0.20f, 1f));
+            FillRect(new Rect(rect.x, rect.y, rect.width, header), selected ? Color.Lerp(color, Color.white, 0.12f) : color);
             GUI.Label(new Rect(rect.x + S(14f) * z, rect.y, rect.width - S(66f) * z, header), def.Title, _nodeTitleStyle);
             GUI.Label(new Rect(rect.xMax - S(34f) * z, rect.y, S(30f) * z, header), "#" + node.Id, _portLabelStyle);
             if (issues.x + issues.y > 0)

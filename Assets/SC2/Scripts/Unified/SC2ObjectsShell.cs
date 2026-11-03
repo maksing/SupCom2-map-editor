@@ -3007,7 +3007,7 @@ public sealed class SC2ObjectsShell
         {
             var previousGuiColor = GUI.color;
             GUI.color = UnitGroupColor(node, 1f);
-            GUI.DrawTexture(groupSwatch, Texture2D.whiteTexture);
+            DrawRoundedSwatch(groupSwatch);
             GUI.color = previousGuiColor;
         }
         var labelText = icon + node.Name + $"  {counts.Groups}-{counts.Units}";
@@ -3017,6 +3017,8 @@ public sealed class SC2ObjectsShell
             _selGroupId = node.Id;
             _selectedArmyId = 0; // the group chosen last is the target of new units, not an army chosen earlier
         }
+        if (_selGroupId == node.Id)
+            DrawSelectedRowHighlight(GUILayoutUtility.GetLastRect());
 
         var groupUnitIds = new List<int>();
         GatherUnitsUnderGroup(index, groupUnitIds);
@@ -6083,11 +6085,13 @@ public sealed class SC2ObjectsShell
             {
                 var previousColor = GUI.color;
                 GUI.color = ChainColor(c, true);
-                GUI.DrawTexture(swatch, Texture2D.whiteTexture);
+                DrawRoundedSwatch(swatch);
                 GUI.color = previousColor;
             }
             var sel = GUILayout.Toggle(_selectedChainId == c.Id, TruncateForLabel(c.Name, w * 0.7f - SC2UiScale.Pxf(14f)), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f - SC2UiScale.Pxf(14f)));
+            var chainToggle = GUILayoutUtility.GetLastRect();
             if (sel) _selectedChainId = c.Id; else if (_selectedChainId == c.Id) _selectedChainId = 0;
+            if (_selectedChainId == c.Id) DrawSelectedRowHighlight(chainToggle);
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
                 PushUndo();
@@ -8919,6 +8923,35 @@ public sealed class SC2ObjectsShell
 
     /// <summary>The colour of a chain in the viewport and in the list: fixed by the chain's id (SC2ObjectPalette), so that hundreds of chains
     /// each keep their own. The selected chain is full strength, the rest a little dimmer.</summary>
+    /// <summary>A small colour swatch with rounded corners, in the colour GUI.color has.</summary>
+    private static void DrawRoundedSwatch(Rect rect)
+    {
+        var corner = Mathf.Min(rect.width, rect.height) * .4f;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0f, GUI.color, Vector4.zero, new Vector4(corner, corner, corner, corner));
+    }
+
+    /// <summary>Marks the selected row of a list (a chain, a group of units): a gold rounded outline around its button, with a soft glow and a
+    /// faint tint inside, so it stands out among many rows. Drawn over the button after it.</summary>
+    private static void DrawSelectedRowHighlight(Rect button)
+    {
+        if (Event.current == null || Event.current.type != EventType.Repaint) return;
+        var gold = new Color(1f, .86f, .28f, 1f);
+        var radius = Mathf.Min(button.height * .42f, SC2UiScale.Pxf(12f));
+        var line = Mathf.Max(2f, SC2UiScale.Pxf(2f));
+        var glow = Mathf.Max(3f, SC2UiScale.Pxf(3f));
+        var inner = new Rect(button.x - 1f, button.y - 1f, button.width + 2f, button.height + 2f);
+        var outer = new Rect(inner.x - glow, inner.y - glow, inner.width + glow * 2f, inner.height + glow * 2f);
+
+        // GUI.DrawTexture draws a rounded rectangle when it is given radii: a border of the given width, or a filled shape when the width is zero
+        void Rounded(Rect rect, Color color, float width, float corner) =>
+            GUI.DrawTexture(rect, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0f, color,
+                new Vector4(width, width, width, width), new Vector4(corner, corner, corner, corner));
+
+        Rounded(outer, new Color(gold.r, gold.g, gold.b, .28f), glow, radius + glow);
+        Rounded(inner, new Color(gold.r, gold.g, gold.b, .09f), 0f, radius);
+        Rounded(inner, gold, line, radius);
+    }
+
     private static bool ApproximatelySameRgb(Color a, Color b) =>
         Mathf.Abs(a.r - b.r) < 0.004f && Mathf.Abs(a.g - b.g) < 0.004f && Mathf.Abs(a.b - b.b) < 0.004f;
 
