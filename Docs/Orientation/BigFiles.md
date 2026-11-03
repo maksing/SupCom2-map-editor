@@ -95,7 +95,7 @@ Regions by method clusters (approximate order):
 | **`BuildExportArtifacts`** | **about 1230** | the whole export: layers and materials, texture resolution, merging imported terrain and the background, the water plane, the safety sweep, hfield, costs, collision2, info, mapobjs, decals, Lua |
 | `DoExport` | about 130 | writes the artifacts to disk and cleans stale files |
 | `BuildSmartExportPlanInternal`, `PreviewSmartExportPlan`, `ExportCorrectSmart` | about 350 | the smart path (not used by the UI) |
-| `ComputeImportedVertexTbn`, `MergeImportedTerrain`, `CollectForceExportBasePaths`, `CopyImportedTextures` | | imported terrain merging |
+| `ComputeImportedVertexTbn`, `MergeImportedTerrain`, `CollectForceExportBasePaths`, `RelocateImportedTextures` (local function) | | imported terrain merging |
 | `ExportRnmMaskByName`, `WriteRnmMaskFiles`, `ApplyImportedRnmMasks` | | lighting masks (section `RNM DDS export`) |
 | `BuildCostsModelFromPaintedData`, `BuildWaterMask`, `BuildCollision2Model`, `BuildInfoModel`, `SnapPropsToExportedSurface`, `BuildPreviewGeometryModel` | | the derived files and the preview model |
 

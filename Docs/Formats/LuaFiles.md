@@ -19,6 +19,7 @@ Skeleton fields written for a new skirmish map: `devname`, `name` (the display n
 What the editor regenerates on every export:
 
 - the `name` field from the document's display name, also for an imported map;
+- the `map`, `save` and `script` paths, pointed at `/maps/<sanitized name>/` of the exported map (`SC2ImportedMapPaths.RewriteScenarioPaths`), so a map imported from another folder name does not keep naming the old one; `description` and `reverbPreset` are kept as imported (text and an audio key);
 - `StartPositions`, one `['ARMY_n'] = { x, y, z }` entry per army, from the **lobby start positions** (the minimap marker the user dragged) and falling back to the real marker position for an army with none; this block never changes `_save.lua`;
 - `armies`, the list of army names in the order of the `ARMY_*` markers.
 

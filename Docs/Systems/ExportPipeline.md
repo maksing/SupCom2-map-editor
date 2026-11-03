@@ -103,7 +103,7 @@ uses, if it can be pulled out, in `Scripts/Core` with its own unit test.
 
 - Nothing here was run in the game by the author of this page; correctness of a file for the game is judged by parsing it back and by comparison with vanilla maps recorded in code comments.
 - A leak scenario (`ExportPathLeakTest`) exists only in a scratch project outside the repository.
-- Texture paths of imported terrain materials are trusted as read from the source `.bdf` and swept at the end; they are not otherwise validated.
+- Texture paths of imported terrain materials that the base game does not ship (the imported map's own textures and lighting masks) are written into the exported map (`Textures/<map>/`, `maps/<map>/lighting/`) and the slots are pointed at the copies (`RelocateImportedTextures`, rules in `SC2ImportedMapPaths`); a texture that cannot be read from the loose copy, the game archives or the map's share keeps its path and adds a warning. The paths that remain are swept at the end.
 - The decals' atlas paths are produced at export; a path-only atlas without a blob is written as stored.
 
 ## 10. Related documents and review

@@ -14,7 +14,7 @@ One texture choice crosses five systems: the picker, the data (a material, a pai
 | Decals | diffuse atlas, normal atlas | content-hashed blobs in the decals document, with source tags and force-copy flags | `SC2DecalsShell` through `SC2TerrainShell.DrawTexturePicker` |
 | Water | the `WaterTexturePaths` of the exported water material (slot 6 is the depth texture) | `SC2TerrainData.WaterTexturePaths` | the Water tab of the terrain shell |
 | Brushes | a custom brush image (`brush:NAME` or a texture path) | `Custom...BrushTexturePath` | the brush panels |
-| Imported terrain | the textures named by an imported `terrain.bdf` | the imported entry | none: resolved from the archive at import |
+| Imported terrain | the textures named by an imported `terrain.bdf` | the imported entry | none: resolved from the archive at import; at export those the game does not ship are written into `Textures/<map>/` and the slots rewritten (masks to `maps/<map>/lighting/`) |
 
 **The picker widgets are static methods of the terrain shell** (`DrawTexturePicker`, `DrawTexturePickerWithPath`, `DrawTextureThumb`), and the browser itself is a static overlay (`SC2TextureBrowser`) drawn once per frame by the host. That is how the Decals and Environment shells reach it without referencing the Materials code. The browser identifies the field being edited by a **picker key** string (for materials it includes the data object's instance id); a field calls `Open(key, ...)` and, on later frames, `Consume(key)` to take the pick.
 While the browser is open the host masks the panel's events (`BeginPanelEventMask` / `EndPanelEventMask`) so that clicks on a slot behind the overlay do not leak through ([Input and overlays](InputAndOverlays.md)).
