@@ -342,7 +342,7 @@ namespace SC2.MapEditor.Document
             if (!startUsed && stage.Nodes.Count > 0)
                 issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, 0, "Nothing is connected to the start of the stage, so none of its nodes will run."));
             foreach (var node in stage.Nodes)
-                if (startUsed && !reachable.Contains(node.Id))
+                if (startUsed && !reachable.Contains(node.Id) && !(SC2MissionNodeCatalog.Find(node.Type)?.IsComment ?? false))
                     issues.Add(Issue(SC2MissionSeverity.Warning, stage.Id, node.Id, "This node is not connected to the start of the stage and will never run."));
 
             CheckLoops(stage, issues);

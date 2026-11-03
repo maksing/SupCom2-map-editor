@@ -58,6 +58,7 @@ public static class SC2HotkeyActions
         new SC2HotkeyAction("Global.FocusCamera", "Focus camera on selection/map", SC2HotkeyCategory.Global, Key(KeyCode.F)),
         new SC2HotkeyAction("Global.ResetView", "Reset camera view", SC2HotkeyCategory.Global, Key(KeyCode.Home)),
         new SC2HotkeyAction("Global.CycleMainTab", "Cycle main tab", SC2HotkeyCategory.Global, Key(KeyCode.Tab)),
+        new SC2HotkeyAction("Global.MissionEditor", "Open or close the mission editor", SC2HotkeyCategory.Global, Key(KeyCode.F3)),
 
         new SC2HotkeyAction("Camera.Orbit", "Orbit camera (hold the button and drag)", SC2HotkeyCategory.Camera, Key(KeyCode.Mouse2), Key(KeyCode.Mouse2, alt: true)),
         new SC2HotkeyAction("Camera.Pan", "Pan camera (hold the button and drag)", SC2HotkeyCategory.Camera, Key(KeyCode.Mouse2, shift: true)),

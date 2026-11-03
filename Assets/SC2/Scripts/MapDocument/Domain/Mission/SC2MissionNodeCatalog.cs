@@ -80,6 +80,9 @@ namespace SC2.MapEditor.Document
         /// later, from the game. A node that does not defer runs its outputs before it returns.</summary>
         public bool Defers;
 
+        /// <summary>A frame with a label drawn behind other nodes: it has no inputs or outputs and writes no Lua.</summary>
+        public bool IsComment;
+
         /// <summary>The execution outputs, in the order they are shown. Empty for a node that ends the chain.</summary>
         public string[] Ports;
 
@@ -357,7 +360,7 @@ namespace SC2.MapEditor.Document
         /// <summary>The order the library lists the categories in; a category that is not here comes last.</summary>
         private static readonly string[] CategoryOrder =
         {
-            "Events", "Objectives", "Units", "Actions", "World", "Economy", "Cutscene (NIS)", "Cutscene (simple)", "Bases", "Flow", "Loops", "Coop", "Raw Lua",
+            "Events", "Objectives", "Units", "Actions", "World", "Economy", "Cutscene (NIS)", "Cutscene (simple)", "Bases", "Flow", "Loops", "Coop", "Layout", "Raw Lua",
         };
 
         public static IEnumerable<string> Categories()

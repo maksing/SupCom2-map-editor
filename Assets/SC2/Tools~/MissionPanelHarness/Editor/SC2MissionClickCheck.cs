@@ -64,6 +64,7 @@ public static class SC2MissionClickCheck
     }
 
     static readonly BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+    static readonly BindingFlags StaticFlags = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
     static SC2MissionPanel panel;
     static SC2MapSession session;
     static readonly HashSet<string> LibraryTitles = new HashSet<string>(SC2MissionNodeCatalog.All.Select(d => d.Title));
@@ -107,8 +108,18 @@ public static class SC2MissionClickCheck
         return doc;
     }
 
+    // The panel sizes are remembered in the editor's preferences; a run starts from the defaults and leaves nothing behind.
+    static void ResetLayout()
+    {
+        foreach (var key in new[] { "SC2Mission.libraryWidth", "SC2Mission.propsWidth", "SC2Mission.bottomHeight" }) PlayerPrefs.DeleteKey(key);
+        typeof(SC2MissionPanel).GetField("_libraryW", StaticFlags).SetValue(null, 240f);
+        typeof(SC2MissionPanel).GetField("_propsW", StaticFlags).SetValue(null, 310f);
+        typeof(SC2MissionPanel).GetField("_bottomH", StaticFlags).SetValue(null, 170f);
+    }
+
     static void NewPanel()
     {
+        ResetLayout();
         session = new SC2MapSession(new SC2MapDocument());
         scenario = new SC2ScenarioShell(shell, session);
         scenario.ApplyMission("Seed", SeedMission());
@@ -158,6 +169,15 @@ public static class SC2MissionClickCheck
         Add("intro", () => { Set("_tab", "intro"); });
         Add("stage1", () => { Set("_tab", "stage1"); });
         Add("waves", () => { Set("_tab", "waves"); });
+        Add("all_overview", () => { Set("_tab", "all"); });
+        Add("waves_multi", () => { Set("_tab", "waves"); PanelMethod("SetSelection").Invoke(panel, new object[] { new List<int> { 1, 2, 3 }, 2 }); });
+        Add("waves_help", () => { Set("_tab", "waves"); Set("_helpOpen", true); });
+        Add("stage1_frame", () =>
+        {
+            Set("_tab", "stage1");
+            var frame = Get<SC2MissionDocument>("_work").FindStage("stage1").AddNode("comment", -30f, -30f);
+            frame.SetParam("text", "Setup"); frame.SetParam("width", "560"); frame.SetParam("height", "300"); frame.SetParam("color", "blue");
+        });
         Add("quick_add", () => { Set("_tab", "waves"); PanelMethod("OpenQuickAdd").Invoke(panel, new object[] { new Vector2(330f, 260f), new Vector2(330f, 260f), 0, "out" }); });
         Add("waves_loop", () => { Set("_tab", "waves"); Set("_selNode", 1); });
         Add("stage1_edge", () => { Set("_tab", "stage1"); Set("_selEdge", 0); });
@@ -260,6 +280,147 @@ public static class SC2MissionClickCheck
         return start * ZoomNow(stageId);
     }
 
+    static void MouseScreen(EventType type, Vector2 screen, EventModifiers mods = EventModifiers.None) =>
+        win.SendEvent(new Event { type = type, button = 0, mousePosition = ToEvent(screen), clickCount = 1, modifiers = mods });
+
+    static void MouseAtMod(EventType type, Vector2 canvasLocal, EventModifiers mods) => MouseScreen(type, _origin + canvasLocal, mods);
+
+    static void KeyMod(KeyCode code, EventModifiers mods)
+    {
+        win.SendEvent(new Event { type = EventType.KeyDown, keyCode = code, modifiers = mods });
+        win.SendEvent(new Event { type = EventType.KeyUp, keyCode = code, modifiers = mods });
+        win.SendEvent(new Event { type = EventType.Repaint });
+    }
+
+    static Vector2 NodeCentre(string stageId, int nodeId)
+    {
+        var boxes = (System.Collections.IDictionary)PanelMethod("LayoutAll").Invoke(panel, new object[] { DocStage(stageId), PanNow(stageId) });
+        var box = boxes[nodeId];
+        return ((Rect)box.GetType().GetField("Rect").GetValue(box)).center * ZoomNow(stageId);
+    }
+
+    static int MultiCount() => Get<HashSet<int>>("_multi").Count;
+
+    // editing flows: box select, Shift click, group move, copy and paste, delete, undo, shortcut list, splitters, library drag
+    static void RunEditFlows()
+    {
+        var f = SC2UiScale.Pxf(1f);
+        NewPanel(); Set("_tab", "waves"); Pump(); Pump(); _origin = CanvasOriginScreen();
+        var size = Get<Vector2>("_canvasSize");
+        var stage = DocStage("waves");
+        var total = stage.Nodes.Count;
+
+        // a box over the middle of the canvas selects the nodes it touches
+        var inset = 70f * f;
+        var a = new Vector2(inset, inset);
+        var b = new Vector2(size.x - inset, size.y - inset - 30f * f);
+        MouseAt(EventType.MouseDown, a);
+        MouseAt(EventType.MouseDrag, (a + b) * 0.5f);
+        MouseAt(EventType.MouseDrag, b);
+        win.SendEvent(new Event { type = EventType.Repaint });
+        FlowCheck("a box drag shows the rubber band (drag mode " + Get<object>("_drag") + ")", Get<object>("_drag").ToString() == "Box");
+        MouseAt(EventType.MouseUp, b);
+        win.SendEvent(new Event { type = EventType.Repaint });
+        FlowCheck("a box selects the nodes inside it (" + MultiCount() + " of " + total + ")", MultiCount() >= 2);
+
+        // Shift click adds a node to the selection and removes it again
+        NewPanel(); Set("_tab", "waves"); Pump(); Pump(); _origin = CanvasOriginScreen();
+        var first = NodeCentre("waves", 1) + new Vector2(0f, -4f * f);
+        var second = NodeCentre("waves", 2) + new Vector2(0f, -4f * f);
+        MouseAt(EventType.MouseDown, first); MouseAt(EventType.MouseUp, first);
+        FlowCheck("a click selects one node (#" + Get<int>("_selNode") + ", group " + MultiCount() + ")", Get<int>("_selNode") == 1 && MultiCount() <= 1);
+        MouseAtMod(EventType.MouseDown, second, EventModifiers.Shift); MouseAtMod(EventType.MouseUp, second, EventModifiers.Shift);
+        FlowCheck("Shift click adds a second node (" + MultiCount() + ")", MultiCount() == 2);
+        MouseAtMod(EventType.MouseDown, second, EventModifiers.Shift); MouseAtMod(EventType.MouseUp, second, EventModifiers.Shift);
+        FlowCheck("Shift click on a selected node removes it (" + MultiCount() + ", primary #" + Get<int>("_selNode") + ")", MultiCount() <= 1 && Get<int>("_selNode") == 1);
+        MouseAtMod(EventType.MouseDown, second, EventModifiers.Control); MouseAtMod(EventType.MouseUp, second, EventModifiers.Control);
+        FlowCheck("Ctrl click adds too (" + MultiCount() + ")", MultiCount() == 2);
+
+        // a selected group moves together
+        stage = DocStage("waves");
+        var n1 = stage.FindNode(1); var n2 = stage.FindNode(2);
+        var x1 = n1.X; var x2 = n2.X; var y1 = n1.Y; var y2 = n2.Y;
+        typeof(SC2MissionPanel).GetField("_snap", StaticFlags).SetValue(null, false);
+        var grab = NodeCentre("waves", 1) + new Vector2(0f, -4f * f);
+        MouseAt(EventType.MouseDown, grab);
+        MouseAt(EventType.MouseDrag, grab + new Vector2(30f * f, 20f * f));
+        MouseAt(EventType.MouseDrag, grab + new Vector2(60f * f, 40f * f));
+        MouseAt(EventType.MouseUp, grab + new Vector2(60f * f, 40f * f));
+        win.SendEvent(new Event { type = EventType.Repaint });
+        stage = DocStage("waves"); n1 = stage.FindNode(1); n2 = stage.FindNode(2);
+        var d1 = new Vector2(n1.X - x1, n1.Y - y1); var d2 = new Vector2(n2.X - x2, n2.Y - y2);
+        FlowCheck("dragging one node of a selection moves all of them by the same amount (" + d1 + " / " + d2 + ")", d1.sqrMagnitude > 1f && (d1 - d2).sqrMagnitude < 0.01f);
+        typeof(SC2MissionPanel).GetField("_snap", StaticFlags).SetValue(null, true);
+        FlowCheck("and the move is one undo step (can undo=" + Get<int>("_undoable") + ")", Get<int>("_undoable") == 1);
+
+        // copy, paste and duplicate through the keyboard
+        NewPanel(); Set("_tab", "waves"); Pump(); Pump(); _origin = CanvasOriginScreen();
+        stage = DocStage("waves"); total = stage.Nodes.Count; var wires = stage.Edges.Count;
+        KeyMod(KeyCode.A, EventModifiers.Control);
+        FlowCheck("Ctrl+A selects every node (" + MultiCount() + " of " + total + ")", MultiCount() == total);
+        KeyMod(KeyCode.C, EventModifiers.Control);
+        KeyMod(KeyCode.V, EventModifiers.Control);
+        stage = DocStage("waves");
+        FlowCheck("Ctrl+C and Ctrl+V paste a copy of every node (" + total + " -> " + stage.Nodes.Count + ")", stage.Nodes.Count == total * 2);
+        FlowCheck("the pasted nodes keep the wires between them (" + wires + " -> " + stage.Edges.Count + ")", stage.Edges.Count > wires);
+        FlowCheck("the pasted nodes are the selection (" + MultiCount() + ")", MultiCount() == total);
+        KeyMod(KeyCode.D, EventModifiers.Control);
+        FlowCheck("Ctrl+D duplicates the selection (" + DocStage("waves").Nodes.Count + ")", DocStage("waves").Nodes.Count == total * 3);
+        KeyMod(KeyCode.Delete, EventModifiers.None);
+        FlowCheck("Delete removes every selected node (" + DocStage("waves").Nodes.Count + ")", DocStage("waves").Nodes.Count == total * 2);
+        KeyMod(KeyCode.Z, EventModifiers.Control);
+        FlowCheck("Ctrl+Z brings them back (" + DocStage("waves").Nodes.Count + ")", DocStage("waves").Nodes.Count == total * 3);
+
+        // Escape steps back: the shortcut list, then the selection, then the window
+        KeyMod(KeyCode.A, EventModifiers.Control);
+        KeyMod(KeyCode.F1, EventModifiers.None);
+        FlowCheck("F1 opens the list of shortcuts", Get<bool>("_helpOpen"));
+        KeyMod(KeyCode.Escape, EventModifiers.None);
+        FlowCheck("Escape closes the list first", !Get<bool>("_helpOpen") && panel.IsOpen && MultiCount() > 0);
+        KeyMod(KeyCode.Escape, EventModifiers.None);
+        FlowCheck("the next Escape clears the selection (" + MultiCount() + ", node " + Get<int>("_selNode") + ")", panel.IsOpen && MultiCount() == 0 && Get<int>("_selNode") < 0);
+        KeyMod(KeyCode.Escape, EventModifiers.None);
+        FlowCheck("and the third closes the window", !panel.IsOpen);
+
+        // the border between the library and the canvas moves
+        NewPanel(); Set("_tab", "waves"); Pump(); Pump(); _origin = CanvasOriginScreen();
+        var libBefore = (float)typeof(SC2MissionPanel).GetField("_libraryW", StaticFlags).GetValue(null);
+        var strip = _origin + new Vector2(-4f * f, 200f * f);
+        MouseScreen(EventType.MouseDown, strip);
+        MouseScreen(EventType.MouseDrag, strip + new Vector2(40f * f, 0f));
+        MouseScreen(EventType.MouseDrag, strip + new Vector2(80f * f, 0f));
+        MouseScreen(EventType.MouseUp, strip + new Vector2(80f * f, 0f));
+        win.SendEvent(new Event { type = EventType.Repaint });
+        var libAfter = (float)typeof(SC2MissionPanel).GetField("_libraryW", StaticFlags).GetValue(null);
+        FlowCheck("dragging the border widens the library (" + libBefore + " -> " + libAfter + ")", libAfter > libBefore + 20f);
+        ResetLayout();
+
+        // a node button dragged from the library onto the canvas adds the node where it is dropped
+        NewPanel(); Set("_tab", "waves"); Pump(); Pump(); _origin = CanvasOriginScreen();
+        stage = DocStage("waves"); total = stage.Nodes.Count;
+        var row = Find("Button", "Victory");
+        if (row == null) FlowCheck("the library lists Victory", false);
+        else
+        {
+            var from = row.Value.ScreenRect.center;
+            var drop = _origin + new Vector2(size.x * 0.5f, size.y * 0.65f);
+            MouseScreen(EventType.MouseDown, from);
+            Log("   library press: pressed=" + Get<string>("_libPressed") + " at " + from);
+            MouseScreen(EventType.MouseDrag, from + new Vector2(40f * f, 0f));
+            MouseScreen(EventType.MouseDrag, drop);
+            Log("   library drag: dragged=" + Get<bool>("_libDragged") + " screen=" + Get<Vector2>("_libDragScreen") + " canvasScreen=" + Get<Rect>("_canvasScreen") + " drop=" + drop);
+            win.SendEvent(new Event { type = EventType.Repaint });
+            MouseScreen(EventType.MouseUp, drop);
+            win.SendEvent(new Event { type = EventType.Repaint });
+            stage = DocStage("waves");
+            var made = stage.Nodes.Count == total + 1 ? stage.Nodes[stage.Nodes.Count - 1] : null;
+            FlowCheck("dropping a library button on the canvas adds that node (" + total + " -> " + stage.Nodes.Count + ")", made != null && made.Type == "victory");
+        }
+
+        var recent = (System.Collections.IList)typeof(SC2MissionPanel).GetField("_recent", StaticFlags).GetValue(null);
+        FlowCheck("the added node is the first of the recent nodes (" + (recent.Count > 0 ? recent[0] : "none") + ")", recent.Count > 0 && (string)recent[0] == "victory");
+    }
+
     static void RunUxFlows()
     {
         var f = SC2UiScale.Pxf(1f);
@@ -338,6 +499,9 @@ public static class SC2MissionClickCheck
         var xAfter = DocStage("waves").FindNode(1).X;
         FlowCheck("a node held at the right edge scrolls the view (pan x " + panBefore.x + " -> " + panAfter.x + ")", panAfter.x < panBefore.x - 20f);
         FlowCheck("and the node goes along (x " + xBefore + " -> " + xAfter + ")", xAfter > xBefore + 20f);
+
+        RunEditFlows();
+        ResetLayout();
     }
 
     static void RunFlows()
@@ -538,6 +702,7 @@ public static class SC2MissionClickCheck
         Log("TOTAL clicks=" + totalClicks + " unchanged=" + summary.Count + " imguiErrors=" + errors);
         foreach (var s in summary) Log("UNCHANGED " + s);
         foreach (var t in errorTexts) Log("ERROR " + t);
+        ResetLayout();
         System.IO.File.WriteAllText(OutDir + "/click_report.txt", report.ToString());
         EditorApplication.Exit(errors > 0 ? 1 : 0);
     }

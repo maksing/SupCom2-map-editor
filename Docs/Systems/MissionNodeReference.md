@@ -1,6 +1,6 @@
 # Mission node reference
 
-Status: generated from `SC2MissionNodeCatalog.All` (commit `4fa4ae8`, 177 nodes); not yet reviewed by a second reader. Companion of [MissionEditor](MissionEditor.md); for use see the [guide](../Guides/MissionEditorGuide.md).
+Status: generated from `SC2MissionNodeCatalog.All` (178 nodes); not yet reviewed by a second reader. Companion of [MissionEditor](MissionEditor.md); for use see the [guide](../Guides/MissionEditorGuide.md).
 **When a node is added, renamed or changed, update this page**: `MissionNodeReferenceTests` fails when a node type is missing from it.
 
 How to read the tables:
@@ -248,6 +248,12 @@ How to read the tables:
 | Node | Type | Inputs | Outputs | Parameters |
 |---|---|---|---|---|
 | Branch: solo or co-op | `coop_branch` | `in` | `solo`, `coop` | - |
+
+## Layout (1)
+
+| Node | Type | Inputs | Outputs | Parameters |
+|---|---|---|---|---|
+| Comment frame | `comment` | none | none (ends the chain) | Label [text] = Group; Width [number] = 360; Height [number] = 220; Colour [choice] {gray/blue/green/orange/red/purple} = gray |
 
 ## Raw Lua (1)
 

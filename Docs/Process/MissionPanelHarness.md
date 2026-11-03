@@ -53,7 +53,7 @@ project to the plain code** (`Sync-MissionHarness.ps1 -Plain`: no harness file l
 
 | Mode | What it runs | Takes | Result |
 |---|---|---|---|
-| `Ux` | the canvas flows only (`MISSION_UX_ONLY`) | about 2 minutes | ten `[Click] FLOW OK/FAIL` lines, `TOTAL ... imguiErrors=0` |
+| `Ux` | the canvas flows only (`MISSION_UX_ONLY`) | about 2 minutes | 31 `[Click] FLOW OK/FAIL` lines, `TOTAL ... imguiErrors=0` |
 | `Shots` | a picture of every scenario, no clicks (`MISSION_SHOTS_ONLY`); `-ShotName x` only that scenario | about 2 minutes for all 344 pictures | the pictures in `-Out`, `pictures: 344 in <dir>` |
 | `Library` | clicks every node button of the library at every scroll position (`MISSION_ONLY_PREFIX=library_scroll`) | not timed through the script; the earlier run took about 15 minutes | `click_report.txt` |
 | `Clicks` | everything: pictures, a click on every control of every scenario, then the flows | about 40 minutes (10 000+ clicks) | `click_report.txt`, the pictures, `[Click] FLOW`, `TOTAL`, `ERROR` |
@@ -107,6 +107,7 @@ The driver builds one mission (`SeedMission`): the sample **Hold the line**, a s
 | Scenario | Shows |
 |---|---|
 | `intro`, `stage1`, `waves`, `waves_loop`, `quick_add`, `stage1_edge` | a stage, a stage with a selected loop node, the node search open, a selected wire |
+| `all_overview`, `waves_multi`, `waves_help`, `stage1_frame` | the stage with a node of every type (issue marks on nodes), three selected nodes and their group properties, the list of shortcuts, a comment frame |
 | `stage2_validation`, `stage2_log`, `stage2_bottomclosed`, `validation_scroll`, `stage_props_confirm` | the bottom tabs, the closed bottom area, the stage delete confirmation |
 | `bases`, `variables`, `settings`, `bases_scroll_<y>`, `settings_scroll` | the forms, scrolled |
 | `library_scroll_<y>` | the library at scroll position y (250 ... 10000) |
@@ -117,9 +118,13 @@ The driver builds one mission (`SeedMission`): the sample **Hold the line**, a s
 where they are on screen.
 
 **Flows** (`RunFlows`, `RunUxFlows`): scripted interactions with explicit expectations. `RunFlows`: library button adds a node, Undo, Redo, the header switch, `+ Stage`, a stage tab, `Test from this stage`, `Delete stage` (two clicks), `Home (fit all)`, zoom `+` and `-`, a validation line that jumps to its node, typed text reaching the document
-when the field loses focus. `RunUxFlows`: a wire let go over empty canvas opens the search, typing fills it, Return adds the node wired from Start, a double click opens the search, Escape closes only the search, Home returns the nodes into view, F centres the selected node, a node held at the edge scrolls the view and goes along.
+when the field loses focus. `RunUxFlows`: a wire let go over empty canvas opens the search, typing fills it, Return adds the node wired from Start, a double click opens the search, Escape closes only the search, Home returns the nodes into view, F centres the selected node, a node held at the edge scrolls the view and goes along. `RunEditFlows` (called at the end of `RunUxFlows`): a box drag selects nodes; a click, Shift click and Ctrl click select, add and remove; dragging one node of a selection moves all of them by the same amount in one undo step; Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+D, Delete and Ctrl+Z work on the whole selection and keep the wires between copied nodes; F1 opens the list of shortcuts and Escape steps back one level at a time (list, selection, window); dragging the border between the library and the canvas changes the library width; dragging a library button onto the canvas adds that node and puts it first in the recent list.
 
 ### 5.5 Traps found while writing it
+
+- **A synthesized event has no `delta`.** `Event.delta` is zero for an event made by hand and sent with `SendEvent`, so a control that moves by `e.delta` (the panel borders) does nothing in the harness; compare pointer positions instead, which is also what the panel does now.
+- **A held button uses the drag and release events.** `GUI.Button` consumes `MouseDrag` and `MouseUp` while it is the hot control, so code drawn after it sees `Used`; the library reads the event type before it draws its rows. This was found by a flow that dragged a library button onto the canvas.
+- **The panel sizes are saved in the editor's `PlayerPrefs`.** A run writes them, and a later run (or the next flow) then starts with a different layout; `ResetLayout()` deletes the keys and restores the defaults at the start of every `NewPanel()` and at the end of a run, so the harness leaves nothing in the preferences of the project.
 
 - **`Pump()` ends a drag.** The helper that redraws the panel sends a right-button click at the window's corner first; a mouse-up while a drag is in progress ends it. Compute positions once (`_origin = CanvasOriginScreen()` after the panel is set up), then send the down, drag and up events without a `Pump` between them. A flow that dragged "successfully" because the `Pump` had
   dropped the wire at the corner passed for the wrong reason until this was noticed.
@@ -142,7 +147,7 @@ A clean picture proves the panel drew what the harness asked for at 1500 x 900; 
 ## 7. Changing it
 
 - **A new picture:** add `Add("<name>", () => { Set("_tab", "..."); ... });` in `Scenarios()` of `SC2MissionClickCheck.cs`; for a private method use `PanelMethod("<name>").Invoke(panel, args)` (the search box scenario does).
-- **A new flow:** add a `FlowCheck("<what must hold>", <condition>)` in `RunFlows` or `RunUxFlows`; build the situation with `NewPanel(); Set("_tab", ...); Pump(); Pump();`, send events with `MouseAt`, `Key`, `TypeText`, read the result with `Get<T>("_field")` or `DocStage("<id>")`.
+- **A new flow:** add a `FlowCheck("<what must hold>", <condition>)` in `RunFlows` or `RunUxFlows`; build the situation with `NewPanel(); Set("_tab", ...); Pump(); Pump();`, send events with `MouseAt`, `MouseAtMod`/`KeyMod` (with Shift, Ctrl), `MouseScreen` (a point outside the canvas, such as a panel border or a library row), `Key`, `TypeText`, read the result with `Get<T>("_field")` or `DocStage("<id>")`.
 - **The panel changed so that the patch no longer fits:** `Sync-MissionHarness.ps1` throws when `SC2RuntimePopups.cs` changes shape; a new GUI call type needs a stand-in in `MissionProbe.cs` and a rewrite line in the script.
 - **Outputs** go to `MISSION_OUT`; do not write elsewhere. Do not put anything of the harness under `Assets/SC2` (only `Tools~`).
 - Give the report of a run the **commit and the uncommitted files** the project's copy held (the sync copies files other work has changed but not committed).

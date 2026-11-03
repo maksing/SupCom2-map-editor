@@ -40,10 +40,9 @@ public sealed partial class SC2MissionPanel
     private int _selNode = -1;
     private int _selEdge = -1;
 
-    private enum DragMode { None, Pan, Node, Connect }
+    private enum DragMode { None, Pan, Node, Connect, Box, Minimap, ResizeFrame }
     private DragMode _drag;
     private int _dragNode;
-    private Vector2 _dragGrab;
     private bool _dragMoved;
     private int _connectNode;
     private string _connectPort = "";
@@ -93,13 +92,15 @@ public sealed partial class SC2MissionPanel
         _workVersion++;
         _undoable = _redoable = 0;
         _mapInfo = SC2MissionMapInfoBuilder.From(data);
-        _selNode = _selEdge = -1;
+        SelectOnly(-1);
+        _helpOpen = false;
+        LoadLayout();
         _drag = DragMode.None;
         _tab = _work.Stages.Count > 0 ? _work.Stages[0].Id : TabSettings;
         SC2MissionLog.Add("Mission editor opened.");
     }
 
-    private void Close()
+    public void Close()
     {
         Commit();
         IsOpen = false;
@@ -123,7 +124,7 @@ public sealed partial class SC2MissionPanel
         if (_tab == TabBases || _tab == TabVariables || _tab == TabSettings) return;
         if (_work.FindStage(_tab) != null) return;
         _tab = _work.Stages.Count > 0 ? _work.Stages[0].Id : TabSettings;
-        _selNode = _selEdge = -1;
+        SelectOnly(-1);
     }
 
     /// <summary>Marks the working copy as changed; the edit is written to the document by Commit.</summary>
@@ -209,9 +210,8 @@ public sealed partial class SC2MissionPanel
         SyncFromDocument(session.Document);
         RefreshCompile();
 
-        var panelWidth = Mathf.Min(1560f, screenWidth - 30f);
-        var panelHeight = Mathf.Min(940f, screenHeight - 40f);
-        var rect = new Rect((screenWidth - panelWidth) * 0.5f, (screenHeight - panelHeight) * 0.5f, panelWidth, panelHeight);
+        // the editor takes the whole window: the node canvas is the main work area
+        var rect = new Rect(0f, 0f, screenWidth, screenHeight);
 
         var prevDepth = GUI.depth;
         GUI.depth = -2600;
@@ -224,7 +224,7 @@ public sealed partial class SC2MissionPanel
         var pad = S(10f);
         var headerHeight = S(34f);
         var tabsHeight = S(32f);
-        var bottomHeight = _bottomOpen ? S(230f) : S(30f);
+        var bottomHeight = _bottomOpen ? S(_bottomH) : S(30f);
 
         DrawHeader(new Rect(rect.x + pad, rect.y + S(6f), rect.width - pad * 2f, headerHeight - S(6f)));
         DrawTabs(new Rect(rect.x + pad, rect.y + headerHeight, rect.width - pad * 2f, tabsHeight - S(4f)));
@@ -238,7 +238,9 @@ public sealed partial class SC2MissionPanel
         else if (_tab == TabSettings) DrawSettingsForm(body);
         else DrawStageBody(body);
 
-        DrawBottom(new Rect(rect.x + pad, rect.yMax - bottomHeight - pad * 0.5f, rect.width - pad * 2f, bottomHeight));
+        var bottom = new Rect(rect.x + pad, rect.yMax - bottomHeight - pad * 0.5f, rect.width - pad * 2f, bottomHeight);
+        DrawBottom(bottom);
+        if (_bottomOpen) Splitter(3, new Rect(bottom.x, bottom.y - S(6f), bottom.width, S(6f)), false, ref _bottomH, 110f, 600f, -1f);
 
         HandleKeys();
         TrackFocus();
@@ -257,13 +259,27 @@ public sealed partial class SC2MissionPanel
         if (e.type != EventType.KeyDown) return;
         // the node search handles its own keys (Escape closes only the search)
         if (_quickOpen) return;
-        if (e.keyCode == KeyCode.Escape && !TextFieldFocused()) { Close(); e.Use(); return; }
+        if (e.keyCode == KeyCode.F1) { _helpOpen = !_helpOpen; e.Use(); return; }
+        if (e.keyCode == KeyCode.Escape && !TextFieldFocused())
+        {
+            // Escape steps back one level: the list of shortcuts, then the selection, then the window
+            if (_helpOpen) _helpOpen = false;
+            else if (_selNode >= 0 || _selEdge >= 0 || HasMulti) SelectOnly(-1);
+            else Close();
+            e.Use();
+            return;
+        }
         if (TextFieldFocused()) return;
+        var stage = CurrentStage();
         if (e.keyCode == KeyCode.Home) { ShowAll(); e.Use(); return; }
         if (e.keyCode == KeyCode.F && !e.control && !e.alt) { FrameSelection(); e.Use(); return; }
         if (e.control && e.keyCode == KeyCode.Z && !e.shift) { Undo(); e.Use(); }
         else if (e.control && (e.keyCode == KeyCode.Y || (e.keyCode == KeyCode.Z && e.shift))) { Redo(); e.Use(); }
-        else if ((e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace) && CurrentStage() != null) { DeleteSelection(); e.Use(); }
+        else if (stage != null && e.control && e.keyCode == KeyCode.A) { SelectAllNodes(stage); e.Use(); }
+        else if (stage != null && e.control && e.keyCode == KeyCode.C) { CopySelection(stage); e.Use(); }
+        else if (stage != null && e.control && e.keyCode == KeyCode.V) { PasteClipboard(stage); e.Use(); }
+        else if (stage != null && e.control && e.keyCode == KeyCode.D) { DuplicateSelection(stage); e.Use(); }
+        else if ((e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace) && stage != null) { DeleteSelection(); e.Use(); }
     }
 
     private static bool TextFieldFocused() => GUI.GetNameOfFocusedControl().StartsWith("m_", StringComparison.Ordinal);
@@ -345,7 +361,7 @@ public sealed partial class SC2MissionPanel
     {
         Commit();
         _tab = tab;
-        _selNode = _selEdge = -1;
+        SelectOnly(-1);
         _drag = DragMode.None;
     }
 

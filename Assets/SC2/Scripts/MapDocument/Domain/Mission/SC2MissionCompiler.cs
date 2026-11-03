@@ -498,7 +498,7 @@ namespace SC2.MapEditor.Document
             foreach (var node in stage.Nodes)
             {
                 var def = SC2MissionNodeCatalog.Find(node.Type);
-                if (def == null) continue;
+                if (def == null || def.IsComment) continue;
                 sb.Append('\n');
                 AppendNode(sb, doc, stage, node, def);
             }

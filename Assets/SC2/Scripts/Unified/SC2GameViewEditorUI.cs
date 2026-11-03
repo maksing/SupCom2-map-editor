@@ -4307,6 +4307,13 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         _missionPanel.Open();
     }
 
+    /// <summary>The mission editor hotkey: closes the editor when it is open (its edits are already in the document), otherwise opens it.</summary>
+    private void ToggleMissionPanel()
+    {
+        if (_missionPanel != null && _missionPanel.IsOpen) _missionPanel.Close();
+        else OpenMissionPanel();
+    }
+
     private void OpenInfoBdfEditorPanel()
     {
         EnsureInfoBdfEditorPanel();
@@ -7697,6 +7704,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var e = Event.current;
         if (e == null || e.type != EventType.KeyDown)
             return;
+        if (SC2Hotkeys.Matches("Global.MissionEditor", e)) { ToggleMissionPanel(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.Undo", e)) { UndoTerrainEdit(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.Redo", e)) { RedoTerrainEdit(); e.Use(); return; }
         if (SC2Hotkeys.Matches("Global.Save", e)) { SaveActiveTerrain(); e.Use(); return; }

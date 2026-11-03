@@ -596,6 +596,17 @@ namespace SC2.MapEditor.Document
                 },
             },
 
+            // ================================================================ layout
+            new SC2MissionNodeDef
+            {
+                Type = "comment", Title = "Comment frame", Category = "Layout", IsComment = true, Inputs = new string[0], Ports = new string[0],
+                Params = new[]
+                {
+                    Text("text", "Label", "Group"), Num("width", "Width", "360"), Num("height", "Height", "220"),
+                    Pick("color", "Colour", "gray", new[] { "gray", "blue", "green", "orange", "red", "purple" }),
+                },
+            },
+
             // ================================================================ loops
             new SC2MissionNodeDef
             {

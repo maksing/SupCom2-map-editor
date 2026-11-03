@@ -11,17 +11,27 @@ It is a **campaign-style** script: it sets up the armies like the game's campaig
 
 ## 2. Opening it
 
-Scenario tab, sub-tab **Mission**, button **Open Mission Editor**. Switch on **Use graph for _script.lua** (also a switch in the panel header); with it off, the graph is only a draft and the export writes the plain script. The panel can be closed with `X` or Escape; everything is saved with the map.
+Press **F3** (the hotkey can be changed in Edit Hotkeys, *Open or close the mission editor*), or use the Scenario tab, sub-tab **Mission**, button **Open Mission Editor**. The editor fills the whole window, so the node canvas has all the room there is; F3 again closes it. Switch on **Use graph for _script.lua** (also a switch in the panel header); with it off, the graph is only a draft and the export writes the plain script. The panel can be closed with F3, with `X` or with Escape (Escape first closes the list of shortcuts and clears the selection, and closes the panel when neither is open); everything is saved with the map.
 
 ## 3. The panel
 
 - **Stage tabs** (top): a mission is a series of stages (Intro, Stage 1, Stage 2, Outro...). A stage is its own graph. A stage starts when an `Advance to stage` node points at it; the first stage starts with the mission. `+ Stage`, `+ Intro`, `+ Outro` add one; **Bases**, **Variables** and **Settings** are on the right.
-- **Library** (left): every node, in categories, with a search box. Click a node to add it to the canvas.
-- **Canvas** (middle): drag empty space to pan, wheel or `+`/`-` to zoom. **Home** (or the **Home (fit all)** button) shows every node, which brings you back when you have wandered off; **F** centres the selected node. Drag a node by its header; when you hold it (or a wire) near the edge of the canvas the view scrolls along. The green **Start** block is where the stage begins.
+- **Library** (left): every node, in categories, with a search box. Click a node to add it to the canvas, or **drag it onto the canvas** to put it where you let go. Hold the pointer over a node for a one-sentence description. The nodes you added last are listed first under **Recent**; a click on a category title folds it.
+- **Canvas** (middle): drag empty space to pan, wheel or `+`/`-` to zoom. **Home** (or the **Home (fit all)** button) shows every node, which brings you back when you have wandered off; **F** centres the selected node. Drag a node by its header; when you hold it (or a wire) near the edge of the canvas the view scrolls along. The green **Start** block is where the stage begins. A node with a problem has a red (error) or amber (warning) dot in its title and border; the wires of the selected or hovered node are drawn brighter. The small **map** in the lower-left corner shows the whole graph: click or drag in it to move the view (the **Map** button hides it). The line along the bottom of the canvas tells what is selected and what the keys do.
 - **Adding a node from the canvas**: drag a wire from an output port and **let go over empty space** - a search box opens; type part of a node's name, use Up/Down, press Return (or click) and the node appears there, already connected. A **double click** on empty canvas opens the same search without a wire. Escape cancels.
-- **Properties** (right): the selected node's parameters; Duplicate and Delete.
+- **Properties** (right): the selected node's parameters and a short description of what it does; Duplicate and Delete. With several nodes selected it offers the group actions instead (section 3.1).
+- The borders between the library, the canvas, the properties and the bottom panel can be **dragged**; the sizes are remembered.
 - **Bottom**: **Generated Lua** (what will be written; `Copy Lua`), **Validation** (problems; a click on a line jumps to the node), **Mission Log** (what you did, compiled and exported).
-- Undo and Redo in the header, or Ctrl+Z and Ctrl+Y. Delete removes the selected node or wire.
+- Undo and Redo in the header, or Ctrl+Z and Ctrl+Y. Delete removes the selected nodes or the selected wire.
+
+### 3.1 Several nodes at once
+
+- **Select**: drag a box on empty canvas (it selects every node it touches); **Shift** or **Ctrl** click adds or removes one node; **Ctrl+A** selects all. Click empty canvas to clear.
+- **Move**: drag any selected node and all of them move together; one Undo takes the move back. With **Snap** on (the button in the corner) nodes land on a 20-unit grid.
+- **Copy and paste**: **Ctrl+C**, **Ctrl+V** (the copy appears under the pointer, with the wires that ran between the copied nodes), **Ctrl+D** duplicates in place. A loop unit node follows its loop when both were copied.
+- **Properties of a selection**: Duplicate, Copy, Delete, **Align left**, **Align top**, **Spread across** and **Spread down** (three or more nodes), **Snap to grid**, and **Group in a frame**.
+- **Frames**: the *Comment frame* node (category *Layout*) is a coloured, titled rectangle that writes nothing into the script. Drag it by its title, resize it by the corner, and the nodes inside it move with it. *Group in a frame* draws one around the selected nodes.
+- **F1** shows the list of shortcuts.
 
 ## 4. Nodes and wires
 

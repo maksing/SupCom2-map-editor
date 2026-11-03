@@ -130,7 +130,8 @@ public sealed partial class SC2MissionPanel
         // the panel width, less the area margins, the scroll bar and the margins of a label
         _labelWidth = r.width - S(16f) - S(40f);
         var node = SelectedNode();
-        if (node != null) DrawNodeProperties(stage, node);
+        if (HasMulti) DrawMultiProperties(stage);
+        else if (node != null) DrawNodeProperties(stage, node);
         else if (_selEdge >= 0 && _selEdge < stage.Edges.Count) DrawEdgeProperties(stage, stage.Edges[_selEdge]);
         else DrawStageProperties(stage);
         _labelWidth = 2000f;
@@ -148,6 +149,7 @@ public sealed partial class SC2MissionPanel
         var ports = SC2MissionNodeCatalog.PortsOf(def, node);
         WrappedLabel(def.Category + (inputs.Length > 1 ? "  -  inputs: " + string.Join(", ", inputs) : "") +
             (ports.Length > 0 ? "  -  outputs: " + string.Join(", ", ports) : "  -  ends the chain"), _noteStyle, S(18f));
+        WrappedLabel(SC2MissionNodeDescriptions.Of(def), _noteStyle, S(18f));
         GUILayout.Space(S(4f));
 
         foreach (var p in def.Params) DrawParam(stage, node, p);
@@ -251,7 +253,7 @@ public sealed partial class SC2MissionPanel
         copy.X += 30f;
         copy.Y += 30f;
         stage.Nodes.Add(copy);
-        _selNode = copy.Id;
+        SelectOnly(copy.Id);
         Mutate("Duplicate node");
         Commit();
     }
@@ -399,7 +401,7 @@ public sealed partial class SC2MissionPanel
             if (issue.StageId.Length > 0 && _work.FindStage(issue.StageId) != null)
             {
                 SwitchTab(issue.StageId);
-                if (issue.NodeId > 0) _selNode = issue.NodeId;
+                if (issue.NodeId > 0) SelectOnly(issue.NodeId);
             }
         }
         GUILayout.EndScrollView();

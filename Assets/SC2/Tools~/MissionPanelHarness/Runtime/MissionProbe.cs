@@ -27,8 +27,10 @@ public static class MissionProbe
 
     public static bool Button(Rect r, string t) { var v = GUI.Button(r, t); Record("Button", t, r, true); return v; }
     public static bool Button(Rect r, string t, GUIStyle s) { var v = GUI.Button(r, t, s); Record("Button", t, r, true); return v; }
+    public static bool Button(Rect r, GUIContent c, GUIStyle s) { var v = GUI.Button(r, c, s); Record("Button", c.text, r); return v; }
     public static bool LButton(string t, params GUILayoutOption[] o) { var v = GUILayout.Button(t, o); Record("Button", t, GUILayoutUtility.GetLastRect()); return v; }
     public static bool LButton(string t, GUIStyle s, params GUILayoutOption[] o) { var v = GUILayout.Button(t, s, o); Record("Button", t, GUILayoutUtility.GetLastRect()); return v; }
+    public static bool LButton(GUIContent c, GUIStyle s, params GUILayoutOption[] o) { var v = GUILayout.Button(c, s, o); Record("Button", c.text, GUILayoutUtility.GetLastRect()); return v; }
     public static bool Toggle(Rect r, bool value, string t) { var v = GUI.Toggle(r, value, t); Record("Toggle", t, r, true); return v; }
     public static bool Toggle(Rect r, bool value, string t, GUIStyle s) { var v = GUI.Toggle(r, value, t, s); Record("Toggle", t, r, true); return v; }
     public static bool LToggle(bool value, string t, params GUILayoutOption[] o) { var v = GUILayout.Toggle(value, t, o); Record("Toggle", t, GUILayoutUtility.GetLastRect()); return v; }
