@@ -185,9 +185,9 @@ dragged, wires it from that output; Escape or a click outside cancels (Escape cl
 
 **Not covered by a unit test** (Unity only): the panel, the exporter's abort, the undo counters, the dropdowns in a build. They were checked with a headless IMGUI harness (below) and a Windows player build, not by an automated test.
 
-**Verifying the panel without the game.** A scratch Unity project copied from `Assets/SC2/Scripts` with an `EditorWindow` that draws the panel exactly as the host does, sends it events (`SendEvent`; the event Y is the GUI Y plus the tab strip's 26 px; the UI scale factor was 1.25),
-captures the window into a `RenderTexture` and writes PNGs, and records every `Button`/`Toggle`/`TextField`/popup the panel draws (by rewriting `GUILayout.Button(` and friends to probe wrappers) so every control can be clicked and its effect on the document checked. It is not in the repository; the recipe is above.
-Also compile every node of the catalog in the scratch project under Mono (the runtime of a build) - a `SC2LuaSyntaxCheck` that passes in `dotnet test` can still fail in Unity (see section 6).
+**Verifying the panel without the game.** The harness in `Assets/SC2/Tools~/MissionPanelHarness` draws the real panel in an `EditorWindow` of a scratch Unity project, sends it synthetic events, writes pictures of many states, clicks every control it drew and runs scripted flows;
+it also compiles the Lua of every catalog node under Mono (a `SC2LuaSyntaxCheck` that passes in `dotnet test` can still fail in Unity, see section 6). One command per check (`Invoke-MissionHarness.ps1 -Mode Ux|Shots|Library|Clicks|Catalog|Build`);
+how it works, how to run it, how to read the pictures and what it does not prove: [MissionPanelHarness](../Process/MissionPanelHarness.md).
 
 **Tests a change must add.** A node: the generated Lua of a small graph. A validator rule: the issue for a graph that breaks it and none for one that does not. A document field: a serialization round trip. A change of the generated script: the exact text it must contain.
 

@@ -127,10 +127,11 @@ section 3).
 ## 6. Known state and traps
 
 - **Moved aside, not deleted.** To make `ImportRenameCheck` compile, two things were moved from this project to `C:\temp\scratch_aside`:
-  the old `Assets/SC2/Tests` folder (it no longer compiled against the current code) and `SC2MissionClickCheck.cs` (a probe of the mission
-  panel from another work stream; its backup is `C:\temp\SC2MissionClickCheck.cs.bak`, and `C:\temp\mission_probe_sync.ps1` and
-  `mission_probe_sync2.ps1` re-create it by patching the mission panel's GUI calls). Put them back only to run those, and expect the
-  compile errors that made them leave.
+  the old `Assets/SC2/Tests` folder (it no longer compiled against the current code) and `SC2MissionClickCheck.cs` (the mission panel harness, which
+  needs the mission panel's GUI calls patched, so it cannot sit in a project whose code is plain). That harness now lives in the repository
+  (`Assets/SC2/Tools~/MissionPanelHarness`) and `Invoke-MissionHarness.ps1` patches a project for the run and **restores it afterwards**; see
+  [MissionPanelHarness](MissionPanelHarness.md). The old `C:\temp\SC2MissionClickCheck.cs.bak` and `mission_probe_sync*.ps1` are superseded by it. Put the
+  old folder back only to run those, and expect the compile errors that made them leave.
 - **EditMode tests are not run from this project today.** Its copy of `Assets/SC2/Tests` is absent; see [Testing](Testing.md) for the
   command and its status.
 - **Shared project.** Other sessions use this project too. Before a run, look at `Assets/VerifyBuildScript/Editor` and `Assets/SC2` for

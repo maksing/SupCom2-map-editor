@@ -15,6 +15,8 @@ All documents are first drafts written from reading the code at one commit; **no
 | [Process: Editing](Process/Editing.md) | how to change the code safely, the project's standing rules |
 | [Process: Verification](Process/Verification.md) | how to check a change beyond the unit tests, and what to state in a report |
 | [Process: Testing](Process/Testing.md) | **a test is mandatory for every change of behaviour**; which kind, how to add it, how to run it, the known baseline |
+| [Process: Scratch verification project](Process/ScratchVerifyProject.md) | the Unity project in which the headless scenarios and player build checks run, and how to run them |
+| [Process: Mission panel harness](Process/MissionPanelHarness.md) | pictures, clicks and flows of the mission editor's panel without the game; how to run it and read the pictures |
 
 ## Systems
 
