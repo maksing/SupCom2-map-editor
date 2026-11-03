@@ -41,6 +41,8 @@ When no modal blocks, the host runs the viewport handlers in a fixed order each 
 
 The shells' own `allowInput` flags and tab-active tests gate the actual brush cursors, which is why the passive handlers (Costs, Objects) can run every frame. The Costs and Objects handlers (and at least one more) wrap their work in a try/catch so an exception in one tool cannot stop the others from running; do the same in a new handler.
 
+**The camera's left button.** The tools (steps before 13) see a mouse press before `HandleGameViewNavigation` does, and the camera skips an event a tool has already used. A camera action can be bound to the left button (`Camera.Orbit`, `Camera.Pan`, `Camera.Fly` in Edit Hotkeys, for example Alt+Left Mouse), so the Costs, Reference Units, Objects and Decals handlers add `!CameraOwnsLeftButton(Event.current)` to their `allowInput`: a left press that matches a camera binding, and the drag and release that follow it, never reach the tool. A new tool that acts on a left press must be gated the same way. The Terrain brushes and the imported-terrain tools do not use this: they test `!e.alt` themselves, so a camera action bound to Alt+Left Mouse still collides with Alt+click there (not checked).
+
 ## 3. Interactions between the layers
 
 | Interaction | What the code does |
