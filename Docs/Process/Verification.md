@@ -31,7 +31,7 @@ unverified; the editor never runs the game.
 What exists today: step 2 and 3 (commands in [Testing](Testing.md)), a player build from Unity's Build Settings, and the technique in
 section 3. What is planned and not yet in the repository: one script that runs all of it, and the scenario harness
 (`Docs/DocumentationPlan.md`, sections 5.5 and 5.6). Until then a scenario is a script written for the occasion in a scratch Unity
-project, following section 3.
+project, following section 3. The scratch project used so far is described in [ScratchVerifyProject](ScratchVerifyProject.md).
 
 ## 3. Scenarios: the technique
 
