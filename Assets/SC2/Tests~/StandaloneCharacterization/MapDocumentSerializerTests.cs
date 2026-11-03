@@ -152,7 +152,7 @@ public class MapDocumentSerializerTests
             AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, HeightOffset = 1f,
         });
         doc.Objects.Zones.Add(new SC2ObjZone { Id = 6, Name = "Zone_1", X1 = -10, Z1 = -10, X2 = 10, Z2 = 10, Role = "Playable" });
-        doc.Objects.Chains.Add(new SC2ObjChain { Id = 7, Name = "Chain_1", MarkerNames = { "Mass_01", "Mass_02" } });
+        doc.Objects.Chains.Add(new SC2ObjChain { Id = 7, Name = "Chain_1", MarkerNames = { "Mass_01", "Mass_02" }, ColorHex = "ff8800" });
         var symmetryGroup = new SC2ObjSymmetryGroup { Id = 8, Kind = "Marker" };
         symmetryGroup.Members.Add(new SC2ObjSymmetryMember { ObjectId = 2, SlotIndex = 0 });
         symmetryGroup.Members.Add(new SC2ObjSymmetryMember { ObjectId = 9, SlotIndex = 1 });
@@ -425,6 +425,7 @@ public class MapDocumentSerializerTests
         Assert.Equal("Playable", restored.Objects.Zones[0].Role);
         Assert.Single(restored.Objects.Chains);
         Assert.Equal(new List<string> { "Mass_01", "Mass_02" }, restored.Objects.Chains[0].MarkerNames);
+        Assert.Equal("ff8800", restored.Objects.Chains[0].ColorHex);
         Assert.Single(restored.Objects.SymmetryGroups);
         Assert.Equal(2, restored.Objects.SymmetryGroups[0].Members.Count);
         Assert.Equal(9, restored.Objects.SymmetryGroups[0].Members[1].ObjectId);

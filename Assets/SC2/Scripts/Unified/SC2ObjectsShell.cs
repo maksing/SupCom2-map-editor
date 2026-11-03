@@ -87,6 +87,8 @@ public sealed class SC2ObjectsShell
     /// FocusCameraOnWorldPoint) — Objects have no Transform to feed
     /// Selection.activeTransform, so this is a dedicated hook.</summary>
     public Action<Vector3> RequestCameraFocus;
+    /// <summary>Host callback: re-center the camera on a world point and back off until a sphere of that radius fits in the view.</summary>
+    public Action<Vector3, float> RequestCameraFrame;
     /// <summary>Host callback: a reasonable world point "in front of the
     /// camera" for contextual Add actions, so new objects don't default to
     /// world origin (SC2GameViewEditorUI wires this to camera position +
@@ -6051,7 +6053,16 @@ public sealed class SC2ObjectsShell
         foreach (var c in visible)
         {
             GUILayout.BeginHorizontal();
-            var sel = GUILayout.Toggle(_selectedChainId == c.Id, TruncateForLabel(c.Name, w * 0.7f), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f));
+            // the colour the chain has in the viewport
+            var swatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(10f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(10f)));
+            if (Event.current.type == EventType.Repaint)
+            {
+                var previousColor = GUI.color;
+                GUI.color = ChainColor(c, true);
+                GUI.DrawTexture(swatch, Texture2D.whiteTexture);
+                GUI.color = previousColor;
+            }
+            var sel = GUILayout.Toggle(_selectedChainId == c.Id, TruncateForLabel(c.Name, w * 0.7f - SC2UiScale.Pxf(14f)), SC2UnifiedSkin.SelectRowStyle, GUILayout.Width(w * 0.7f - SC2UiScale.Pxf(14f)));
             if (sel) _selectedChainId = c.Id; else if (_selectedChainId == c.Id) _selectedChainId = 0;
             if (SC2EnvFieldGui.Button("X", GUILayout.Width(SC2UiScale.Pxf(24f))))
             {
@@ -6072,6 +6083,16 @@ public sealed class SC2ObjectsShell
             _selectedChainId = nc.Id;
             MarkObjectsDirty();
         }
+        // a new chain and its waypoints in one go: click the route in the viewport
+        if (SC2EnvFieldGui.Button("Add Chain and place waypoints", GUILayout.Height(SC2UiScale.Pxf(22f))))
+        {
+            PushUndo();
+            var nc = new SC2ObjChain { Id = Data.AllocateObjectId(), Name = $"Chain_{Data.ObjChains.Count + 1}" };
+            Data.ObjChains.Add(nc);
+            _selectedChainId = nc.Id;
+            MarkObjectsDirty();
+            ArmChainPlacement(nc);
+        }
 
         var selChain = Data.ObjChains.FirstOrDefault(x => x.Id == _selectedChainId);
         if (selChain != null)
@@ -6079,6 +6100,23 @@ public sealed class SC2ObjectsShell
             GUILayout.Space(6);
             var newChainName = SC2EnvFieldGui.TextField("Name", selChain.Name, "chain_name");
             if (newChainName != selChain.Name) RenameChain(selChain, newChainName);
+            if (SC2EnvFieldGui.Button("Go to chain", GUILayout.Height(SC2UiScale.Pxf(22f)), GUILayout.Width(w)))
+                GoToChain(selChain);
+            // the colour of the chain in the viewport and in the list; "Automatic colour" goes back to the one its id gives
+            var chainColor = ChainColor(selChain, true);
+            var pickedColor = SC2EnvFieldGui.ColorField("Colour", chainColor, "chain_col", false, false, false);
+            if (!ApproximatelySameRgb(pickedColor, chainColor))
+            {
+                PushUndo();
+                selChain.ColorHex = SC2ChainPalette.ToHex(pickedColor.r, pickedColor.g, pickedColor.b);
+                MarkObjectsDirty();
+            }
+            if (!string.IsNullOrEmpty(selChain.ColorHex) && SC2EnvFieldGui.Button("Automatic colour", GUILayout.Height(SC2UiScale.Pxf(20f))))
+            {
+                PushUndo();
+                selChain.ColorHex = "";
+                MarkObjectsDirty();
+            }
             SC2EnvFieldGui.SectionLabel($"Waypoints ({selChain.MarkerNames.Count})");
             for (var i = 0; i < selChain.MarkerNames.Count; i++)
             {
@@ -6111,6 +6149,14 @@ public sealed class SC2ObjectsShell
                 selChain.MarkerNames.Add(Data.ObjMarkers.Count > 0 ? Data.ObjMarkers[0].Name : "");
                 MarkObjectsDirty();
             }
+            // blank markers placed by clicking in the viewport, appended in the order of the clicks
+            if (_placementKind == PlacementKind.ChainWaypoint && _placementChainId == selChain.Id)
+            {
+                if (SC2EnvFieldGui.Button("Placing waypoints: click the viewport, or Stop placing", GUILayout.Height(SC2UiScale.Pxf(24f)), GUILayout.Width(w)))
+                    DisarmPlacement();
+            }
+            else if (SC2EnvFieldGui.Button("Place waypoints in viewport (blank markers)", GUILayout.Height(SC2UiScale.Pxf(24f)), GUILayout.Width(w)))
+                ArmChainPlacement(selChain);
 
             // Selecting 2+ objects and clicking
             // Connect joins ALL of them with each other — the same select-
@@ -6253,7 +6299,7 @@ public sealed class SC2ObjectsShell
     // brush/scatter mechanism — SC2ObjectsShell.PropsBrush, a materially
     // different click-and-drag multi-instance gesture — this PlacementKind
     // path is for a single, individually-chosen prop instead).
-    private enum PlacementKind { None, Marker, Unit, Army, Prop, MarkerPreset }
+    private enum PlacementKind { None, Marker, Unit, Army, Prop, MarkerPreset, ChainWaypoint }
     // How objects placed from now on get their Y: "Heightmap" and "3D model" anchor them (the clicked surface decides the layer of a
     // model), "Free" keeps the clicked height as an absolute Y. Session-only, like the other placement settings.
     private SC2HeightMode _placementHeightMode = SC2HeightMode.Heightmap;
@@ -6262,6 +6308,8 @@ public sealed class SC2ObjectsShell
 
     private PlacementKind _placementKind = PlacementKind.None;
     private string _placementSubtype = "";
+    /// <summary>The chain that PlacementKind.ChainWaypoint appends its blank markers to; set after ArmPlacement, which resets it.</summary>
+    private int _placementChainId;
     /// <summary>Set alongside PlacementKind.MarkerPreset (after ArmPlacement,
     /// which doesn't know about this field and so can't reset it) — the
     /// preset whose Entries get placed, offset from the click point, on the
@@ -6304,7 +6352,17 @@ public sealed class SC2ObjectsShell
         _placementPropBlueprint = "";
         _placementPropAsset = null;
         _placementPreset = null;
+        _placementChainId = 0;
         _lastActionSummary = $"Click in the viewport to place {kind}(s) — press Esc to stop.";
+    }
+
+    /// <summary>Starts placing waypoints for a chain: every click in the viewport puts a blank marker there and appends it to the chain, so the
+    /// order of the waypoints is the order of the clicks.</summary>
+    private void ArmChainPlacement(SC2ObjChain chain)
+    {
+        ArmPlacement(PlacementKind.ChainWaypoint, "Blank Marker");
+        _placementChainId = chain.Id;
+        _lastActionSummary = $"Click in the viewport to place the waypoints of '{chain.Name}' in order — press Esc to stop.";
     }
 
     private void DisarmPlacement()
@@ -6316,6 +6374,7 @@ public sealed class SC2ObjectsShell
         _placementPropBlueprint = "";
         _placementPropAsset = null;
         _placementPreset = null;
+        _placementChainId = 0;
         _placementRotationY = 0f;
         _placementRotating = false;
     }
@@ -6357,7 +6416,7 @@ public sealed class SC2ObjectsShell
             return true;
         }
 
-        if (_placementKind == PlacementKind.Marker && HasEquivalentPlacedMarker(BuildMarkerPlacementCandidate(hit, _placementSubtype)))
+        if ((_placementKind == PlacementKind.Marker || _placementKind == PlacementKind.ChainWaypoint) && HasEquivalentPlacedMarker(BuildMarkerPlacementCandidate(hit, _placementSubtype)))
         {
             _lastActionSummary = "Marker not placed: an equivalent marker already occupies that grid cell.";
             SC2MarkerScenePreview.ClearGhosts();
@@ -6380,6 +6439,7 @@ public sealed class SC2ObjectsShell
             case PlacementKind.Army: PlaceArmyAt(hit); break;
             case PlacementKind.Prop: PlacePropAt(hit); break;
             case PlacementKind.MarkerPreset: if (_placementPreset != null) PlaceMarkerPreset(_placementPreset, hit); break;
+            case PlacementKind.ChainWaypoint: PlaceChainWaypointAt(hit); break;
         }
         e.Use();
         RepaintHost?.Invoke();
@@ -6496,6 +6556,7 @@ public sealed class SC2ObjectsShell
         switch (_placementKind)
         {
             case PlacementKind.Marker:
+            case PlacementKind.ChainWaypoint:
                 var tpl = SC2MarkerTemplates.Find(_placementSubtype);
                 color = tpl != null ? SC2MarkerTemplates.HexToColor(tpl.ColorHex) : new Color(.8f, .8f, .8f, 1f);
                 kind = ViewportObjectKind.Marker;
@@ -6521,7 +6582,7 @@ public sealed class SC2ObjectsShell
         var positions = Data.Symmetry == SymmetryMode.None
             ? new List<Vector3> { SnapXZ(hit) }
             : GetUniqueSnappedMarkerSymmetryPositions(hit);
-        if (_placementKind == PlacementKind.Marker)
+        if (_placementKind == PlacementKind.Marker || _placementKind == PlacementKind.ChainWaypoint)
         {
             var probe = BuildMarkerPlacementCandidate(hit, _placementSubtype);
             positions = positions.Where(position =>
@@ -6537,6 +6598,19 @@ public sealed class SC2ObjectsShell
         foreach (var pos in positions)
             if (TryWorldToGui(camera, viewportRect, pos, out var gui))
                 DrawViewportGlyph(gui, color, kind);
+
+        // the segment the next click adds: from the last waypoint of the chain to the cursor, in the chain's own colour
+        if (_placementKind == PlacementKind.ChainWaypoint && positions.Count > 0)
+        {
+            var chain = Data.ObjChains.FirstOrDefault(c => c.Id == _placementChainId);
+            var last = chain == null ? null : LastChainMarker(chain);
+            if (last != null)
+            {
+                var previewColor = ChainColor(chain, true);
+                previewColor.a = 0.6f;
+                DrawOverlayLine(camera, viewportRect, last.Position, positions[0], previewColor, 2f);
+            }
+        }
 
         if (!string.IsNullOrEmpty(ghostIconKey) && positions.Count > 0)
             SC2MarkerScenePreview.SyncGhosts(ghostIconKey, positions, new Vector3(0f, _placementRotationY, 0f));
@@ -6877,6 +6951,44 @@ public sealed class SC2ObjectsShell
             LinkPropsWithSymmetry(new List<SC2ObjProp> { prop });
         _lastActionSummary = $"Placed prop '{ShortBlueprint(prop.BlueprintPath)}' at Y = {prop.Position.y:0.##}"
             + (_placementAboveWater ? $" (above water; water surface {WaterFloor(true):0.##})." : " (under water).");
+        MarkObjectsDirty();
+    }
+
+    /// <summary>The marker the chain currently ends on (the last waypoint that names an existing marker), or null.</summary>
+    private SC2ObjMarker LastChainMarker(SC2ObjChain chain)
+    {
+        for (var i = chain.MarkerNames.Count - 1; i >= 0; i--)
+        {
+            var marker = Data.ObjMarkers.FirstOrDefault(m => string.Equals(m.Name, chain.MarkerNames[i], StringComparison.OrdinalIgnoreCase));
+            if (marker != null) return marker;
+        }
+        return null;
+    }
+
+    /// <summary>Places a blank marker and appends it to the chain being built; the click order is the waypoint order. Symmetry links the
+    /// marker like any other placement, but only the marker that was clicked joins the chain.</summary>
+    private void PlaceChainWaypointAt(Vector3 position)
+    {
+        var chain = Data.ObjChains.FirstOrDefault(c => c.Id == _placementChainId);
+        if (chain == null)
+        {
+            DisarmPlacement();
+            _lastActionSummary = "Waypoint not placed: the chain no longer exists.";
+            return;
+        }
+        var marker = BuildMarkerPlacementCandidate(position, "Blank Marker");
+        if (HasEquivalentPlacedMarker(marker))
+        {
+            _lastActionSummary = "Waypoint not placed: a marker already occupies that grid cell.";
+            return;
+        }
+        marker.Id = Data.AllocateObjectId();
+        marker.Name = MakeUniqueMarkerName($"{chain.Name}_{chain.MarkerNames.Count + 1}");
+        Data.ObjMarkers.Add(marker);
+        chain.MarkerNames.Add(marker.Name);
+        if (Data.Symmetry != SymmetryMode.None)
+            LinkMarkersWithSymmetry(new List<SC2ObjMarker> { marker });
+        _lastActionSummary = $"Added waypoint {chain.MarkerNames.Count} '{marker.Name}' to chain '{chain.Name}'.";
         MarkObjectsDirty();
     }
 
@@ -8736,6 +8848,41 @@ public sealed class SC2ObjectsShell
         GL.Vertex3(a.x + perp.x, a.y + perp.y, 0f);
     }
 
+    /// <summary>The colour of a chain in the viewport and in the list: fixed by the chain's id (SC2ChainPalette), so that hundreds of chains
+    /// each keep their own. The selected chain is full strength, the rest a little dimmer.</summary>
+    private static bool ApproximatelySameRgb(Color a, Color b) =>
+        Mathf.Abs(a.r - b.r) < 0.004f && Mathf.Abs(a.g - b.g) < 0.004f && Mathf.Abs(a.b - b.b) < 0.004f;
+
+    private Color ChainColor(SC2ObjChain chain, bool selected)
+    {
+        float r, g, b;
+        if (!SC2ChainPalette.TryParseHex(chain.ColorHex, out r, out g, out b)) SC2ChainPalette.Rgb(chain.Id, out r, out g, out b);
+        return new Color(r, g, b, selected ? 1f : 0.8f);
+    }
+
+    /// <summary>Shows a chain: the camera goes to the middle of its waypoints and backs off far enough to see all of them.</summary>
+    private void GoToChain(SC2ObjChain chain)
+    {
+        var positions = new List<Vector3>();
+        foreach (var name in chain.MarkerNames)
+        {
+            var marker = Data.ObjMarkers.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (marker != null) positions.Add(marker.Position);
+        }
+        if (positions.Count == 0)
+        {
+            _lastActionSummary = $"Chain '{chain.Name}' has no placed waypoints to show.";
+            return;
+        }
+        var min = positions[0]; var max = positions[0];
+        foreach (var p in positions) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
+        var centre = (min + max) * 0.5f;
+        var radius = (max - min).magnitude * 0.5f;
+        if (RequestCameraFrame != null) RequestCameraFrame(centre, radius);
+        else RequestCameraFocus?.Invoke(centre);
+        _lastActionSummary = $"Showing chain '{chain.Name}' ({positions.Count} waypoint(s)).";
+    }
+
     private void DrawChainOverlays(Camera camera, Rect viewportRect)
     {
         // Same fix as DrawGraphOverlays right above — this method is called
@@ -8753,11 +8900,26 @@ public sealed class SC2ObjectsShell
                 markers[m.Name] = m;
         foreach (var chain in Data.ObjChains)
         {
+            var selected = chain.Id == _selectedChainId;
+            var color = ChainColor(chain, selected);
+            // the selected chain is a thick line on a dark, wider one (an outline), so it stands out among hundreds of others
+            var width = selected ? 6f : 2f;
+            var outline = new Color(0f, 0f, 0f, 0.85f);
+            if (selected)
+            {
+                SC2ObjMarker before = null;
+                foreach (var markerName in chain.MarkerNames)
+                {
+                    if (!markers.TryGetValue(markerName, out var current)) continue;
+                    if (before != null) DrawOverlayLine(camera, viewportRect, before.Position, current.Position, outline, width + 5f);
+                    before = current;
+                }
+            }
             SC2ObjMarker previous = null;
             foreach (var markerName in chain.MarkerNames)
             {
                 if (!markers.TryGetValue(markerName, out var current)) continue;
-                if (previous != null) DrawOverlayLine(camera, viewportRect, previous.Position, current.Position, new Color(1f, .6f, .15f, .78f), 2f);
+                if (previous != null) DrawOverlayLine(camera, viewportRect, previous.Position, current.Position, color, width);
                 previous = current;
             }
         }

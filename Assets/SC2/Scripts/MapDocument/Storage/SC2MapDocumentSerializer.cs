@@ -850,6 +850,8 @@ namespace SC2.MapEditor.Document
             o.Set("id", SC2JsonValue.Of(c.Id));
             o.Set("name", SC2JsonValue.Of(c.Name));
             o.Set("markerNames", WriteStringList(c.MarkerNames));
+            // written only when the colour was chosen by hand, so a document that never did that is unchanged
+            if (!string.IsNullOrEmpty(c.ColorHex)) o.Set("color", SC2JsonValue.Of(c.ColorHex));
             return o;
         }
 
@@ -858,6 +860,7 @@ namespace SC2.MapEditor.Document
             Id = o.Get("id").AsInt(0),
             Name = o.Get("name").AsString(""),
             MarkerNames = ReadStringList(o.Get("markerNames")),
+            ColorHex = o.Get("color").AsString(""),
         };
 
         private static SC2JsonValue WriteSymmetryGroup(SC2ObjSymmetryGroup g)

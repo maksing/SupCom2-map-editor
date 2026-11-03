@@ -240,6 +240,8 @@ public class SC2ObjChain
     public int Id;
     public string Name = "";
     public List<string> MarkerNames = new();
+    /// <summary>"rrggbb" of the colour the chain is drawn in; empty means the automatic colour of its id (SC2ChainPalette).</summary>
+    public string ColorHex = "";
 }
 
 /// <summary>One member of a live symmetry-linked group (practical-

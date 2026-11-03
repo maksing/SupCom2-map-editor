@@ -4069,6 +4069,7 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
                 ReportStatus = SetStatus,
                 RequestSubTab = i => _subTab = i,
                 RequestCameraFocus = FocusCameraOnWorldPoint,
+                RequestCameraFrame = FrameCameraOnWorldSphere,
                 // A prop placed via "Browse prop
                 // blueprints" (which spawns immediately at this point, not
                 // via click-to-place) must not land at what would feel like a
@@ -4337,6 +4338,19 @@ public sealed partial class SC2GameViewEditorUI : MonoBehaviour
         var targetPosition = worldPos - (currentRotation * Vector3.forward) * distance;
         StartViewTransition(cam, targetPosition, currentRotation);
         SetStatus("Focused camera on selected object.");
+    }
+
+    /// <summary>Re-centres the camera on a point and backs off along its view direction until a sphere of the given radius fits the view,
+    /// keeping its orientation; used to show a whole chain.</summary>
+    private void FrameCameraOnWorldSphere(Vector3 centre, float radius)
+    {
+        var cam = ResolveCamera();
+        if (cam == null) return;
+        var rotation = cam.transform.rotation;
+        var halfFov = Mathf.Max(5f, Mathf.Min(cam.fieldOfView, 120f)) * 0.5f * Mathf.Deg2Rad;
+        var distance = Mathf.Max(20f, radius * 1.3f / Mathf.Tan(halfFov));
+        StartViewTransition(cam, centre - (rotation * Vector3.forward) * distance, rotation);
+        SetStatus("Focused camera on the chain.");
     }
 
     private void HandleObjectsGameViewInput()
