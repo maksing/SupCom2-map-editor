@@ -3000,8 +3000,16 @@ public sealed class SC2ObjectsShell
         // (truncated to fit) guarantees this row can never exceed the panel's
         // actual width, regardless of name length or nesting depth. All of it
         // is scaled through SC2UiScale, like the buttons it reserves room for.
-        var reserved = SC2UiScale.Pxf(depth * TreeIndent + 20f + 4 * 24f + 10f);
+        var reserved = SC2UiScale.Pxf(depth * TreeIndent + 20f + 4 * 24f + 10f + 14f);
         var labelWidth = Mathf.Max(SC2UiScale.Pxf(50f), w - reserved);
+        var groupSwatch = GUILayoutUtility.GetRect(SC2UiScale.Pxf(10f), SC2UiScale.Pxf(18f), GUILayout.Width(SC2UiScale.Pxf(10f)));
+        if (Event.current.type == EventType.Repaint)
+        {
+            var previousGuiColor = GUI.color;
+            GUI.color = UnitGroupColor(node, 1f);
+            GUI.DrawTexture(groupSwatch, Texture2D.whiteTexture);
+            GUI.color = previousGuiColor;
+        }
         var labelText = icon + node.Name + $"  {counts.Groups}-{counts.Units}";
         // The selected group is the pressed button, as selected items are elsewhere.
         if (GUILayout.Toggle(isSel, TruncateForLabel(labelText, labelWidth), "Button", GUILayout.Width(labelWidth)) && !isSel)
@@ -3163,6 +3171,22 @@ public sealed class SC2ObjectsShell
         node.Name = SC2EnvFieldGui.TextField("Name", node.Name, "group_name_" + node.Id);
         node.IsWreckage = SC2EnvFieldGui.Toggle("Wreckage group (dead units' reclaim)", node.IsWreckage);
         if (node.Name != prevName || node.IsWreckage != prevWreckage) MarkObjectsDirty();
+
+        // the colour of the group's units in the viewport (dot and footprint); "Automatic colour" goes back to the one its id gives
+        var groupColor = UnitGroupColor(node, 1f);
+        var pickedColor = SC2EnvFieldGui.ColorField("Colour of its units", groupColor, "group_col", false, false, false);
+        if (!ApproximatelySameRgb(pickedColor, groupColor))
+        {
+            PushUndo();
+            node.ColorHex = SC2ObjectPalette.ToHex(pickedColor.r, pickedColor.g, pickedColor.b);
+            MarkObjectsDirty();
+        }
+        if (!string.IsNullOrEmpty(node.ColorHex) && SC2EnvFieldGui.Button("Automatic colour", GUILayout.Height(SC2UiScale.Pxf(20f))))
+        {
+            PushUndo();
+            node.ColorHex = "";
+            MarkObjectsDirty();
+        }
     }
 
     private void DrawUnitsFlatBrowser(float w)
@@ -6108,7 +6132,7 @@ public sealed class SC2ObjectsShell
             if (!ApproximatelySameRgb(pickedColor, chainColor))
             {
                 PushUndo();
-                selChain.ColorHex = SC2ChainPalette.ToHex(pickedColor.r, pickedColor.g, pickedColor.b);
+                selChain.ColorHex = SC2ObjectPalette.ToHex(pickedColor.r, pickedColor.g, pickedColor.b);
                 MarkObjectsDirty();
             }
             if (!string.IsNullOrEmpty(selChain.ColorHex) && SC2EnvFieldGui.Button("Automatic colour", GUILayout.Height(SC2UiScale.Pxf(20f))))
@@ -6643,8 +6667,13 @@ public sealed class SC2ObjectsShell
             var unitType = string.IsNullOrEmpty(_placementUnitType) ? DefaultPlaceholderUnitType : _placementUnitType;
             var unitAsset = _assetBrowser.FindUnitAsset(unitType);
             if (unitAsset != null && unitAsset.FootprintSizeX > 0f && unitAsset.FootprintSizeZ > 0f)
+            {
+                var targetGroup = PeekTargetUnitGroup(_placementSubtype);
+                SC2UnitGroupColor.RgbOfGroup(targetGroup, _placementSubtype, out var tr, out var tg, out var tb);
                 foreach (var pos in positions)
-                    DrawFootprintOverlay(camera, viewportRect, pos, unitAsset.FootprintSizeX, unitAsset.FootprintSizeZ, _placementRotationY, color);
+                    DrawFootprintOverlay(camera, viewportRect, pos, unitAsset.FootprintSizeX, unitAsset.FootprintSizeZ, _placementRotationY,
+                        new Color(tr, tg, tb, .9f), new Color(tr, tg, tb, FootprintFillAlpha));
+            }
         }
     }
 
@@ -6662,12 +6691,36 @@ public sealed class SC2ObjectsShell
     // dimension, quadrupling the drawn rectangle's area relative to the
     // real footprint.
     private const float FootprintWorldUnitsPerCell = 1f;
-    private static readonly Color PlacedFootprintColor = new Color(1f, .65f, .15f, .7f);
+    private const float FootprintFillAlpha = .38f;
+
+    /// <summary>The colour of a unit's group (or of the group itself); see SC2UnitGroupColor.</summary>
+    private Color UnitGroupColor(SC2ObjUnitNode unit, float alpha)
+    {
+        if (unit == null) return new Color(.86f, .45f, 1f, alpha);
+        SC2UnitGroupColor.Rgb(Data.ObjUnits, unit, out var r, out var g, out var b);
+        return new Color(r, g, b, alpha);
+    }
+
+    /// <summary>The group a unit placed now would join, without creating one: the group armed for placement, else the army's INITIAL
+    /// or first root group; null when there is none yet.</summary>
+    private SC2ObjUnitNode PeekTargetUnitGroup(string armyName)
+    {
+        if (_placementTargetGroupId != 0)
+            return Data.ObjUnits.FirstOrDefault(u => u.Id == _placementTargetGroupId && u.IsGroup && u.ArmyName == armyName);
+        SC2ObjUnitNode any = null;
+        foreach (var n in Data.ObjUnits)
+        {
+            if (n.ArmyName != armyName || n.ParentIndex != -1 || !n.IsGroup) continue;
+            if (string.Equals(n.Name, "INITIAL", StringComparison.OrdinalIgnoreCase)) return n;
+            any ??= n;
+        }
+        return any;
+    }
     // The footprint is a solid red fill over the
     // whole occupied area, not just a wireframe outline.
     private static readonly Color FootprintFillColor = new Color(1f, .12f, .12f, .38f);
 
-    private void DrawFootprintOverlay(Camera camera, Rect viewportRect, Vector3 center, float sizeXCells, float sizeZCells, float rotationYDegrees, Color color)
+    private void DrawFootprintOverlay(Camera camera, Rect viewportRect, Vector3 center, float sizeXCells, float sizeZCells, float rotationYDegrees, Color color, Color fill)
     {
         var halfX = sizeXCells * FootprintWorldUnitsPerCell * 0.5f;
         var halfZ = sizeZCells * FootprintWorldUnitsPerCell * 0.5f;
@@ -6701,7 +6754,7 @@ public sealed class SC2ObjectsShell
         // rendered by the same camera as the terrain/buildings themselves,
         // has none of this risk — mirrors the existing SC2GameAssetScenePreview/
         // SC2MarkerScenePreview ghost-preview pattern instead of a 2D overlay.
-        SyncFootprintFillQuad(center, rot, halfX * 2f, halfZ * 2f, SampleHeight(center.x, center.z) + .2f);
+        SyncFootprintFillQuad(center, rot, halfX * 2f, halfZ * 2f, SampleHeight(center.x, center.z) + .2f, fill);
     }
 
     // ── Real 3D scene-mesh footprint fill (see DrawFootprintOverlay's own
@@ -6714,6 +6767,9 @@ public sealed class SC2ObjectsShell
     private static Mesh _footprintFillMesh;
     private static Material _footprintFillMaterial;
     private readonly List<GameObject> _footprintFillPool = new();
+    private readonly List<MeshRenderer> _footprintFillRenderers = new();
+    private readonly List<Color> _footprintFillColors = new();
+    private static MaterialPropertyBlock _footprintFillBlock;
     private int _footprintFillUsedThisFrame;
     private int _footprintFillFrameToken = -1;
 
@@ -6764,7 +6820,7 @@ public sealed class SC2ObjectsShell
     /// per-placed-object loop). Reuses/creates the Nth pooled quad in draw
     /// order; ReconcileFootprintFillPool (called once per Repaint from
     /// OnGameViewGUI) deactivates whatever's left over.</summary>
-    private void SyncFootprintFillQuad(Vector3 center, Quaternion rotation, float sizeX, float sizeZ, float groundY)
+    private void SyncFootprintFillQuad(Vector3 center, Quaternion rotation, float sizeX, float sizeZ, float groundY, Color fill)
     {
         if (Event.current == null || Event.current.type != EventType.Repaint) return;
         var index = _footprintFillUsedThisFrame++;
@@ -6777,8 +6833,19 @@ public sealed class SC2ObjectsShell
         {
             go = new GameObject("SC2FootprintFill") { hideFlags = HideFlags.HideAndDontSave };
             go.AddComponent<MeshFilter>().sharedMesh = FootprintFillMesh;
-            go.AddComponent<MeshRenderer>().sharedMaterial = FootprintFillMaterial;
+            var quadRenderer = go.AddComponent<MeshRenderer>();
+            quadRenderer.sharedMaterial = FootprintFillMaterial;
             _footprintFillPool.Add(go);
+            _footprintFillRenderers.Add(quadRenderer);
+            _footprintFillColors.Add(Color.clear);
+        }
+        // each footprint has the colour of its group: set on the quad (a property block), the material stays shared
+        if (_footprintFillColors[index] != fill)
+        {
+            _footprintFillBlock ??= new MaterialPropertyBlock();
+            _footprintFillBlock.SetColor("_Color", fill);
+            _footprintFillRenderers[index].SetPropertyBlock(_footprintFillBlock);
+            _footprintFillColors[index] = fill;
         }
         go.SetActive(true);
         go.transform.SetPositionAndRotation(new Vector3(center.x, groundY, center.z), rotation);
@@ -7471,14 +7538,16 @@ public sealed class SC2ObjectsShell
         if (showUnits && objectPass)
             foreach (var unit in VisibleForViewport(Data.ObjUnits.Where(u => !u.IsGroup && !_hiddenUnitIds.Contains(u.Id)), camera, viewportRect, u => u.Position))
             {
+                var groupColor = UnitGroupColor(unit, .78f);
                 DrawViewportDot(camera, viewportRect, mousePosition, canPick, unit.Position, unit.Id, ViewportObjectKind.Unit,
-                    _selUnits.Contains(unit.Id) ? new Color(1f, .9f, .12f, .95f) : new Color(.86f, .45f, 1f, .78f), ref pick);
+                    _selUnits.Contains(unit.Id) ? new Color(1f, .9f, .12f, .95f) : groupColor, ref pick);
                 // Same as Props above — real buildings in this game's data
                 // are UNIT blueprints (structures), so this is where most
                 // Footprint-bearing objects actually live.
                 var unitAsset = _assetBrowser.FindUnitAsset(unit.Type);
                 if (unitAsset != null && unitAsset.FootprintSizeX > 0f && unitAsset.FootprintSizeZ > 0f)
-                    DrawFootprintOverlay(camera, viewportRect, unit.Position, unitAsset.FootprintSizeX, unitAsset.FootprintSizeZ, unit.OrientationEuler.y, PlacedFootprintColor);
+                    DrawFootprintOverlay(camera, viewportRect, unit.Position, unitAsset.FootprintSizeX, unitAsset.FootprintSizeZ, unit.OrientationEuler.y,
+                        new Color(groupColor.r, groupColor.g, groupColor.b, .9f), new Color(groupColor.r, groupColor.g, groupColor.b, FootprintFillAlpha));
             }
         if (showMarkers && objectPass)
             foreach (var marker in VisibleForViewport(Data.ObjMarkers, camera, viewportRect, m => m.Position))
@@ -7550,7 +7619,7 @@ public sealed class SC2ObjectsShell
             Color? hoverColor = hoverWorld.HasValue ? pick.Kind switch
             {
                 ViewportObjectKind.Prop => _selProps.Contains(pick.Id) ? new Color(1f, .9f, .12f, .95f) : new Color(.25f, .86f, 1f, .95f),
-                ViewportObjectKind.Unit => _selUnits.Contains(pick.Id) ? new Color(1f, .9f, .12f, .95f) : new Color(.86f, .45f, 1f, .95f),
+                ViewportObjectKind.Unit => _selUnits.Contains(pick.Id) ? new Color(1f, .9f, .12f, .95f) : UnitGroupColor(Data.ObjUnits.FirstOrDefault(x => x.Id == pick.Id), .95f),
                 ViewportObjectKind.Marker => _selMarkers.Contains(pick.Id) ? new Color(1f, .9f, .12f, .98f) : new Color(.35f, .9f, .95f, .95f),
                 _ => (Color?)null
             } : null;
@@ -8848,15 +8917,14 @@ public sealed class SC2ObjectsShell
         GL.Vertex3(a.x + perp.x, a.y + perp.y, 0f);
     }
 
-    /// <summary>The colour of a chain in the viewport and in the list: fixed by the chain's id (SC2ChainPalette), so that hundreds of chains
+    /// <summary>The colour of a chain in the viewport and in the list: fixed by the chain's id (SC2ObjectPalette), so that hundreds of chains
     /// each keep their own. The selected chain is full strength, the rest a little dimmer.</summary>
     private static bool ApproximatelySameRgb(Color a, Color b) =>
         Mathf.Abs(a.r - b.r) < 0.004f && Mathf.Abs(a.g - b.g) < 0.004f && Mathf.Abs(a.b - b.b) < 0.004f;
 
     private Color ChainColor(SC2ObjChain chain, bool selected)
     {
-        float r, g, b;
-        if (!SC2ChainPalette.TryParseHex(chain.ColorHex, out r, out g, out b)) SC2ChainPalette.Rgb(chain.Id, out r, out g, out b);
+        SC2ObjectPalette.Resolve(chain.ColorHex, chain.Id, out var r, out var g, out var b);
         return new Color(r, g, b, selected ? 1f : 0.8f);
     }
 

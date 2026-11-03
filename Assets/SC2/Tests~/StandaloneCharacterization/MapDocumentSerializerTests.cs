@@ -149,7 +149,7 @@ public class MapDocumentSerializerTests
         {
             Id = 5, ArmyName = "ARMY_1", Name = "unit_0", ParentIndex = -1, IsGroup = true,
             Type = "uca0104", Position = new Vector3(7, 8, 9), OrientationEuler = new Vector3(0, 45, 0),
-            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, HeightOffset = 1f,
+            AnchorToTerrain = true, AnchorToModel = true, OnWaterSurface = true, HeightOffset = 1f, ColorHex = "2288ff",
         });
         doc.Objects.Zones.Add(new SC2ObjZone { Id = 6, Name = "Zone_1", X1 = -10, Z1 = -10, X2 = 10, Z2 = 10, Role = "Playable" });
         doc.Objects.Chains.Add(new SC2ObjChain { Id = 7, Name = "Chain_1", MarkerNames = { "Mass_01", "Mass_02" }, ColorHex = "ff8800" });
@@ -421,6 +421,7 @@ public class MapDocumentSerializerTests
         Assert.Equal("ARMY_2", restored.Objects.Armies[0].Alliances[0].OtherArmy);
         Assert.Single(restored.Objects.Units);
         Assert.Equal("uca0104", restored.Objects.Units[0].Type);
+        Assert.Equal("2288ff", restored.Objects.Units[0].ColorHex);
         Assert.Single(restored.Objects.Zones);
         Assert.Equal("Playable", restored.Objects.Zones[0].Role);
         Assert.Single(restored.Objects.Chains);

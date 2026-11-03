@@ -168,6 +168,8 @@ public class SC2ObjUnitNode
     public int ParentIndex = -1; // index into SC2TerrainData.ObjUnits, -1 = root of that army's tree
     public bool IsGroup;
     public bool IsWreckage; // groups only — marks a special "WRECKAGE" group holding dead units' reclaim
+    /// <summary>Groups only: "rrggbb" of the colour its units (dot and footprint) are drawn in; empty means the automatic colour of the group's id.</summary>
+    public string ColorHex = "";
     public string Type = ""; // blueprint code (e.g. "uca0104"), leaves only
     public Vector3 Position;
     public Vector3 OrientationEuler;
@@ -240,7 +242,7 @@ public class SC2ObjChain
     public int Id;
     public string Name = "";
     public List<string> MarkerNames = new();
-    /// <summary>"rrggbb" of the colour the chain is drawn in; empty means the automatic colour of its id (SC2ChainPalette).</summary>
+    /// <summary>"rrggbb" of the colour the chain is drawn in; empty means the automatic colour of its id (SC2ObjectPalette).</summary>
     public string ColorHex = "";
 }
 

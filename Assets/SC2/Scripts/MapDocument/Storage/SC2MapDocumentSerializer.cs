@@ -767,6 +767,8 @@ namespace SC2.MapEditor.Document
             o.Set("anchorToModel", SC2JsonValue.Of(u.AnchorToModel));
             o.Set("onWaterSurface", SC2JsonValue.Of(u.OnWaterSurface));
             o.Set("heightOffset", SC2JsonValue.Of(u.HeightOffset));
+            // written only when a group's colour was chosen by hand, so a document that never did that is unchanged
+            if (!string.IsNullOrEmpty(u.ColorHex)) o.Set("color", SC2JsonValue.Of(u.ColorHex));
             return o;
         }
 
@@ -784,6 +786,7 @@ namespace SC2.MapEditor.Document
             AnchorToModel = o.Get("anchorToModel").AsBool(false),
             OnWaterSurface = o.Get("onWaterSurface").AsBool(false),
             HeightOffset = (float)o.Get("heightOffset").AsDouble(0),
+            ColorHex = o.Get("color").AsString(""),
         };
 
         private static SC2JsonValue WriteReferenceUnit(SC2ObjReferenceUnit r)

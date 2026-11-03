@@ -1,12 +1,12 @@
 using System;
 
 /// <summary>
-/// One colour per chain, derived from the chain's id alone, so that it stays the same when other chains are added, removed or
-/// renamed. A map can have several hundred chains, so the colours are spread over hue, saturation and brightness together with a
+/// One colour per chain or unit group, derived from its id alone, so that it stays the same when others are added, removed or
+/// renamed. A map can have several hundred of them, so the colours are spread over hue, saturation and brightness together with a
 /// low-discrepancy sequence (the R3 sequence, based on the plastic number): consecutive ids land far apart and no two ids repeat.
 /// Plain floats, no engine types, so the rule can be tested without Unity.
 /// </summary>
-public static class SC2ChainPalette
+public static class SC2ObjectPalette
 {
     // 1/g, 1/g^2, 1/g^3 for g = the plastic number (the real root of g^3 = g + 1)
     private const double StepHue = 0.8191725133961645;
@@ -22,6 +22,12 @@ public static class SC2ChainPalette
         var saturation = MinSaturation + (MaxSaturation - MinSaturation) * (float)Fraction(0.5 + StepSaturation * chainId);
         var value = MinValue + (MaxValue - MinValue) * (float)Fraction(0.5 + StepValue * chainId);
         HsvToRgb((float)hue, saturation, value, out r, out g, out b);
+    }
+
+    /// <summary>The colour of an object: the one chosen by hand (hex, "rrggbb") when it is a valid value, otherwise the automatic colour of its id.</summary>
+    public static void Resolve(string chosenHex, int id, out float r, out float g, out float b)
+    {
+        if (!TryParseHex(chosenHex, out r, out g, out b)) Rgb(id, out r, out g, out b);
     }
 
     /// <summary>Reads "rrggbb" (a leading # is allowed). False for anything else, so a damaged value falls back to the automatic colour.</summary>

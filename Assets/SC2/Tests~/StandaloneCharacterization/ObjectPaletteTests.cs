@@ -3,11 +3,11 @@ using System.Collections.Generic;
 
 namespace SC2CharacterizationTests;
 
-public class ChainPaletteTests
+public class ObjectPaletteTests
 {
     private static (float r, float g, float b) Of(int id)
     {
-        SC2ChainPalette.Rgb(id, out var r, out var g, out var b);
+        SC2ObjectPalette.Rgb(id, out var r, out var g, out var b);
         return (r, g, b);
     }
 
@@ -54,11 +54,11 @@ public class ChainPaletteTests
     [Fact]
     public void TryParseHex_ReadsSixDigitsWithOrWithoutHash()
     {
-        Assert.True(SC2ChainPalette.TryParseHex("ff8000", out var r, out var g, out var b));
+        Assert.True(SC2ObjectPalette.TryParseHex("ff8000", out var r, out var g, out var b));
         Assert.Equal(1f, r);
         Assert.Equal(128f / 255f, g, 4);
         Assert.Equal(0f, b);
-        Assert.True(SC2ChainPalette.TryParseHex("#00FF00", out r, out g, out b));
+        Assert.True(SC2ObjectPalette.TryParseHex("#00FF00", out r, out g, out b));
         Assert.Equal((0f, 1f, 0f), (r, g, b));
     }
 
@@ -70,7 +70,7 @@ public class ChainPaletteTests
     [InlineData("gg0000")]
     public void TryParseHex_RefusesAnythingElse(string hex)
     {
-        Assert.False(SC2ChainPalette.TryParseHex(hex, out _, out _, out _));
+        Assert.False(SC2ObjectPalette.TryParseHex(hex, out _, out _, out _));
     }
 
     [Fact]
@@ -78,11 +78,23 @@ public class ChainPaletteTests
     {
         for (var id = 1; id <= 200; id++)
         {
-            SC2ChainPalette.Rgb(id, out var r, out var g, out var b);
-            var hex = SC2ChainPalette.ToHex(r, g, b);
-            Assert.True(SC2ChainPalette.TryParseHex(hex, out var r2, out var g2, out var b2));
-            Assert.Equal(hex, SC2ChainPalette.ToHex(r2, g2, b2));
+            SC2ObjectPalette.Rgb(id, out var r, out var g, out var b);
+            var hex = SC2ObjectPalette.ToHex(r, g, b);
+            Assert.True(SC2ObjectPalette.TryParseHex(hex, out var r2, out var g2, out var b2));
+            Assert.Equal(hex, SC2ObjectPalette.ToHex(r2, g2, b2));
         }
+    }
+
+    [Fact]
+    public void Resolve_UsesTheChosenColourOtherwiseTheAutomaticOne()
+    {
+        SC2ObjectPalette.Resolve("00ff00", 5, out var r, out var g, out var b);
+        Assert.Equal((0f, 1f, 0f), (r, g, b));
+
+        SC2ObjectPalette.Resolve("", 5, out r, out g, out b);
+        Assert.Equal(Of(5), (r, g, b));
+        SC2ObjectPalette.Resolve("not a colour", 5, out r, out g, out b);
+        Assert.Equal(Of(5), (r, g, b));
     }
 
     [Fact]

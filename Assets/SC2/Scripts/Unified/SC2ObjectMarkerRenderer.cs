@@ -272,10 +272,21 @@ public static class SC2ObjectMarkerRenderer
                 if (unit.IsGroup) continue;
                 if (hiddenUnitIds != null && hiddenUnitIds.Contains(unit.Id)) continue;
                 var selected = selUnits != null && selUnits.Contains(unit.Id);
-                var key = selected ? "unit:selected" : "unit:normal";
-                var batch = selected
-                    ? GetOrCreateBatch(key, SelectedColor, SelectedPixelSize)
-                    : GetOrCreateBatch(key, UnitNormalColor, NormalPixelSize);
+                // one batch per group colour: the units of a group share a colour, a different group has its own
+                string key;
+                Batch batch;
+                if (selected)
+                {
+                    key = "unit:selected";
+                    batch = GetOrCreateBatch(key, SelectedColor, SelectedPixelSize);
+                }
+                else
+                {
+                    SC2UnitGroupColor.Rgb(data.ObjUnits, unit, out var gr, out var gg, out var gb);
+                    var groupColor = new Color(gr, gg, gb, UnitNormalColor.a);
+                    key = "unit:g:" + ColorUtility.ToHtmlStringRGBA(groupColor);
+                    batch = GetOrCreateBatch(key, groupColor, NormalPixelSize);
+                }
                 batch.Positions.Add(unit.Position);
                 _touchedThisSync.Add(key);
             }

@@ -104,8 +104,9 @@
          dependency, same reasoning as SC2LuaValue.cs above. -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2ObjectsModel.cs" Link="Source\SC2ObjectsModel.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2MarkerDeduplication.cs" Link="Source\SC2MarkerDeduplication.cs" />
-    <!-- Chain colours from the chain id (plain floats). -->
-    <Compile Include="$(SC2Root)\Scripts\Core\SC2ChainPalette.cs" Link="Source\SC2ChainPalette.cs" />
+    <!-- Colours of chains and unit groups from their ids (plain floats). -->
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2ObjectPalette.cs" Link="Source\SC2ObjectPalette.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2UnitGroupColor.cs" Link="Source\SC2UnitGroupColor.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LuaField.cs" Link="Source\SC2LuaField.cs" />
     <!-- Pure symmetry/lobby-spawn math (Vector3 + System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2LobbySpawnMath.cs" Link="Source\SC2LobbySpawnMath.cs" />
