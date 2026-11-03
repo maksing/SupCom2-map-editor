@@ -120,6 +120,7 @@
     <!-- Blend mask editing layers: pure data + compositing math (System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2BlendMaskLayers.cs" Link="Source\SC2BlendMaskLayers.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PathGrid.cs" Link="Source\SC2PathGrid.cs" />
+    <Compile Include="$(SC2Root)\Scripts\Core\SC2ImportedMapPaths.cs" Link="Source\SC2ImportedMapPaths.cs" />
     <!-- Pair border outline band for the blend mask (System only). -->
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PairOutlineMath.cs" Link="Source\SC2PairOutlineMath.cs" />
     <Compile Include="$(SC2Root)\Scripts\Core\SC2PairOutlineUpdater.cs" Link="Source\SC2PairOutlineUpdater.cs" />

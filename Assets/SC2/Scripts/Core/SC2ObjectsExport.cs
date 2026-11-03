@@ -559,6 +559,12 @@ public static class SC2ObjectsExport
             : data.DisplayName;
         text = ScenarioNameFieldRe.Replace(text, m => m.Groups[1].Value + "name" + m.Groups[2].Value + "'" + displayName + "'", 1);
 
+        // An imported scenario names the folder and the files of the map it came from. The export writes this map's files under its own
+        // name, so the map, save and script paths have to follow it, or the game looks for them in a folder that does not exist (a new
+        // map that an existing one was imported into is the usual case). A skeleton already has the right paths, and a caller that gives
+        // no name keeps the text as it is.
+        text = SC2ImportedMapPaths.RewriteScenarioPaths(text, sanitizedMapName);
+
         // Same source list (ARMY_* position markers) feeds both
         // StartPositions and Configurations.standard.teams[0].armies below -
         // real files always list every army in one FFA team, even for

@@ -331,12 +331,15 @@ public static class SC2TerrainExporter
         // result so the underlying naming collision in the source project is
         // visible, not just silently patched around.
         var fileNameOwner = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+        // File names in texDir taken by textures moved in from an imported map (see RelocateImportedTextures): they have no Texture2D to own
+        // them, so they are kept apart, and UniqueFileName and the cleanup below treat them as taken.
+        var importedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var copied   = 0;
         var warnings = new List<string>();
 
         string UniqueFileName(string desiredFileName, Texture2D tex)
         {
-            if (!fileNameOwner.TryGetValue(desiredFileName, out var owner) || owner == tex)
+            if (!importedFileNames.Contains(desiredFileName) && (!fileNameOwner.TryGetValue(desiredFileName, out var owner) || owner == tex))
             {
                 fileNameOwner[desiredFileName] = tex;
                 return desiredFileName;
@@ -350,7 +353,7 @@ public static class SC2TerrainExporter
             {
                 candidate = $"{stem}_{suffix}{ext}";
                 suffix++;
-            } while (fileNameOwner.TryGetValue(candidate, out var candidateOwner) && candidateOwner != tex);
+            } while (importedFileNames.Contains(candidate) || (fileNameOwner.TryGetValue(candidate, out var candidateOwner) && candidateOwner != tex));
 
             warnings.Add($"Duplicate texture file name '{desiredFileName}' — two different textures share this name; exported the second as '{candidate}' instead of overwriting the first.");
             fileNameOwner[candidate] = tex;
@@ -782,6 +785,128 @@ public static class SC2TerrainExporter
             model.Materials.Add(mat);
         }
 
+        // Textures an imported terrain names that the base game does not ship (the textures and the lighting masks of the imported map's own
+        // archive) are written into THIS map's folders and its materials are pointed at the copies. Left as they are, the exported terrain
+        // would refer to /maps/<imported map>/..., a folder that exists only while that map is installed.
+        var importedTexturePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // source base path -> game path of the copy (null: could not copy)
+        var importedMaskPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);    // source mask base path -> game path of the copy (null: could not copy)
+
+        // The bytes of a file of the imported map: the loose copy the import made, else the game install's archives, else the copy the map
+        // carries in its own share.
+        bool TryReadImportedFile(string gamePathWithExtension, out byte[] bytes, out string extension)
+        {
+            if (SC2TerrainMaterialFactory.TryReadLooseTextureBytes(gamePathWithExtension, out bytes, out extension)) return true;
+            if (SC2GameArchiveRegistry.TryGetReader(out var reader)
+                && SC2VanillaArchiveClassifier.TryResolveGamePathEntry(reader, gamePathWithExtension, out var entry, out _))
+            {
+                try
+                {
+                    using var stream = reader.OpenEntry(entry);
+                    using var memory = new MemoryStream();
+                    stream.CopyTo(memory);
+                    bytes = memory.ToArray();
+                    extension = Path.GetExtension(entry);
+                    return true;
+                }
+                catch (Exception ex) { warnings.Add($"{entry}: {ex.Message}"); }
+            }
+            var withoutExtension = SC2TerrainMaterialFactory.StripExtension(SC2TerrainMaterialFactory.NormalizePath(gamePathWithExtension));
+            if (SC2MapshareTextures.TryRead(withoutExtension, out bytes, out extension)) return true;
+            bytes = null;
+            extension = ".dds";
+            return false;
+        }
+
+        string CopyImportedTexture(string gamePath)
+        {
+            var normalized = SC2TerrainMaterialFactory.NormalizePath(gamePath);
+            var basePath = SC2TerrainMaterialFactory.StripExtension(normalized);
+            if (importedTexturePaths.TryGetValue(basePath, out var done)) return done;
+            if (!TryReadImportedFile(normalized, out var bytes, out var extension))
+            {
+                warnings.Add($"imported texture '{normalized}' is neither in the game install nor on this machine: the slot keeps its original path, which exists only while the map it came from is installed.");
+                return importedTexturePaths[basePath] = null;
+            }
+            if (!string.Equals(extension, ".dds", StringComparison.OrdinalIgnoreCase))
+            {
+                warnings.Add($"imported texture '{normalized}' is a {extension} file, not a DDS: the slot keeps its original path.");
+                return importedTexturePaths[basePath] = null;
+            }
+            var stem = SC2ImportedMapPaths.UniqueStem(SC2ImportedMapPaths.FileStem(normalized),
+                s => importedFileNames.Contains(s + ".dds") || fileNameOwner.ContainsKey(s + ".dds"));
+            var fileName = stem + ".dds";
+            try { File.WriteAllBytes(Path.Combine(texDir, fileName), bytes); }
+            catch (Exception ex)
+            {
+                warnings.Add($"{normalized}: {ex.Message}");
+                return importedTexturePaths[basePath] = null;
+            }
+            importedFileNames.Add(fileName);
+            copied++;
+            return importedTexturePaths[basePath] = texGamePath + fileName;
+        }
+
+        // An imported layer's lighting mask is three files (<name>_0, _1, _2): all of them are written into this map's lighting folder under
+        // one name, or none is and the slot keeps its path.
+        string CopyImportedMask(string maskBase)
+        {
+            var stripped = SC2TerrainMaterialFactory.StripExtension(SC2TerrainMaterialFactory.NormalizePath(maskBase));
+            if (importedMaskPaths.TryGetValue(stripped, out var done)) return done;
+            var files = new byte[3][];
+            for (var k = 0; k < 3; k++)
+            {
+                if (!TryReadImportedFile(stripped + "_" + k + ".dds", out files[k], out var extension)
+                    || !string.Equals(extension, ".dds", StringComparison.OrdinalIgnoreCase))
+                {
+                    warnings.Add($"imported lighting mask '{stripped}' is not complete on this machine: the layer keeps its original mask path, which exists only while the map it came from is installed.");
+                    return importedMaskPaths[stripped] = null;
+                }
+            }
+            var stem = SC2ImportedMapPaths.UniqueStem(SC2ImportedMapPaths.FileStem(stripped), s => rnmCache.ContainsKey(s));
+            try
+            {
+                for (var k = 0; k < 3; k++)
+                    File.WriteAllBytes(Path.Combine(lightingDir, $"{stem}_{k}.win.dds"), files[k]);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"{stripped}: {ex.Message}");
+                return importedMaskPaths[stripped] = null;
+            }
+            var path = $"/maps/{mapName}/lighting/{stem}.dds";
+            rnmCache[stem] = path; // also keeps the files through the stale-lighting cleanup
+            return importedMaskPaths[stripped] = path;
+        }
+
+        void RelocateImportedTextures(int firstMaterial, int count, SC2ImportedTerrainExportData imported)
+        {
+            var forceCopy = CollectForceExportBasePaths(imported);
+            for (var m = firstMaterial; m < firstMaterial + count && m < model.Materials.Count; m++)
+            {
+                var paths = model.Materials[m].TexturePaths;
+                for (var slot = 0; slot < paths.Length; slot++)
+                {
+                    var path = paths[slot];
+                    // An editor marker or a machine-local path is dealt with by the final sweep, not copied from here.
+                    if (string.IsNullOrEmpty(path) || SC2.MapEditor.Document.SC2TexturePathSafety.IsUnexportable(path)) continue;
+                    var normalized = SC2TerrainMaterialFactory.NormalizePath(path);
+                    var basePath = SC2TerrainMaterialFactory.StripExtension(normalized);
+                    if (slot == 10)
+                    {
+                        if (basePath.StartsWith($"maps/{mapName}/lighting/", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (SC2VanillaArchiveClassifier.IsVanillaGamePath(basePath + "_0.dds")) continue;
+                        var maskCopy = CopyImportedMask(path);
+                        if (maskCopy != null) paths[slot] = maskCopy;
+                        continue;
+                    }
+                    var shippedByGame = SC2VanillaArchiveClassifier.IsVanillaGamePath(normalized);
+                    if (!SC2ImportedMapPaths.NeedsCopy(normalized, mapName, shippedByGame, forceCopy.Contains(basePath))) continue;
+                    var copy = CopyImportedTexture(path);
+                    if (copy != null) paths[slot] = copy;
+                }
+            }
+        }
+
         // Fold in every imported terrain.bdf object still in the scene —
         // their original Materials/Layers/Vertices/Triangles (parsed at
         // import time, kept on SC2ImportedTerrainExportData.Model) are
@@ -801,7 +926,7 @@ public static class SC2TerrainExporter
                 {
                     MergeImportedTerrain(model, imported, ResolveRawResourcePath);
                     ApplyImportedRnmMasks(model, firstImportedMaterial, imported, session, mapName, lightingDir, rnmCache, warnings);
-                    CopyImportedTextures(imported.Model, outputDir, mapName, warnings, CollectForceExportBasePaths(imported));
+                    RelocateImportedTextures(firstImportedMaterial, imported.Model.Materials.Count, imported);
                 });
             }
         }
@@ -1440,7 +1565,8 @@ public static class SC2TerrainExporter
         {
             foreach (var existing in Directory.GetFiles(texDir))
             {
-                if (!fileNameOwner.ContainsKey(Path.GetFileName(existing)))
+                var existingName = Path.GetFileName(existing);
+                if (!fileNameOwner.ContainsKey(existingName) && !importedFileNames.Contains(existingName))
                     File.Delete(existing);
             }
         }
@@ -2180,6 +2306,12 @@ public static class SC2TerrainExporter
         foreach (var tri in source.Triangles)
             model.Triangles.Add(tri);
 
+        // The export works on copies of the parsed materials. Their texture paths are rewritten for every export (a texture of the imported
+        // map's own archive is moved into the exported map's folder), and the parsed model must keep the paths the file had so that the
+        // next export, under whatever name, starts from them again.
+        var materials = new List<TerrainMaterial>(source.Materials.Count);
+        foreach (var original in source.Materials) materials.Add(CloneMaterial(original));
+
         // Real write-back for the "Imported" tab's Shader Setup/State/
         // Texture Scroll UI (SC2GameViewEditorUI.cs) — before this, editing
         // those toggles only ever changed the live in-memory Material,
@@ -2204,43 +2336,18 @@ public static class SC2TerrainExporter
             : (t != null ? t.GetComponent<MeshRenderer>()?.sharedMaterials : null);
         if (authoredMaterials != null)
         {
-            var skipped = SC2TerrainMaterialExporter.ApplyFromScene(source.Materials, authoredMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath, imported.TexturePathForceExport);
+            var skipped = SC2TerrainMaterialExporter.ApplyFromScene(materials, authoredMaterials, imported.AuthoredEnableRnm, imported.TexturePathOverrides, resolveRawResourcePath, imported.TexturePathForceExport);
             if (skipped > 0)
                 SC2Log.Log($"[SC2Exporter] WARNING: imported terrain '{imported.Name}': {skipped} material(s) are not SC2/Terrain materials, so their texture paths and shader setup were exported exactly as imported.");
         }
 
-        foreach (var mat in source.Materials)
+        foreach (var mat in materials)
             model.Materials.Add(mat);
     }
 
-    /// <summary>
-    /// Copies the actual texture files an imported terrain.bdf's materials
-    /// reference into the export output — MergeImportedTerrain only copies
-    /// the TerrainMaterial.TexturePaths STRINGS (unchanged, preserving their
-    /// original nested layout, e.g. "/textures/Terrain/CA_C03/..."), it
-    /// never touched the actual .dds files, so the exported terrain.bdf
-    /// referenced textures that simply weren't present anywhere in the
-    /// output folder.
-    ///
-    /// Unlike RegTex above (which flattens painted-pair textures into
-    /// "/Textures/<mapName>/<Name>.dds"), imported-object textures keep their ORIGINAL path
-    /// string as-is in the exported material, so the physical file must be
-    /// placed at that exact same relative path under outputDir — not
-    /// flattened — for the two to still match up.
-    ///
-    /// The source bytes come from wherever SC2TerrainBdfImporter.
-    /// EnsureTexturesAvailable copied them at import time
-    /// (Assets/SC2/Resources/SC2Textures/&lt;path&gt;.dds) — the only copy of
-    /// the original file this project necessarily still has access to
-    /// (Editor-only: that's a real Unity project path, not something a
-    /// build can read either, so this step is a no-op there — same
-    /// Editor/Play-mode-only limitation as the import-time copy).
-    /// </summary>
-    /// <summary>The set of imported-terrain texture base paths (extension
-    /// stripped, same normalization CopyImportedTextures uses) whose per-slot
-    /// "copy into map on export" box is checked — read from the model AFTER
-    /// MergeImportedTerrain/ApplyFromScene ran, so a slot's value is whatever
-    /// path actually got exported for it.</summary>
+    /// <summary>The set of imported-terrain texture base paths (extension stripped, the same normalization RelocateImportedTextures uses)
+    /// whose per-slot "copy into map on export" box is checked. Read from the parsed model, which keeps the paths the file had: the export
+    /// works on copies of its materials.</summary>
     private static HashSet<string> CollectForceExportBasePaths(SC2ImportedTerrainExportData imported)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2258,68 +2365,6 @@ public static class SC2TerrainExporter
             result.Add(SC2TerrainMaterialFactory.StripExtension(normalized));
         }
         return result;
-    }
-
-    private static void CopyImportedTextures(TerrainModel source, string outputDir, string mapName, List<string> warnings, HashSet<string> forceExportBasePaths = null)
-    {
-#if UNITY_EDITOR
-        var resourcesRoot = Path.Combine(Application.dataPath, "SC2", "Resources",
-            SC2TerrainMaterialFactory.ResourcesTextureRoot.Replace('/', Path.DirectorySeparatorChar));
-        var sourceExtensions = new[] { ".dds", ".png", ".tga" };
-        var seen = new System.Collections.Generic.HashSet<string>();
-        var copied = 0;
-
-        foreach (var rawPath in SC2TerrainBdfImporter.CollectTexturePaths(source))
-        {
-            var normalized = SC2TerrainMaterialFactory.NormalizePath(rawPath);
-            // A texture-slot override (SC2GameViewEditorUI.DrawMaterialTextureSlot)
-            // already went through MergeImportedTerrain -> SC2TerrainMaterialExporter.
-            // ApplyFromScene -> ResolveRawResourcePath just above, in this same
-            // BuildExportArtifacts call, which already copied its real file into
-            // this map's own "/Textures/<mapName>/<Name>.dds" destination — re-resolving it
-            // here against the ORIGINAL imported-map's own nested Resources
-            // cache would always miss (it was never a pre-extracted vanilla
-            // path to begin with) and log a spurious "not found" warning for a
-            // texture that's actually already present and correctly referenced.
-            var ownTexturePrefix = "textures/" + mapName + "/";
-            if (normalized.StartsWith(ownTexturePrefix, StringComparison.OrdinalIgnoreCase) &&
-                normalized.IndexOf('/', ownTexturePrefix.Length) < 0)
-                continue;
-            var basePath = SC2TerrainMaterialFactory.StripExtension(normalized);
-            if (!seen.Add(basePath)) continue;
-
-            // A texture served by one of the vanilla game archives is already
-            // present in every install — the exported bdf keeps its original
-            // game path and nothing is copied, unless this slot's own "copy
-            // into map on export" box is checked. Anything not found in a
-            // vanilla archive (map-local textures from the imported map's own
-            // .scd, or no game install configured) copies exactly as before.
-            var forceCopy = forceExportBasePaths != null && forceExportBasePaths.Contains(basePath);
-            if (!forceCopy && SC2VanillaArchiveClassifier.IsVanillaGamePath(normalized)) continue;
-
-            string sourceFound = null;
-            foreach (var ext in sourceExtensions)
-            {
-                var candidate = Path.Combine(resourcesRoot, basePath.Replace('/', Path.DirectorySeparatorChar) + ext);
-                if (File.Exists(candidate)) { sourceFound = candidate; break; }
-            }
-
-            if (sourceFound == null)
-            {
-                warnings.Add($"imported texture not found for copy: '{normalized}' (looked under {resourcesRoot})");
-                continue;
-            }
-
-            var destPath = Path.Combine(outputDir, basePath.Replace('/', Path.DirectorySeparatorChar) + Path.GetExtension(sourceFound));
-            Directory.CreateDirectory(Path.GetDirectoryName(destPath));
-            File.Copy(sourceFound, destPath, overwrite: true);
-            copied++;
-        }
-
-        SC2Log.Log($"[SC2Exporter] imported textures copied: {copied}");
-#else
-        warnings.Add("imported-object textures were not copied — Assets/ isn't readable in a standalone build (Editor/Play-mode-only step).");
-#endif
     }
 
     // Export RNM mask files grouped by RnmMaskName — multiple pairs with the
@@ -2434,6 +2479,19 @@ public static class SC2TerrainExporter
     /// shares the imported object's own material instances, and the object's
     /// authored data must not change because of an export. A layer whose mask
     /// was never baked keeps its original mask.</summary>
+    /// <summary>A copy of a parsed material: its own texture path array, scroll and shader setup list, so rewriting one never changes the other.</summary>
+    private static TerrainMaterial CloneMaterial(TerrainMaterial source)
+    {
+        var clone = new TerrainMaterial
+        {
+            Name = source.Name, ShaderFile = source.ShaderFile, ShaderPrefix = source.ShaderPrefix, State = source.State,
+            TextureScroll = (float[])source.TextureScroll.Clone(),
+            TexturePaths = (string[])source.TexturePaths.Clone(),
+        };
+        foreach (var entry in source.ShaderSetup) clone.ShaderSetup.Add(entry);
+        return clone;
+    }
+
     private static void ApplyImportedRnmMasks(TerrainModel model, int firstMaterialIndex, SC2ImportedTerrainExportData imported,
         SC2MapSession session, string mapName, string lightingDir, Dictionary<string, string> rnmCache, List<string> warnings)
     {
@@ -2471,14 +2529,7 @@ public static class SC2TerrainExporter
                 rnmCache[stem] = path; // also keeps the files through the stale-lighting cleanup
             }
 
-            var source = model.Materials[index];
-            var clone = new TerrainMaterial
-            {
-                Name = source.Name, ShaderFile = source.ShaderFile, ShaderPrefix = source.ShaderPrefix, State = source.State,
-                TextureScroll = (float[])source.TextureScroll.Clone(),
-                TexturePaths = (string[])source.TexturePaths.Clone(),
-            };
-            foreach (var entry in source.ShaderSetup) clone.ShaderSetup.Add(entry);
+            var clone = CloneMaterial(model.Materials[index]);
             clone.TexturePaths[10] = path;
             model.Materials[index] = clone;
         }
