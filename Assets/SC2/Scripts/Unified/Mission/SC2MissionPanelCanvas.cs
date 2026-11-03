@@ -29,6 +29,24 @@ public sealed partial class SC2MissionPanel
     private readonly Dictionary<string, float> _zoom = new();
     private readonly HashSet<string> _fitted = new();
 
+    private Vector2 _canvasSize;
+    private Vector2 _lastLocalMouse;
+    private float _edgePanAt = -1f;
+
+    // the search that opens when a wire is let go over empty canvas, or on a double click of the canvas
+    private bool _quickOpen;
+    private bool _quickFocus;
+    private bool _quickScrollToSel;
+    private int _quickFromNode = -1;
+    private string _quickFromPort = "";
+    private string _quickSearch = "";
+    private string _quickMatchesFor;
+    private List<SC2MissionNodeDef> _quickMatches = new();
+    private int _quickSel;
+    private Vector2 _quickScroll;
+    private Vector2 _quickLocal;
+    private Vector2 _quickGraphMouse;
+
     private float ZoomOf(SC2MissionStage stage) => _zoom.TryGetValue(stage.Id, out var z) ? z : 1f;
 
     /// <summary>Zooms and pans so every node of the stage (and the Start block) is visible in a canvas of the given size.</summary>
@@ -274,6 +292,8 @@ public sealed partial class SC2MissionPanel
     {
         GUI.Box(r, GUIContent.none);
         if (!_fitted.Contains(stage.Id)) FitView(stage, r.size, keepReadable: true);
+        _canvasSize = r.size;
+        if (Event.current.type == EventType.Repaint) ApplyEdgePan(stage, r.size);
         var pan = PanOf(stage);
         var zoom = ZoomOf(stage);
         var boxes = LayoutAll(stage, pan);
@@ -291,13 +311,18 @@ public sealed partial class SC2MissionPanel
 
         if (stage.Nodes.Count == 0 && e.type == EventType.Repaint)
             GUI.Label(new Rect(r.x + S(20f), r.y + r.height - S(46f), r.width - S(40f), S(40f)),
-                "Click a node in the library to add it. Drag from a port on the right of a node to the left edge of another to connect them. Drag the empty canvas to pan, scroll to zoom.", _noteStyle);
+                "Click a node in the library to add it, or double-click here to search for one. Drag from a port to another node to connect them, or let go over empty space to search for the next node. Drag the empty canvas to pan, scroll to zoom, Home to see everything.", _noteStyle);
 
-        if (GUI.Button(new Rect(r.xMax - S(96f), r.y + S(6f), S(90f), S(24f)), "Fit all")) FitView(stage, r.size);
-        if (GUI.Button(new Rect(r.xMax - S(96f) - S(34f), r.y + S(6f), S(30f), S(24f)), "+")) ZoomAt(stage, r.size * 0.5f, 1.25f);
-        if (GUI.Button(new Rect(r.xMax - S(96f) - S(68f), r.y + S(6f), S(30f), S(24f)), "-")) ZoomAt(stage, r.size * 0.5f, 0.8f);
-        GUI.Label(new Rect(r.xMax - S(96f) - S(128f), r.y + S(6f), S(56f), S(24f)), Mathf.RoundToInt(zoom * 100f) + "%", _noteStyle);
+        var fit = FitButtonWidth;
+        if (GUI.Button(new Rect(r.xMax - fit - S(6f), r.y + S(6f), fit, S(24f)), "Home (fit all)")) FitView(stage, r.size);
+        if (GUI.Button(new Rect(r.xMax - fit - S(6f) - S(34f), r.y + S(6f), S(30f), S(24f)), "+")) ZoomAt(stage, r.size * 0.5f, 1.25f);
+        if (GUI.Button(new Rect(r.xMax - fit - S(6f) - S(68f), r.y + S(6f), S(30f), S(24f)), "-")) ZoomAt(stage, r.size * 0.5f, 0.8f);
+        GUI.Label(new Rect(r.xMax - fit - S(6f) - S(128f), r.y + S(6f), S(56f), S(24f)), Mathf.RoundToInt(zoom * 100f) + "%", _noteStyle);
+
+        DrawQuickAdd(r, stage);
     }
+
+    private static float FitButtonWidth => S(120f);
 
     private void DrawCanvasContents(Rect local, float z, SC2MissionStage stage, Vector2 pan, Dictionary<int, NodeBox> boxes)
     {
@@ -397,19 +422,23 @@ public sealed partial class SC2MissionPanel
     {
         var e = Event.current;
         var graphMouse = e.mousePosition / zoom;
+        // the search box is drawn over the canvas and takes the mouse while it is open
+        if (_quickOpen && (e.type == EventType.MouseDown || e.type == EventType.MouseUp || e.type == EventType.MouseDrag || e.type == EventType.ScrollWheel)) return;
         switch (e.GetTypeForControl(id))
         {
             case EventType.MouseDown:
                 if (!local.Contains(e.mousePosition)) break;
-                // the zoom and fit buttons float over the canvas corner and take their own clicks
-                if (new Rect(local.width - S(96f) - S(132f), S(6f), S(132f) + S(90f), S(24f)).Contains(e.mousePosition)) break;
+                // the zoom and home buttons float over the canvas corner and take their own clicks
+                if (new Rect(local.width - FitButtonWidth - S(6f) - S(132f), S(6f), S(132f) + FitButtonWidth + S(6f), S(24f)).Contains(e.mousePosition)) break;
                 _mouse = graphMouse;
+                _lastLocalMouse = e.mousePosition;
                 OnCanvasMouseDown(id, e, graphMouse, stage, pan, boxes);
                 break;
 
             case EventType.MouseDrag:
                 if (GUIUtility.hotControl != id) break;
                 _mouse = graphMouse;
+                _lastLocalMouse = e.mousePosition;
                 if (_drag == DragMode.Pan)
                 {
                     _pan[stage.Id] = pan + e.delta / zoom;
@@ -440,7 +469,12 @@ public sealed partial class SC2MissionPanel
                 if (GUIUtility.hotControl != id) break;
                 GUIUtility.hotControl = 0;
                 if (_drag == DragMode.Node && _dragMoved) { _dirty = true; if (string.IsNullOrEmpty(_pendingName)) _pendingName = "Move node"; Commit(); }
-                else if (_drag == DragMode.Connect) FinishConnect(stage, boxes, graphMouse);
+                else if (_drag == DragMode.Connect)
+                {
+                    // let go over nothing: ask which node comes next, as the node editors of Blender and Unreal do
+                    if (!FinishConnect(stage, boxes, graphMouse) && !boxes.Values.Any(b => b.Rect.Contains(graphMouse)))
+                        OpenQuickAdd(graphMouse, e.mousePosition, _connectNode, _connectPort);
+                }
                 _drag = DragMode.None;
                 _dragMoved = false;
                 e.Use();
@@ -506,6 +540,12 @@ public sealed partial class SC2MissionPanel
         }
 
         _selNode = _selEdge = -1;
+        if (e.button == 0 && e.clickCount == 2)
+        {
+            OpenQuickAdd(graphMouse, e.mousePosition, -1, "");
+            e.Use();
+            return;
+        }
         if (e.button == 0 || e.button == 1) BeginDrag(id, DragMode.Pan);
         e.Use();
     }
@@ -523,7 +563,8 @@ public sealed partial class SC2MissionPanel
         BeginDrag(id, DragMode.Connect);
     }
 
-    private void FinishConnect(SC2MissionStage stage, Dictionary<int, NodeBox> boxes, Vector2 p)
+    /// <summary>Ends the wire being dragged. True when it was let go over an input (a wire made, or refused), false when it was let go elsewhere.</summary>
+    private bool FinishConnect(SC2MissionStage stage, Dictionary<int, NodeBox> boxes, Vector2 p)
     {
         var radius = S(11f);
         foreach (var node in stage.Nodes)
@@ -540,15 +581,202 @@ public sealed partial class SC2MissionPanel
             if (target == null && box.InputRows == 0 && new Rect(box.Rect.x - radius, box.Rect.y, radius * 2f, box.HeaderHeight).Contains(p) && box.InPorts.Count > 0) target = box.InPorts[0].Key;
             if (target == null) continue;
             // a wire from a node to one of its own inputs is how a loop moves on, so it is allowed when the node has more than one input
-            if (node.Id == _connectNode && box.InputRows == 0) return;
-            if (stage.Edges.Any(x => x.FromNode == _connectNode && x.FromPort == _connectPort && x.ToNode == node.Id && x.ToPort == target)) return;
+            if (node.Id == _connectNode && box.InputRows == 0) return true;
+            if (stage.Edges.Any(x => x.FromNode == _connectNode && x.FromPort == _connectPort && x.ToNode == node.Id && x.ToPort == target)) return true;
             stage.Connect(_connectNode, _connectPort, node.Id, target);
             _selEdge = stage.Edges.Count - 1;
             _selNode = -1;
             Mutate("Connect nodes");
             Commit();
-            return;
+            return true;
         }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ search to add a node (a wire let go over empty canvas, a double click)
+
+    private void OpenQuickAdd(Vector2 graphMouse, Vector2 local, int fromNode, string fromPort)
+    {
+        _quickOpen = true;
+        _quickFocus = true;
+        _quickFromNode = fromNode;
+        _quickFromPort = fromPort ?? "";
+        _quickSearch = "";
+        _quickMatchesFor = null;
+        _quickSel = 0;
+        _quickScroll = Vector2.zero;
+        _quickLocal = local;
+        _quickGraphMouse = graphMouse;
+        RepaintHost?.Invoke();
+    }
+
+    private void CloseQuickAdd()
+    {
+        _quickOpen = false;
+        _quickFromNode = -1;
+        GUI.FocusControl("");
+    }
+
+    /// <summary>The nodes that match what was typed, those whose title starts with it first; every node while nothing is typed.</summary>
+    private List<SC2MissionNodeDef> QuickMatches(string query)
+    {
+        query = (query ?? "").Trim();
+        if (_quickMatchesFor == query) return _quickMatches;
+        var list = new List<SC2MissionNodeDef>();
+        foreach (var category in SC2MissionNodeCatalog.Categories())
+            foreach (var def in SC2MissionNodeCatalog.All)
+                if (def.Category == category && MatchesSearch(def, query)) list.Add(def);
+        if (query.Length > 0)
+            list = list.OrderBy(d => d.Title.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 0 : d.Title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ? 1 : 2).ToList();
+        _quickMatches = list;
+        _quickMatchesFor = query;
+        return list;
+    }
+
+    private void AddQuickNode(SC2MissionStage stage, string type)
+    {
+        Commit();
+        var pan = PanOf(stage);
+        // the node's input port lands where the wire was let go
+        var node = stage.AddNode(type, (_quickGraphMouse.x - pan.x) / K, (_quickGraphMouse.y - pan.y - S(12f)) / K);
+        if (_quickFromNode >= 0) stage.Connect(_quickFromNode, _quickFromPort, node.Id);
+        _selNode = node.Id;
+        _selEdge = -1;
+        Mutate("Add " + SC2MissionNodeCatalog.Find(type)?.Title);
+        Commit();
+        CloseQuickAdd();
+    }
+
+    /// <summary>The search box, drawn over the canvas (r is the whole canvas): a text field and the matching nodes, Up and Down to move,
+    /// Return or a click to add, Escape or a click outside to cancel.</summary>
+    private void DrawQuickAdd(Rect r, SC2MissionStage stage)
+    {
+        if (!_quickOpen) return;
+        var e = Event.current;
+        var width = S(380f);
+        var height = S(320f);
+        var x = Mathf.Clamp(r.x + _quickLocal.x + S(10f), r.x + S(6f), Mathf.Max(r.x + S(6f), r.xMax - width - S(6f)));
+        var y = Mathf.Clamp(r.y + _quickLocal.y - S(14f), r.y + S(6f), Mathf.Max(r.y + S(6f), r.yMax - height - S(6f)));
+        var rect = new Rect(x, y, width, height);
+
+        // keys first: the text field would keep Up, Down and Return for itself
+        var matches = QuickMatches(_quickSearch);
+        if (e.type == EventType.KeyDown)
+        {
+            if (e.keyCode == KeyCode.Escape) { CloseQuickAdd(); e.Use(); return; }
+            if (e.keyCode == KeyCode.DownArrow) { _quickSel = Mathf.Min(_quickSel + 1, Mathf.Max(0, matches.Count - 1)); _quickScrollToSel = true; e.Use(); }
+            else if (e.keyCode == KeyCode.UpArrow) { _quickSel = Mathf.Max(_quickSel - 1, 0); _quickScrollToSel = true; e.Use(); }
+            else if ((e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter) && matches.Count > 0)
+            {
+                AddQuickNode(stage, matches[Mathf.Clamp(_quickSel, 0, matches.Count - 1)].Type);
+                e.Use();
+                return;
+            }
+        }
+        if (e.type == EventType.MouseDown && !rect.Contains(e.mousePosition)) { CloseQuickAdd(); e.Use(); return; }
+
+        // opaque, so the canvas does not show through
+        FillRect(new Rect(rect.x - 1f, rect.y - 1f, rect.width + 2f, rect.height + 2f), new Color(0f, 0f, 0f, 0.9f));
+        FillRect(rect, new Color(0.15f, 0.16f, 0.19f, 1f));
+        GUI.Label(new Rect(x + S(10f), y + S(6f), width - S(20f), S(22f)), _quickFromNode >= 0 ? "Add the next node" : "Add a node", _titleStyle);
+        GUI.SetNextControlName("m_quick_search");
+        var typed = GUI.TextField(new Rect(x + S(10f), y + S(32f), width - S(20f), S(24f)), _quickSearch ?? "");
+        if (typed != _quickSearch)
+        {
+            _quickSearch = typed;
+            _quickSel = 0;
+            _quickScroll = Vector2.zero;
+            matches = QuickMatches(typed);
+        }
+        if (_quickFocus)
+        {
+            GUI.FocusControl("m_quick_search");
+            if (e.type == EventType.Repaint) _quickFocus = false;
+        }
+
+        var list = new Rect(x + S(10f), y + S(62f), width - S(20f), height - S(72f));
+        var rowHeight = S(22f);
+        var content = new Rect(0f, 0f, list.width - S(16f), Mathf.Max(list.height, matches.Count * rowHeight));
+        if (_quickScrollToSel)
+        {
+            var top = _quickSel * rowHeight;
+            if (top < _quickScroll.y) _quickScroll.y = top;
+            else if (top + rowHeight > _quickScroll.y + list.height) _quickScroll.y = top + rowHeight - list.height;
+            _quickScrollToSel = false;
+        }
+        if (matches.Count == 0) GUI.Label(list, "No node matches.", _noteStyle);
+
+        _quickScroll = GUI.BeginScrollView(list, _quickScroll, content);
+        for (var i = 0; i < matches.Count; i++)
+        {
+            var def = matches[i];
+            var row = new Rect(0f, i * rowHeight, content.width, rowHeight - 1f);
+            if (i == _quickSel) FillRect(row, new Color(0.25f, 0.45f, 0.75f, 0.65f));
+            else if (row.Contains(e.mousePosition)) FillRect(row, new Color(1f, 1f, 1f, 0.10f));
+            FillRect(new Rect(row.x + 2f, row.y + 3f, 4f, row.height - 6f), CategoryColor(def.Category));
+            if (GUI.Button(row, def.Title, _quickRowStyle))
+            {
+                GUI.EndScrollView();
+                AddQuickNode(stage, def.Type);
+                return;
+            }
+        }
+        GUI.EndScrollView();
+    }
+
+    // ------------------------------------------------------------------ moving the view
+
+    /// <summary>While a node or a wire is being dragged and the pointer is near an edge of the canvas, the view moves that way, faster the closer
+    /// the pointer is to the edge, so a node can be carried further than the canvas shows.</summary>
+    private void ApplyEdgePan(SC2MissionStage stage, Vector2 size)
+    {
+        var now = Time.realtimeSinceStartup;
+        if (_drag != DragMode.Node && _drag != DragMode.Connect) { _edgePanAt = -1f; return; }
+        var dt = _edgePanAt < 0f ? 0f : Mathf.Min(0.1f, now - _edgePanAt);
+        _edgePanAt = now;
+
+        var margin = S(44f);
+        var push = new Vector2(EdgePush(_lastLocalMouse.x, size.x, margin), EdgePush(_lastLocalMouse.y, size.y, margin));
+        if (push == Vector2.zero) return;
+        var zoom = ZoomOf(stage);
+        var pan = PanOf(stage) - push * (S(520f) * dt / zoom);
+        _pan[stage.Id] = pan;
+        _mouse = _lastLocalMouse / zoom;
+        if (_drag == DragMode.Node)
+        {
+            var node = stage.FindNode(_dragNode);
+            if (node != null)
+            {
+                node.X = (_mouse.x - pan.x - _dragGrab.x) / K;
+                node.Y = (_mouse.y - pan.y - _dragGrab.y) / K;
+                _dragMoved = true;
+                _workVersion++;
+            }
+        }
+        RepaintHost?.Invoke();
+    }
+
+    private static float EdgePush(float value, float size, float margin) =>
+        value < margin ? -Mathf.Clamp01((margin - value) / margin) : value > size - margin ? Mathf.Clamp01((value - (size - margin)) / margin) : 0f;
+
+    /// <summary>Home: shows every node of the stage.</summary>
+    private void ShowAll()
+    {
+        var stage = CurrentStage();
+        if (stage != null && _canvasSize.x > 1f) FitView(stage, _canvasSize);
+    }
+
+    /// <summary>F: centres the view on the selected node (or shows everything when none is selected), keeping the zoom.</summary>
+    private void FrameSelection()
+    {
+        var stage = CurrentStage();
+        if (stage == null || _canvasSize.x <= 1f) return;
+        var node = SelectedNode();
+        var def = node == null ? null : SC2MissionNodeCatalog.Find(node.Type);
+        if (node == null || def == null) { ShowAll(); return; }
+        var zoom = ZoomOf(stage);
+        var centre = Layout(node, def, Vector2.zero).Rect.center;
+        _pan[stage.Id] = _canvasSize * 0.5f / zoom - centre;
     }
 
     private void DeleteSelection()

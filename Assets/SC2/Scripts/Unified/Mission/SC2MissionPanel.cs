@@ -63,7 +63,7 @@ public sealed partial class SC2MissionPanel
     private Vector2 _formScroll;
 
     private Texture2D _disc;
-    private GUIStyle _wrapTitleStyle, _wrapToggleStyle, _titleStyle, _nodeTitleStyle, _nodeTextStyle, _portLabelStyle, _monoStyle, _noteStyle, _fieldLabelStyle, _libraryButtonStyle, _headerNoteStyle;
+    private GUIStyle _quickRowStyle, _wrapTitleStyle, _wrapToggleStyle, _titleStyle, _nodeTitleStyle, _nodeTextStyle, _portLabelStyle, _monoStyle, _noteStyle, _fieldLabelStyle, _libraryButtonStyle, _headerNoteStyle;
     private float _stylesScale = -1f;
 
     private static float S(float px) => SC2UiScale.Pxf(px);
@@ -255,8 +255,12 @@ public sealed partial class SC2MissionPanel
     {
         var e = Event.current;
         if (e.type != EventType.KeyDown) return;
+        // the node search handles its own keys (Escape closes only the search)
+        if (_quickOpen) return;
         if (e.keyCode == KeyCode.Escape && !TextFieldFocused()) { Close(); e.Use(); return; }
         if (TextFieldFocused()) return;
+        if (e.keyCode == KeyCode.Home) { ShowAll(); e.Use(); return; }
+        if (e.keyCode == KeyCode.F && !e.control && !e.alt) { FrameSelection(); e.Use(); return; }
         if (e.control && e.keyCode == KeyCode.Z && !e.shift) { Undo(); e.Use(); }
         else if (e.control && (e.keyCode == KeyCode.Y || (e.keyCode == KeyCode.Z && e.shift))) { Redo(); e.Use(); }
         else if ((e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace) && CurrentStage() != null) { DeleteSelection(); e.Use(); }
@@ -386,6 +390,10 @@ public sealed partial class SC2MissionPanel
         _noteStyle = new GUIStyle(GUI.skin.label) { wordWrap = true, fontSize = Mathf.RoundToInt(S(11f)) };
         _fieldLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = Mathf.RoundToInt(S(11f)), alignment = TextAnchor.MiddleLeft, wordWrap = true };
         _wrapTitleStyle = new GUIStyle(_titleStyle) { wordWrap = true };
+        // a row has no look of its own (the list draws its highlight), only the label and the click
+        _quickRowStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleLeft, wordWrap = false, clipping = TextClipping.Clip, fontSize = Mathf.RoundToInt(S(11f)) };
+        _quickRowStyle.padding = new RectOffset(Mathf.RoundToInt(S(14f)), Mathf.RoundToInt(S(4f)), 0, 0);
+        _quickRowStyle.normal.textColor = Color.white;
         _wrapToggleStyle = new GUIStyle(GUI.skin.toggle) { wordWrap = true };
         // Library titles are long, so a button grows taller and wraps its title instead of cutting it.
         _libraryButtonStyle = new GUIStyle(GUI.skin.button) { wordWrap = true, alignment = TextAnchor.MiddleLeft, fontSize = Mathf.RoundToInt(S(11f)) };
