@@ -315,6 +315,14 @@ public sealed partial class SC2MissionPanel
 
         var fit = FitButtonWidth;
         if (GUI.Button(new Rect(r.xMax - fit - S(6f), r.y + S(6f), fit, S(24f)), "Home (fit all)")) FitView(stage, r.size);
+        if (GUI.Button(new Rect(r.xMax - fit - S(6f) - S(176f), r.y + S(6f), S(102f), S(24f)), "Auto-layout"))
+        {
+            Commit();
+            SC2MissionGraphLayout.AutoLayout(stage);
+            Mutate("Auto-layout mission graph");
+            Commit();
+            FitView(stage, r.size);
+        }
         if (GUI.Button(new Rect(r.xMax - fit - S(6f) - S(34f), r.y + S(6f), S(30f), S(24f)), "+")) ZoomAt(stage, r.size * 0.5f, 1.25f);
         if (GUI.Button(new Rect(r.xMax - fit - S(6f) - S(68f), r.y + S(6f), S(30f), S(24f)), "-")) ZoomAt(stage, r.size * 0.5f, 0.8f);
         GUI.Label(new Rect(r.xMax - fit - S(6f) - S(128f), r.y + S(6f), S(56f), S(24f)), Mathf.RoundToInt(zoom * 100f) + "%", _noteStyle);

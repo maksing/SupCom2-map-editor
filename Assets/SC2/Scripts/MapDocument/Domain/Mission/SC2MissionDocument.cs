@@ -259,6 +259,12 @@ namespace SC2.MapEditor.Document
     /// </summary>
     public sealed class SC2MissionDocument
     {
+        /// <summary>Version of the authored mission-graph schema stored in a map document.</summary>
+        public const int CurrentSchemaVersion = 1;
+
+        /// <summary>Persisted schema version. Missing/zero values are legacy documents and are upgraded on read.</summary>
+        public int SchemaVersion = CurrentSchemaVersion;
+
         /// <summary>Export writes the Lua generated from the graph instead of the plain script. Off keeps the graph as a draft.</summary>
         public bool Enabled;
         public string Title = "";
@@ -305,6 +311,7 @@ namespace SC2.MapEditor.Document
         {
             if (other == null) throw new ArgumentNullException(nameof(other));
             Enabled = other.Enabled;
+            SchemaVersion = other.SchemaVersion <= 0 ? CurrentSchemaVersion : other.SchemaVersion;
             Title = other.Title;
             Stages = new List<SC2MissionStage>();
             foreach (var s in other.Stages) Stages.Add(s.Clone());

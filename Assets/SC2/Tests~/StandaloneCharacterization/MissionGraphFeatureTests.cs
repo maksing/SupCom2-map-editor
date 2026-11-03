@@ -218,6 +218,54 @@ public class MissionGraphFeatureTests
     }
 
     [Fact]
+    public void Compile_ProducesDeterministicNodeSourceMap()
+    {
+        var doc = SC2MissionSamples.DestroyTheOutpost();
+        var first = SC2MissionCompiler.Compile(doc);
+        var second = SC2MissionCompiler.Compile(doc);
+
+        Assert.Equal(first.Lua, second.Lua);
+        Assert.Equal(first.SourceMap.Count, second.SourceMap.Count);
+        Assert.NotEmpty(first.SourceMap);
+        Assert.All(first.SourceMap, entry =>
+        {
+            Assert.True(entry.LineStart > 0);
+            Assert.True(entry.LineEnd >= entry.LineStart);
+            Assert.False(string.IsNullOrEmpty(entry.StageId));
+        });
+        Assert.Contains(first.SourceMap, entry => entry.StageId == "stage1" && entry.NodeId > 0);
+    }
+
+    [Fact]
+    public void AutoLayout_IsDeterministicAndPreservesGraphSemantics()
+    {
+        var stage = new SC2MissionStage { Id = "stage1" };
+        var timer = stage.AddNode(SC2MissionNodeCatalog.Timer, 999, -99);
+        var victory = stage.AddNode(SC2MissionNodeCatalog.Victory, -50, 700);
+        stage.Connect(0, "out", timer.Id);
+        stage.Connect(timer.Id, "fired", victory.Id);
+        var before = stage.Edges.Select(e => (e.FromNode, e.FromPort, e.ToNode, e.ToPort)).ToArray();
+
+        SC2MissionGraphLayout.AutoLayout(stage);
+
+        Assert.Equal(260f, timer.X);
+        Assert.Equal(520f, victory.X);
+        Assert.Equal(before, stage.Edges.Select(e => (e.FromNode, e.FromPort, e.ToNode, e.ToPort)).ToArray());
+        Assert.True(timer.Y >= 0f);
+        Assert.True(victory.Y >= 0f);
+    }
+
+    [Fact]
+    public void MissionSchemaVersion_DefaultsAndClonesAsCurrent()
+    {
+        var doc = new SC2MissionDocument { SchemaVersion = 0 };
+        var clone = doc.Clone();
+
+        Assert.Equal(SC2MissionDocument.CurrentSchemaVersion, clone.SchemaVersion);
+        Assert.Equal(SC2MissionDocument.CurrentSchemaVersion, new SC2MissionDocument().SchemaVersion);
+    }
+
+    [Fact]
     public void Dialogue_UsesTheQueueOnlyWithAVideo()
     {
         var doc = new SC2MissionDocument();

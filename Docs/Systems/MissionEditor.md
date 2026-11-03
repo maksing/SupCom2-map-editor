@@ -1,6 +1,6 @@
 # The mission editor
 
-Status: first draft from reading the code of commit `4fa4ae8` (the mission editor; its documents were committed as `3077a7d`); not yet reviewed by a second reader. Priority P2 (a wrong change breaks the exported mission, not saved data). Read [Architecture](../Architecture.md) first.
+Status: implementation reference for the new-mission node editor. Existing mission import/decompilation is out of scope. Priority P2 (a wrong change breaks the exported mission, not saved data). Read [Architecture](../Architecture.md) first.
 For the node list see [MissionNodeReference](MissionNodeReference.md); for what the game does with the generated script see [CampaignFramework](../Formats/CampaignFramework.md); for how to use it see the [guide](../Guides/MissionEditorGuide.md).
 
 ## 1. Purpose and boundaries
@@ -17,9 +17,9 @@ points at them by name; the export call ([Export pipeline](ExportPipeline.md)); 
 
 | Part | Files |
 |---|---|
-| Document | `Scripts/MapDocument/Domain/Mission/SC2MissionDocument.cs`: `SC2MissionDocument`, `SC2MissionStage`, `SC2MissionNode`, `SC2MissionParam`, `SC2MissionEdge`, `SC2MissionVariable`, `SC2MissionBase` (+ `SC2MissionBuildGroup`, `SC2MissionOpAI`), `SC2MissionArmy`, `SC2MissionSettings` |
+| Document | `Scripts/MapDocument/Domain/Mission/SC2MissionDocument.cs`: `SC2MissionDocument`, `SC2MissionStage`, `SC2MissionNode`, `SC2MissionParam`, `SC2MissionEdge`, `SC2MissionVariable`, `SC2MissionBase` (+ `SC2MissionBuildGroup`, `SC2MissionOpAI`), `SC2MissionArmy`, `SC2MissionSettings`; `SC2MissionGraphLayout.cs` (deterministic authoring layout) |
 | Node catalog | `SC2MissionNodeCatalog.cs` (definitions, parameter kinds, `InputsOf`/`PortsOf`, the core nodes written by hand), `SC2MissionExtraNodes.cs` (nodes written as templates: about 150 of them, loops included) |
-| Compiler | `SC2MissionCompiler.cs` (`Compile`, the regions, the template engine `Expand`), `SC2MissionLuaMarkers.cs` (the fences around regions), `SC2MissionArmies.cs` (the army block), `SC2LuaSyntaxCheck.cs` (compile-only KopiLua) |
+| Compiler | `SC2MissionCompiler.cs` (`Compile`, the regions, the template engine `Expand`, and `SC2MissionCompileResult.SourceMap`), `SC2MissionLuaMarkers.cs` (the fences around regions), `SC2MissionArmies.cs` (the army block), `SC2LuaSyntaxCheck.cs` (compile-only KopiLua) |
 | Validator | `SC2MissionValidator.cs` (`Validate`, `SC2MissionMapInfo` - the names the map has) |
 | Samples | `SC2MissionSamples.cs` (Destroy the outpost, Hold the line (co-op), Three waves) |
 | Command | `SC2ReplaceMissionCommand.cs` (one undoable step replaces the whole mission state) |
@@ -30,7 +30,7 @@ points at them by name; the export call ([Export pipeline](ExportPipeline.md)); 
 
 ## 3. Data
 
-`SC2MissionDocument` (in `SC2ScenarioDocument.Mission`): `Enabled` (use the graph for `_script.lua`), `Title`, `Stages`, `Variables`, `Bases`, `Armies`, `Settings`.
+`SC2MissionDocument` (in `SC2ScenarioDocument.Mission`): `SchemaVersion` (currently `1`), `Enabled` (use the graph for `_script.lua`), `Title`, `Stages`, `Variables`, `Bases`, `Armies`, `Settings`.
 
 | Part | What it holds |
 |---|---|
@@ -44,7 +44,7 @@ points at them by name; the export call ([Export pipeline](ExportPipeline.md)); 
 
 `IsEmpty` is true only when nothing at all has been entered (no stages, bases, variables, army tuning, non-default settings or title). An empty graph, or one with `Enabled` off, leaves the plain script alone.
 
-**Saved as** the `mission` object of the scenario domain in `manifest.json` (`WriteMission`/`ReadMission`): `enabled`, `title`, `stages[{id,name,nextNodeId,nodes[{id,type,x,y,params}],edges[{from,port,to,toPort?}]}]`, `variables`, `bases`, `armies`, `settings`.
+**Saved as** the `mission` object of the scenario domain in `manifest.json` (`WriteMission`/`ReadMission`): `schemaVersion`, `enabled`, `title`, `stages[{id,name,nextNodeId,nodes[{id,type,x,y,params}],edges[{from,port,to,toPort?}]}]`, `variables`, `bases`, `armies`, `settings`. Missing or zero schema versions are upgraded to the current version on read/clone.
 `toPort` is written only when it is not `in`. A save written before the mission existed has no `mission` key and reads as an empty, disabled graph. Graphs saved before wires had an input name read with `in`; a node that has no input `in` (the loops, the gate) then reports the wire as an error.
 
 ## 4. Flows
@@ -127,12 +127,14 @@ name checks are skipped. The rules, by area:
 **an error or a Lua that does not compile stops the export** with `Export failed: the mission graph has N error(s)...` (a dialog in the editor, the returned text in a build); it never writes the plain script as a substitute. A failed export is not packed into an archive.
 `TestStartStage` makes the generated script begin at that stage (a test aid; the validator warns).
 
+`SC2MissionCompileResult.SourceMap` contains deterministic 1-based line ranges for every generated node (`StageId`, `NodeId`, `LineStart`, `LineEnd`). The editor can use this mapping to jump from a validation error to the generated Lua without parsing Lua again.
+
 ### 4.8 The panel
 
 An overlay drawn by `SC2GameViewEditorUI` **before** the runtime overlays (dropdowns), with the host's input masked (`EventType.Ignore`) while it is open. Layout: header (title, "Use graph" switch, problem count, Undo, Redo, close), stage tabs (one per stage, `+ Stage`, `+ Intro`, `+ Outro`; Bases, Variables, Settings on the right), then
 the library (search, categories) | canvas | properties, and a bottom area (Generated Lua with a Copy button, Validation, Mission Log). The canvas pans (drag on empty space), zooms (wheel, `+`, `-`), drags nodes, and draws wires as curves; a wire is started by dragging from an output port and dropped on an input port (a node with several inputs lists them in rows under its
 header); a click on a wire selects it and a right click deletes it.
-**Moving the view**: Home (or the `Home (fit all)` button) shows every node; F centres the selected node; while a node or a wire is being dragged and the pointer is within `44` UI pixels of a canvas edge the view scrolls that way (`ApplyEdgePan`, faster closer to the edge), the dragged node going along.
+**Moving the view**: Home (or the `Home (fit all)` button) shows every node; F centres the selected node; `Auto-layout` arranges connected nodes in deterministic columns and rows without changing ids, wires or parameters; while a node or a wire is being dragged and the pointer is within `44` UI pixels of a canvas edge the view scrolls that way (`ApplyEdgePan`, faster closer to the edge), the dragged node going along.
 **Adding a node from the canvas** (`OpenQuickAdd`, `DrawQuickAdd`): a wire let go over empty canvas, or a double click on it, opens a search box over the canvas (a text field and the matching nodes, title-prefix matches first); Up/Down move, Return or a click adds the node with its first input at that point and, when a wire was
 dragged, wires it from that output; Escape or a click outside cancels (Escape closes only the search). While it is open the canvas ignores the mouse and the panel's keys (Home, F, Delete) do not run. Settings holds the armies editor, co-op, the test start stage and the Samples. The Scenario tab's Mission sub-tab only shows a summary and opens the panel.
 
@@ -181,6 +183,7 @@ dragged, wires it from that output; Escape or a click outside cancels (Escape cl
 | `MissionNodeLibraryTests` | placeholders, choices, every node compiles under KopiLua, specific mappings, the difficulty node, the simple cutscene on the NIS system |
 | `MissionPortsAndLoopsTests` | inputs, counted ports, join, gate, counter, every loop, loop-unit nodes, the loop warnings |
 | `MissionReviewFixTests` | path-based cutscene check, `IsEmpty`, a settings-only graph |
+| `MissionGraphFeatureTests` | deterministic compiler source maps, schema defaults, and graph auto-layout invariants |
 | `MissionNodeReferenceTests` | every node type is listed in the node reference |
 
 **Not covered by a unit test** (Unity only): the panel, the exporter's abort, the undo counters, the dropdowns in a build. They were checked with a headless IMGUI harness (below) and a Windows player build, not by an automated test.
@@ -199,10 +202,11 @@ how it works, how to run it, how to read the pictures and what it does not prove
 - A wire from a node to its own input is allowed only for nodes with several inputs; a loop whose body is long and asynchronous relies on the user wiring `next`.
 - The simple cutscene nodes cover begin, one camera move and end; the NIS family has the rest.
 - The panel's wires that go back (a body to `next`) are drawn as ordinary curves and may pass under nodes.
+- Source-map ranges are generated from compiler node markers and are intended for diagnostics; they are not a persistence format.
 - The library lists 170-odd nodes; some framework facilities seen in the campaign scripts have no node (preloading dialogue data, fake builds, carrier and cannon tables, loading and unloading transports by hand, `SetMaxStorage`, `SetIntelRadius`).
 
 ## 10. Related documents and review
 
 [ScenarioAndMission](ScenarioAndMission.md), [MissionNodeReference](MissionNodeReference.md), [CampaignFramework](../Formats/CampaignFramework.md), [Guide](../Guides/MissionEditorGuide.md), [Lua files](../Formats/LuaFiles.md), [Export pipeline](ExportPipeline.md),
 [Objects](Objects.md), [Document and persistence](DocumentAndPersistence.md), [Editor vs build](EditorVsBuild.md), [Interactions: objects and scenario](../Interactions/ObjectsAndScenario.md).
-Last reviewed: author, code reading, commit `4fa4ae8`. Second reader: not yet.
+Last reviewed: author, Milestones 1–4 implementation pass, 2026-11-03. Visual scratch verification: pending Unity window run; standalone tests run with one pre-existing unrelated costs-profile failure.

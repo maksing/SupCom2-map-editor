@@ -7,11 +7,21 @@ namespace SC2.MapEditor.Document
 {
     public sealed class SC2MissionCompileResult
     {
+        public sealed class SourceMapEntry
+        {
+            public string StageId = "";
+            public int NodeId;
+            public int LineStart;
+            public int LineEnd;
+        }
+
         /// <summary>The whole _script.lua: a header region with the imports and helpers, the army block, the bases, one region per stage and the
         /// campaign entry points (OnPopulate, OnStart, OnInitCamera). Lines end with \n.</summary>
         public string Lua = "";
 
         public List<SC2MissionIssue> Issues = new();
+        /// <summary>1-based inclusive Lua line ranges for node diagnostics and editor navigation.</summary>
+        public List<SourceMapEntry> SourceMap = new();
 
         public bool HasErrors => SC2MissionValidator.HasErrors(Issues);
     }
@@ -57,7 +67,29 @@ namespace SC2.MapEditor.Document
             sb.Append('\n');
             sb.Append(SC2MissionLuaMarkers.Wrap(CampaignRegion, CampaignBody(doc, armies, map?.PlayableArea ?? "")));
             result.Lua = sb.ToString();
+            BuildSourceMap(result);
             return result;
+        }
+
+        private static void BuildSourceMap(SC2MissionCompileResult result)
+        {
+            var lines = result.Lua.Split(new[] { "\n" }, System.StringSplitOptions.None);
+            string stage = "";
+            SC2MissionCompileResult.SourceMapEntry active = null;
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                var stageMatch = Regex.Match(line, @"^-- SCED:begin ([a-z][a-z0-9_]*) hash=");
+                if (stageMatch.Success) stage = stageMatch.Groups[1].Value;
+                var nodeMatch = Regex.Match(line, @"^-- #(\d+) ");
+                if (nodeMatch.Success)
+                {
+                    if (active != null) active.LineEnd = i;
+                    active = new SC2MissionCompileResult.SourceMapEntry { StageId = stage, NodeId = int.Parse(nodeMatch.Groups[1].Value, CultureInfo.InvariantCulture), LineStart = i + 1, LineEnd = lines.Length };
+                    result.SourceMap.Add(active);
+                }
+            }
+            if (active != null) active.LineEnd = lines.Length;
         }
 
         // ------------------------------------------------------------------ header

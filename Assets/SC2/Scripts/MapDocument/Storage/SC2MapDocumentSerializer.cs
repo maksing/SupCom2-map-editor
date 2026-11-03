@@ -1453,6 +1453,7 @@ namespace SC2.MapEditor.Document
         private static SC2JsonValue WriteMission(SC2MissionDocument m)
         {
             var o = SC2JsonValue.NewObject();
+            o.Set("schemaVersion", SC2JsonValue.Of(m.SchemaVersion <= 0 ? SC2MissionDocument.CurrentSchemaVersion : m.SchemaVersion));
             o.Set("enabled", SC2JsonValue.Of(m.Enabled));
             o.Set("title", SC2JsonValue.Of(m.Title ?? ""));
             var stages = SC2JsonValue.NewArray();
@@ -1579,9 +1580,11 @@ namespace SC2.MapEditor.Document
         {
             var m = new SC2MissionDocument
             {
+                SchemaVersion = o.Get("schemaVersion").AsInt(SC2MissionDocument.CurrentSchemaVersion),
                 Enabled = o.Get("enabled").AsBool(false),
                 Title = o.Get("title").AsString(""),
             };
+            if (m.SchemaVersion <= 0) m.SchemaVersion = SC2MissionDocument.CurrentSchemaVersion;
             foreach (var so in o.Get("stages").Items())
             {
                 var s = new SC2MissionStage
