@@ -130,8 +130,11 @@ name checks are skipped. The rules, by area:
 ### 4.8 The panel
 
 An overlay drawn by `SC2GameViewEditorUI` **before** the runtime overlays (dropdowns), with the host's input masked (`EventType.Ignore`) while it is open. Layout: header (title, "Use graph" switch, problem count, Undo, Redo, close), stage tabs (one per stage, `+ Stage`, `+ Intro`, `+ Outro`; Bases, Variables, Settings on the right), then
-the library (search, categories) | canvas | properties, and a bottom area (Generated Lua with a Copy button, Validation, Mission Log). The canvas pans (drag on empty space), zooms (wheel, `+`, `-`, Fit all), drags nodes, and draws wires as curves; a wire is started by dragging from an output port and dropped on an input port (a node with several inputs lists them in rows under its
-header); a click on a wire selects it and a right click deletes it. Settings holds the armies editor, co-op, the test start stage and the Samples. The Scenario tab's Mission sub-tab only shows a summary and opens the panel.
+the library (search, categories) | canvas | properties, and a bottom area (Generated Lua with a Copy button, Validation, Mission Log). The canvas pans (drag on empty space), zooms (wheel, `+`, `-`), drags nodes, and draws wires as curves; a wire is started by dragging from an output port and dropped on an input port (a node with several inputs lists them in rows under its
+header); a click on a wire selects it and a right click deletes it.
+**Moving the view**: Home (or the `Home (fit all)` button) shows every node; F centres the selected node; while a node or a wire is being dragged and the pointer is within `44` UI pixels of a canvas edge the view scrolls that way (`ApplyEdgePan`, faster closer to the edge), the dragged node going along.
+**Adding a node from the canvas** (`OpenQuickAdd`, `DrawQuickAdd`): a wire let go over empty canvas, or a double click on it, opens a search box over the canvas (a text field and the matching nodes, title-prefix matches first); Up/Down move, Return or a click adds the node with its first input at that point and, when a wire was
+dragged, wires it from that output; Escape or a click outside cancels (Escape closes only the search). While it is open the canvas ignores the mouse and the panel's keys (Home, F, Delete) do not run. Settings holds the armies editor, co-op, the test start stage and the Samples. The Scenario tab's Mission sub-tab only shows a summary and opens the panel.
 
 ## 5. Invariants
 

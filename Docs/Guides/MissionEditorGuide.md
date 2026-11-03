@@ -17,7 +17,8 @@ Scenario tab, sub-tab **Mission**, button **Open Mission Editor**. Switch on **U
 
 - **Stage tabs** (top): a mission is a series of stages (Intro, Stage 1, Stage 2, Outro...). A stage is its own graph. A stage starts when an `Advance to stage` node points at it; the first stage starts with the mission. `+ Stage`, `+ Intro`, `+ Outro` add one; **Bases**, **Variables** and **Settings** are on the right.
 - **Library** (left): every node, in categories, with a search box. Click a node to add it to the canvas.
-- **Canvas** (middle): drag empty space to pan, wheel or `+`/`-` to zoom, **Fit all** to see everything. Drag a node by its header. The green **Start** block is where the stage begins.
+- **Canvas** (middle): drag empty space to pan, wheel or `+`/`-` to zoom. **Home** (or the **Home (fit all)** button) shows every node, which brings you back when you have wandered off; **F** centres the selected node. Drag a node by its header; when you hold it (or a wire) near the edge of the canvas the view scrolls along. The green **Start** block is where the stage begins.
+- **Adding a node from the canvas**: drag a wire from an output port and **let go over empty space** - a search box opens; type part of a node's name, use Up/Down, press Return (or click) and the node appears there, already connected. A **double click** on empty canvas opens the same search without a wire. Escape cancels.
 - **Properties** (right): the selected node's parameters; Duplicate and Delete.
 - **Bottom**: **Generated Lua** (what will be written; `Copy Lua`), **Validation** (problems; a click on a line jumps to the node), **Mission Log** (what you did, compiled and exported).
 - Undo and Redo in the header, or Ctrl+Z and Ctrl+Y. Delete removes the selected node or wire.
